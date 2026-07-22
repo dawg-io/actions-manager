@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProjectList Demo - Properly Aligned</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --text-primary: #0f172a;
+            --text-secondary: #64748b;
+            --primary: #0066cc;
+            --border: #d1d5db;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="space-y-6 w-full max-w-5xl mx-auto">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <h2 class="text-3xl font-bold" style="color: var(--text-primary)">Manage Your Projects</h2>
+            <button class="w-full sm:w-auto px-4 py-2 rounded-md text-sm font-medium text-white" 
+                    style="background-color: var(--primary)">
+                ➕ Create New Project
+            </button>
+        </div>
+        
+        <div class="w-full rounded-lg border shadow" style="border-color: var(--border); background-color: white;">
+            <div class="flex flex-col space-y-1.5 p-6">
+                <h3 class="font-semibold leading-none tracking-tight">Saved Projects</h3>
+                <p class="text-sm" style="color: var(--text-secondary)">View and manage your workflow projects</p>
+            </div>
+            
+            <div class="p-0">
+                <!-- Header with equal width columns -->
+                <div class="hidden sm:grid sm:grid-cols-3 text-white font-semibold text-sm" 
+                     style="background-color: var(--primary)">
+                    <div class="py-3 px-6">Project Name</div>
+                    <div class="py-3 px-6 text-center">Created</div>
+                    <div class="py-3 px-6 text-center">Last Updated</div>
+                </div>
+                
+                <!-- Project Items with matching equal width columns -->
+                <div class="divide-y" style="border-color: var(--border)">
+                    <button class="w-full grid grid-cols-1 sm:grid-cols-3 text-left transition-all border-l-4 border-transparent" 
+                            style="background-color: white;"
+                            onmouseover="this.style.backgroundColor='var(--primary)'; this.style.borderLeftColor='var(--primary)'; Array.from(this.children).forEach(c => c.style.color='white')"
+                            onmouseout="this.style.backgroundColor='white'; this.style.borderLeftColor='transparent'; this.children[0].style.color='var(--text-primary)'; this.children[1].style.color='var(--text-secondary)'; this.children[2].style.color='var(--text-secondary)')">
+                        <div class="py-4 px-6 font-medium" style="color: var(--text-primary)">cleantest</div>
+                        <div class="py-4 px-6 text-sm sm:text-center" style="color: var(--text-secondary)">
+                            <span class="sm:hidden font-medium">Created: </span>10/16/2025
+                        </div>
+                        <div class="py-4 px-6 text-sm sm:text-center" style="color: var(--text-secondary)">
+                            <span class="sm:hidden font-medium">Updated: </span>11/1/2025
+                        </div>
+                    </button>
+                    
+                    <button class="w-full grid grid-cols-1 sm:grid-cols-3 text-left transition-all border-l-4 border-transparent"
+                            style="background-color: white;"
+                            onmouseover="this.style.backgroundColor='var(--primary)'; this.style.borderLeftColor='var(--primary)'; Array.from(this.children).forEach(c => c.style.color='white')"
+                            onmouseout="this.style.backgroundColor='white'; this.style.borderLeftColor='transparent'; this.children[0].style.color='var(--text-primary)'; this.children[1].style.color='var(--text-secondary)'; this.children[2].style.color='var(--text-secondary)')">
+                        <div class="py-4 px-6 font-medium" style="color: var(--text-primary)">newamn</div>
+                        <div class="py-4 px-6 text-sm sm:text-center" style="color: var(--text-secondary)">
+                            <span class="sm:hidden font-medium">Created: </span>9/16/2025
+                        </div>
+                        <div class="py-4 px-6 text-sm sm:text-center" style="color: var(--text-secondary)">
+                            <span class="sm:hidden font-medium">Updated: </span>10/30/2025
+                        </div>
+                    </button>
+                    
+                    <button class="w-full grid grid-cols-1 sm:grid-cols-3 text-left transition-all border-l-4 border-transparent"
+                            style="background-color: white;"
+                            onmouseover="this.style.backgroundColor='var(--primary)'; this.style.borderLeftColor='var(--primary)'; Array.from(this.children).forEach(c => c.style.color='white')"
+                            onmouseout="this.style.backgroundColor='white'; this.style.borderLeftColor='transparent'; this.children[0].style.color='var(--text-primary)'; this.children[1].style.color='var(--text-secondary)'; this.children[2].style.color='var(--text-secondary)')">
+                        <div class="py-4 px-6 font-medium" style="color: var(--text-primary)">Testtt</div>
+                        <div class="py-4 px-6 text-sm sm:text-center" style="color: var(--text-secondary)">
+                            <span class="sm:hidden font-medium">Created: </span>10/14/2025
+                        </div>
+                        <div class="py-4 px-6 text-sm sm:text-center" style="color: var(--text-secondary)">
+                            <span class="sm:hidden font-medium">Updated: </span>10/27/2025
+                        </div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

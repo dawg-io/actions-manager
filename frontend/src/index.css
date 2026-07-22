@@ -1,0 +1,234 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom Theme Variables - keeping compatibility with existing code */
+:root {
+  /* Professional Color Palette - Light Theme */
+  --color-background: #f8fafc;
+  --color-container: #ffffff;
+  --color-sidebar: #ffffff;
+  --background-color: #f8fafc;
+  --container-background-color: #ffffff;
+  --sidebar-color: #ffffff;
+  
+  /* Text Colors */
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #64748b;
+  --color-text-muted: #94a3b8;
+  --text-color: #1e293b;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  
+  /* Primary Brand Colors */
+  --color-primary: #0066cc;
+  --color-primary-hover: #0052a3;
+  --color-primary-light: #e0f2fe;
+  --primary-color: #0066cc;
+  --primary-hover: #0052a3;
+  --primary-light: #e0f2fe;
+  
+  /* Secondary Colors */
+  --color-secondary: #6b7280;
+  --color-secondary-hover: #4b5563;
+  --secondary-color: #6b7280;
+  --secondary-hover: #4b5563;
+  
+  /* Status Colors */
+  --color-success: #10b981;
+  --color-success-light: #d1fae5;
+  --color-success-text: #065f46;
+  --color-danger: #ef4444;
+  --color-danger-light: #fee2e2;
+  --color-warning: #f59e0b;
+  --color-warning-light: #fef3c7;
+  --color-warning-text: #92400e;
+  --success-color: #10b981;
+  --success-light: #d1fae5;
+  --danger-color: #ef4444;
+  --danger-light: #fee2e2;
+  --warning-color: #f59e0b;
+  --warning-light: #fef3c7;
+  
+  /* Border and Surface Colors */
+  --color-border: #d1d5db;
+  --color-border-light: #e5e7eb;
+  --color-input-bg: #ffffff;
+  --color-input-border: #cbd5e1;
+  --color-input-focus: #0066cc;
+  --color-hover-bg: #f1f5f9;
+  --border-color: #d1d5db;
+  --border-light: #e5e7eb;
+  --input-background-color: #ffffff;
+  --input-border: #cbd5e1;
+  --input-focus: #0066cc;
+  --hover-background-color: #f1f5f9;
+  
+  /* Spacing - matches existing system */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 0.75rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+  
+  /* Border Radius */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  
+  /* Typography */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'sans-serif';
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 1.875rem;
+  
+  /* Header */
+  --header-text-color: #0f172a;
+  
+  /* Logo */
+  --logo-text-color: #0f172a; /* Dark text for light mode */
+  
+  /* Sidebar specific colors */
+  --color-sidebar-item: #475569;
+  --color-sidebar-item-active-bg: #e0f2fe;
+  --color-sidebar-item-active: #0f172a;
+  --color-sidebar-item-active-border: #0066cc;
+  --color-sidebar-project-bg: #f1f5f9;
+  --sidebar-item-color: #475569;
+  --sidebar-item-active-background-color: #e0f2fe;
+  --sidebar-item-active-color: #0f172a;
+  --sidebar-project-background: #f1f5f9;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Dark Theme Variables */
+.dark-theme {
+  --color-background: #0f172a;
+  --color-container: #1e293b;
+  --color-sidebar: #334155;
+  --background-color: #0f172a;
+  --container-background-color: #1e293b;
+  --sidebar-color: #334155;
+  
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #cbd5e1;
+  --color-text-muted: #94a3b8;
+  --text-color: #e2e8f0;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  
+  --color-primary: #3b82f6;
+  --color-primary-hover: #60a5fa;
+  --color-primary-light: #1e40af;
+  --primary-color: #3b82f6;
+  --primary-hover: #60a5fa;
+  --primary-light: #1e40af;
+  
+  --color-secondary: #94a3b8;
+  --color-secondary-hover: #cbd5e1;
+  --secondary-color: #94a3b8;
+  --secondary-hover: #cbd5e1;
+  
+  --color-success: #10b981;
+  --color-success-light: #064e3b;
+  --color-success-text: #6ee7b7;
+  --color-danger: #ef4444;
+  --color-danger-light: #7f1d1d;
+  --color-warning: #f59e0b;
+  --color-warning-light: #78350f;
+  --color-warning-text: #fcd34d;
+  --success-color: #10b981;
+  --success-light: #064e3b;
+  --danger-color: #ef4444;
+  --danger-light: #7f1d1d;
+  --warning-color: #f59e0b;
+  --warning-light: #78350f;
+  
+  --color-border: #475569;
+  --color-border-light: #64748b;
+  --color-input-bg: #1e293b;
+  --color-input-border: #475569;
+  --color-input-focus: #3b82f6;
+  --color-hover-bg: #334155;
+  --border-color: #475569;
+  --border-light: #64748b;
+  --input-background-color: #1e293b;
+  --input-border: #475569;
+  --input-focus: #3b82f6;
+  --hover-background-color: #334155;
+  
+  --header-text-color: #f8fafc;
+  
+  /* Logo text color for dark theme */
+  --logo-text-color: #f8fafc;
+  
+  --color-sidebar-item: #cbd5e1;
+  --color-sidebar-item-active-bg: #1e40af;
+  --color-sidebar-item-active: #f8fafc;
+  --color-sidebar-item-active-border: #3b82f6;
+  --color-sidebar-project-bg: #1e293b;
+  --sidebar-item-color: #cbd5e1;
+  --sidebar-item-active-background-color: #1e40af;
+  --sidebar-item-active-color: #f8fafc;
+  --sidebar-project-background: #1e293b;
+  
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 10px 10px -5px rgba(0, 0, 0, 0.5);
+}
+
+/* Base styles */
+@layer base {
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    transition: background-color 0.3s ease, color 0.3s ease;
+    line-height: 1.6;
+  }
+
+  code {
+    font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  }
+}
+
+/* Custom grid template for project list table - ensures column alignment */
+/* Override any flex layout from projectMgmt.css */
+/* Columns: Project | Type | Scope | State | Activity | Updated | Workflows | Actions */
+/* Use minmax() to keep headers/badges from wrapping while still allowing the
+   table to flex up to the container width. The parent container provides
+   overflow-x-auto so narrow viewports get a horizontal scrollbar instead of
+   collapsing into awkward wraps. */
+@media (min-width: 640px) {
+  .project-list-grid {
+    display: grid !important;
+    grid-template-columns:
+      minmax(220px, 2fr) /* Project */
+      minmax(180px, 1.2fr) /* Type */
+      minmax(160px, 1fr) /* Scope */
+      minmax(110px, 0.7fr) /* State */
+      minmax(160px, 1fr) /* Activity */
+      minmax(110px, 0.7fr) /* Updated */
+      minmax(120px, 0.7fr) /* Workflows */
+      48px /* Actions - fixed width */ !important;
+    align-items: center;
+    gap: 0.75rem;
+  }
+}

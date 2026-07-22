@@ -1,0 +1,372 @@
+import { test, expect } from "@playwright/test";
+import {
+  TEST_USER,
+  PHASE2_REPOS,
+  PHASE2_WORKFLOWS,
+  corsHeaders,
+  createMockState,
+  installApiMocks,
+  makeProject,
+  makeWorkflow,
+  mockDriftResponse,
+  mockResolveDrift,
+  seedAuthenticatedSession,
+} from "./fixtures/mocks";
+
+/**
+ * Phase 2 — Drift detection and resolution.
+ *
+ * Validates:
+ *   1. Drift banner appears when the backend reports drift.
+ *   2. Clean repos do not show the drift banner.
+ *   3. Drift modal lists the affected repo and workflow.
+ *   4. "Adopt GitHub Version" resolves drift and clears the banner.
+ *   5. "Keep Local / Restore via PR" creates a PR and shows pr_pending state.
+ *   6. A failed resolution keeps the drift banner visible and shows an error.
+ *   7. New workflows are not treated as drifted.
+ */
+test.describe("Drift detection – UI display", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuthenticatedSession(page);
+  });
+
+  test("drift banner is shown when the backend reports drift for a workflow", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-demo",
+      project_code: "DRFT",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-demo`);
+
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("drift-banner")).toContainText(/workflow changed in GitHub/i);
+  });
+
+  test("drift banner is NOT shown when there is no drift", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "clean-project",
+      project_code: "CLEAN",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    await mockDriftResponse(page, { driftedWorkflows: [] });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/clean-project`);
+
+    // Wait for the project page to load (workflow list visible), then assert no drift banner.
+    await expect(page.getByText(PHASE2_WORKFLOWS.CI, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("drift-banner")).toHaveCount(0);
+  });
+
+  test("drift modal shows the affected repo and workflow", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-demo",
+      project_code: "DRFT",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-demo`);
+
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("review-drift-button").click();
+    await expect(page.getByTestId("drift-modal")).toBeVisible();
+
+    // Modal should list the affected repo and workflow
+    await expect(page.getByTestId("drift-modal")).toContainText(PHASE2_REPOS.SERVICE_A);
+    await expect(page.getByTestId("drift-modal")).toContainText(PHASE2_WORKFLOWS.CI);
+  });
+
+  test("workflow list shows drift badge for drifted workflow", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-demo",
+      project_code: "DRFT",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-demo`);
+
+    // Wait for drift to load and the workflow list to render
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("drift-badge")).toBeVisible();
+  });
+});
+
+test.describe("Drift resolution – Adopt GitHub version", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuthenticatedSession(page);
+  });
+
+  test("adopting GitHub version clears the drift banner and shows success", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-demo",
+      project_code: "DRFT",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    // First call returns drift; second call (after resolve) returns clean
+    let driftCallCount = 0;
+    await page.route(/\/api\/projects\/[^/]+\/drift(\?.*)?$/, (route) => {
+      driftCallCount += 1;
+      const drifted =
+        driftCallCount === 1
+          ? [
+              {
+                workflow_id: 1,
+                workflow_name: PHASE2_WORKFLOWS.CI,
+                workflow_filename: PHASE2_WORKFLOWS.CI,
+                repo: PHASE2_REPOS.SERVICE_A,
+                branch: "main",
+                has_drift: true,
+                actionsmanager_yaml: "name: CI\n",
+                github_yaml: "name: CI\n# changed\n",
+                actionsmanager_sha: "abc123",
+                github_sha: "def456",
+                last_checked: "2025-01-01T00:00:00Z",
+                message: "Drift detected",
+                is_shared_workflow: false,
+                has_repo_override: false,
+                project_id: 1,
+                repo_id: 1,
+                affected_repo_count: 0,
+                affected_repos: [],
+              },
+            ]
+          : [];
+
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: corsHeaders(route),
+        body: JSON.stringify({
+          project_id: 1,
+          project_name: "drift-demo",
+          drift_count: drifted.length,
+          drifted_workflows: drifted,
+          last_checked: "2025-01-01T00:00:00Z",
+        }),
+      });
+    });
+
+    await mockResolveDrift(page, { responseState: "synced" });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-demo`);
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+
+    // Open drift modal
+    await page.getByTestId("review-drift-button").click();
+    await expect(page.getByTestId("drift-modal")).toBeVisible();
+
+    // Expand the diff view first (adopt button is inside the diff view)
+    await page.getByRole("button", { name: /View Diff/i }).first().click();
+    await expect(page.getByTestId("adopt-github-version-button").first()).toBeVisible();
+
+    // Click adopt button
+    await page.getByTestId("adopt-github-version-button").first().click();
+
+    // Adopt mode modal should appear
+    await expect(page.getByTestId("adopt-github-version-modal")).toBeVisible({ timeout: 5_000 });
+
+    // Confirm adoption (default mode is already selected)
+    await page.getByTestId("adopt-confirm-button").click();
+
+    // Success message should appear somewhere in the modal or drift area
+    await expect(page.getByTestId("drift-modal")).toContainText(/resolved|adopted|success/i, {
+      timeout: 10_000,
+    });
+    // The drift banner must also disappear — the second drift-check call returns
+    // clean state, so the banner should clear automatically after adoption.
+    await expect(page.getByTestId("drift-banner")).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test("failed resolution keeps the drift banner visible and shows an error", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-demo",
+      project_code: "DRFT",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    // Base mocks first so the specific failure mock takes priority (LIFO: last registered = first checked)
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await mockResolveDrift(page, { failWithStatus: 500 });
+
+    await page.goto(`/project/${TEST_USER}/drift-demo`);
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+
+    // Open modal and attempt View Diff + resolve
+    await page.getByTestId("review-drift-button").click();
+    await expect(page.getByTestId("drift-modal")).toBeVisible();
+
+    // Click View Diff to expand a row, then try to resolve via direct restore.
+    // The "Restore ActionsManager Version (Direct)" button appears in the diff view
+    // when the adopt-github modal is not open. Click it and expect an error.
+    await page.getByRole("button", { name: /View Diff/i }).first().click();
+    await page.getByTestId("adopt-github-version-button").first().click();
+
+    // Confirm adopt — backend returns 500
+    await expect(page.getByTestId("adopt-github-version-modal")).toBeVisible({ timeout: 5_000 });
+    await page.getByTestId("adopt-confirm-button").click();
+
+    // Error should appear in modal (adoption failed)
+    await expect(page.getByTestId("adopt-github-version-modal")).toContainText(/failed|error/i, {
+      timeout: 10_000,
+    });
+    // Drift banner must still be visible since resolution failed
+    await expect(page.getByTestId("drift-banner")).toBeVisible();
+  });
+});
+
+test.describe("Drift regression – new workflows not treated as drift", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuthenticatedSession(page);
+  });
+
+  test("a new workflow is shown as committed locally, not drifted", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "new-wf-project",
+      project_code: "NWFP",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      pr_state: "draft",
+      workflows: [
+        makeWorkflow({
+          name: PHASE2_WORKFLOWS.CI,
+          workflowStatus: "committed_locally",
+        }),
+      ],
+    });
+
+    await mockDriftResponse(page, { driftedWorkflows: [] });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/new-wf-project`);
+
+    // The workflow should be visible
+    await expect(
+      page.getByText(PHASE2_WORKFLOWS.CI, { exact: false }).first(),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // No drift badge should appear
+    await expect(page.getByTestId("drift-badge")).toHaveCount(0);
+    // No drift banner either
+    await expect(page.getByTestId("drift-banner")).toHaveCount(0);
+  });
+
+  test("workflow stays Under Review after PR creation — not incorrectly treated as drift", async ({
+    page,
+  }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "review-project",
+      project_code: "RVWP",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      pr_state: "open",
+      workflows: [
+        makeWorkflow({
+          name: PHASE2_WORKFLOWS.CI,
+          workflowStatus: "under_review",
+        }),
+      ],
+    });
+
+    const state = createMockState({
+      projects: [project],
+      prStatus: {
+        project_state: "open",
+        pull_requests: [
+          {
+            repo_name: PHASE2_REPOS.SERVICE_A,
+            pr_number: 42,
+            pr_url: `https://github.com/${PHASE2_REPOS.SERVICE_A}/pull/42`,
+            pr_state: "open",
+            branch_name: "actions-manager/review-project",
+            target_branch: "main",
+            created_at: "2025-01-02T00:00:00Z",
+            updated_at: "2025-01-02T00:00:00Z",
+          },
+        ],
+        total_prs: 1,
+        open_prs: 1,
+        merged_prs: 0,
+        closed_prs: 0,
+      },
+    });
+
+    // Return no drift — the open PR should NOT be confused with drift
+    await mockDriftResponse(page, { driftedWorkflows: [] });
+    await installApiMocks(page, state);
+
+    await page.goto(`/project/${TEST_USER}/review-project`);
+
+    // Wait for the project page to load, then assert no drift-related elements.
+    await expect(page.getByText(PHASE2_WORKFLOWS.CI, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("drift-banner")).toHaveCount(0);
+    await expect(page.getByTestId("drift-badge")).toHaveCount(0);
+
+    // Navigate to project list to check the project-level status badge
+    await page.goto(`/project/${TEST_USER}`);
+    await expect(page.getByTestId("project-status-1")).toContainText(/Under Review/i, {
+      timeout: 15_000,
+    });
+  });
+});

@@ -1,0 +1,32 @@
+# Development overlay for the self-hosted compose stack.
+# ----------------------------------------------------------------------------
+# This file is for CONTRIBUTORS who want to build the self-hosted single-
+# container image from local source instead of pulling the published GHCR
+# image. It is NOT part of the official end-user release flow.
+#
+# Usage (from the repository root):
+#
+#   docker compose -f docker-compose.self-hosted.yml \
+#                  -f docker-compose.self-hosted.dev.yml up --build
+#
+# Or with the installer, which wires this up automatically when invoked with
+# the contributor build flag:
+#
+#   ./install.sh --build
+#
+# This overlay:
+#   * Builds the image from ./Dockerfile.self-hosted instead of pulling.
+#   * Tags the locally built image so it does not collide with the published
+#     ghcr.io image cached on the host.
+#   * Disables the "always pull" policy so the local build is actually used.
+# ----------------------------------------------------------------------------
+
+services:
+  app:
+    image: actions-manager/self-hosted:dev
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile.self-hosted
+      args:
+        BUILD_DATE: ${BUILD_DATE:-dev}

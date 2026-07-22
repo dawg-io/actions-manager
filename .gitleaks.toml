@@ -1,0 +1,35 @@
+title = "Actions Manager Gitleaks Configuration"
+
+[allowlist]
+description = "Allowlist for known false positives"
+
+# Documentation examples with demo credentials
+paths = [
+  "ADMIN_FEATURE\\.md",
+  "docs/SELF_HOSTED_INSTALL\\.md"
+]
+
+# Specific commits to ignore
+commits = [
+  "4332a5ace1f038f71e47054e1e2c2b08d1be6199",
+  "44c8bdc6079038bef56883b47ddc7b20fa6c2926"
+]
+
+# Regex patterns to ignore
+regexes = [
+  "admin:admin123",
+  "\\$SONARQUBE_TOKEN"
+]
+
+[[rules]]
+id = "curl-auth-user"
+description = "Curl auth user pattern"
+regex = '''curl\s+-u\s+["']?.+["']?'''
+tags = ["credential"]
+
+[rules.allowlist]
+paths = [
+  "ADMIN_FEATURE\\.md",
+  "docs/SELF_HOSTED_INSTALL\\.md",
+  "\\.github/workflows/sonarqube_scan\\.yml"
+]

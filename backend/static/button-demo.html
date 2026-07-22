@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Button Layout Comparison - Before vs After</title>
+    <style>
+        :root {
+            --primary-color: #0366d6;
+            --primary-hover: #0256c4;
+            --secondary-color: #6c757d;
+            --secondary-hover: #5a6268;
+            --danger-color: #dc3545;
+            --background-color: #ffffff;
+            --container-background-color: #f8f9fa;
+            --text-color: #212529;
+            --border-color: #dee2e6;
+            --header-text-color: #ffffff;
+            --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            --font-size-sm: 0.875rem;
+            --font-size-base: 1rem;
+            --font-size-xl: 1.5rem;
+            --spacing-sm: 0.5rem;
+            --spacing-md: 1rem;
+            --spacing-lg: 1.5rem;
+            --spacing-xl: 2rem;
+            --radius-md: 0.5rem;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: #e5e7eb;
+            color: var(--text-color);
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+
+        .comparison-container {
+            max-width: 1600px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .demo-section {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .demo-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            text-align: center;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+
+        .before .demo-title {
+            background: #fee;
+            color: #c00;
+        }
+
+        .after .demo-title {
+            background: #efe;
+            color: #0a0;
+        }
+
+        /* Mock application container */
+        .app-container {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: var(--radius-md);
+            min-height: 600px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header styles */
+        .content-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: var(--spacing-xl) var(--spacing-xl) var(--spacing-lg);
+            color: var(--header-text-color);
+            flex-wrap: wrap;
+            gap: var(--spacing-md);
+        }
+
+        .project-config-section {
+            flex: 1;
+            display: flex;
+            flex-direction: row;
+            gap: 12px;
+            flex-wrap: nowrap;
+            align-items: center;
+        }
+
+        .project-config-title {
+            padding-top: 14px;
+            font-size: var(--font-size-xl);
+            font-weight: 600;
+            margin: 0;
+            color: var(--header-text-color);
+        }
+
+        .project-name-input {
+            width: 100%;
+            max-width: 400px;
+            padding: var(--spacing-md);
+            font-size: var(--font-size-base);
+            border-radius: var(--radius-md);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--header-text-color);
+            backdrop-filter: blur(10px);
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-lg);
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        /* Header action buttons - NEW */
+        .header-action-buttons {
+            display: flex;
+            gap: var(--spacing-md);
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: flex-end;
+            width: 100%;
+        }
+
+        /* Content area */
+        .section-container {
+            background: var(--background-color);
+            border-radius: var(--radius-md);
+            margin: 0 var(--spacing-xl);
+            padding: var(--spacing-lg);
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-color);
+        }
+
+        /* Bottom action buttons - OLD */
+        .action-buttons {
+            display: flex;
+            gap: var(--spacing-md);
+            padding: var(--spacing-lg) var(--spacing-xl);
+            background-color: var(--container-background-color);
+            flex-wrap: wrap;
+            justify-content: flex-start;
+            border-radius: 0 0 var(--radius-md) var(--radius-md);
+        }
+
+        /* Button styles */
+        .action-button,
+        .header-action-buttons button,
+        .action-buttons button {
+            padding: var(--spacing-md) var(--spacing-lg);
+            border-radius: var(--radius-md);
+            border: none;
+            cursor: pointer;
+            font-size: var(--font-size-sm);
+            font-weight: 500;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            font-family: var(--font-family);
+            box-shadow: var(--shadow-sm);
+            min-width: 120px;
+            justify-content: center;
+        }
+
+        .action-button.primary {
+            background: var(--primary-color);
+            color: #ffffff;
+        }
+
+        .action-button.secondary {
+            background-color: var(--secondary-color);
+            color: #ffffff;
+        }
+
+        .action-button.danger {
+            background-color: var(--danger-color);
+            color: #ffffff;
+        }
+
+        .spacer {
+            width: 1px;
+            height: 40px;
+            background-color: rgba(255, 255, 255, 0.3);
+            margin: 0 1rem;
+        }
+
+        /* Highlight boxes */
+        .highlight {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.7); }
+            50% { box-shadow: 0 0 0 10px rgba(255, 215, 0, 0); }
+        }
+
+        .note {
+            background: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 1rem;
+            margin-top: 1rem;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1 style="text-align: center; margin-bottom: 2rem;">Button Layout Migration: Bottom → Header</h1>
+    
+    <div class="comparison-container">
+        <!-- BEFORE: Buttons at bottom -->
+        <div class="demo-section before">
+            <div class="demo-title">❌ BEFORE: Buttons at Bottom</div>
+            <div class="app-container">
+                <div class="content-header">
+                    <div class="project-config-section">
+                        <h4 class="project-config-title">Project Name</h4>
+                        <input type="text" class="project-name-input" value="My Project" readonly />
+                    </div>
+                    <div class="header-controls">
+                        <div class="user-avatar">👤</div>
+                    </div>
+                </div>
+                
+                <div class="section-container">
+                    <div style="text-align: center;">
+                        <h3>📝 Workflow Editor Content Area</h3>
+                        <p>Limited space for editing workflows...</p>
+                        <p style="color: #999; font-size: 0.9rem;">⬇️ Buttons take up space below ⬇️</p>
+                    </div>
+                </div>
+                
+                <div class="action-buttons highlight">
+                    <button class="action-button secondary">➕ Add Workflow</button>
+                    <button class="action-button secondary">🔄 Refresh Status</button>
+                    <div class="spacer"></div>
+                    <button class="action-button secondary">💾 Save Project</button>
+                    <button class="action-button primary">🚀 Create Pull Requests</button>
+                    <button class="action-button secondary">🔙 Cancel</button>
+                    <button class="action-button danger">❌ Delete Project</button>
+                </div>
+            </div>
+            <div class="note">
+                <strong>Issues:</strong> Buttons at the bottom take up valuable screen space needed for editing workflows.
+            </div>
+        </div>
+
+        <!-- AFTER: Buttons in header -->
+        <div class="demo-section after">
+            <div class="demo-title">✅ AFTER: Buttons in Header (Updated)</div>
+            <div class="app-container">
+                <div class="content-header highlight">
+                    <div class="project-config-section">
+                        <h4 class="project-config-title">Project Name</h4>
+                        <input type="text" class="project-name-input" value="My Project" readonly />
+                    </div>
+                    
+                    <div class="header-action-buttons">
+                        <button class="action-button secondary">➕ Add Workflow</button>
+                        <button class="action-button secondary">🔄 Refresh Status</button>
+                        <div class="spacer"></div>
+                        <button class="action-button secondary">💾 Save Project</button>
+                        <button class="action-button primary">🚀 Create Pull Requests</button>
+                        <button class="action-button secondary">🔙 Cancel</button>
+                        <button class="action-button danger">❌ Delete Project</button>
+                        <div class="user-avatar">👤</div>
+                    </div>
+                </div>
+                
+                <div class="section-container">
+                    <div style="text-align: center;">
+                        <h3>📝 Workflow Editor Content Area</h3>
+                        <p style="color: #28a745; font-weight: 600;">✨ More space for editing workflows! ✨</p>
+                        <p style="color: #999; font-size: 0.9rem;">User avatar now on the right side after Delete Project button</p>
+                    </div>
+                </div>
+            </div>
+            <div class="note" style="border-left-color: #28a745; background: #f0fdf4;">
+                <strong>✅ Benefits:</strong> All buttons moved to header + User avatar repositioned to the right of Delete Project button.
+            </div>
+        </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 2rem; padding: 1rem; background: white; border-radius: 8px; max-width: 800px; margin-left: auto; margin-right: auto;">
+        <h3>Implementation Summary</h3>
+        <ul style="text-align: left; display: inline-block;">
+            <li>✅ All buttons moved from bottom to header</li>
+            <li>✅ Button sizes remain the same (min-width: 120px)</li>
+            <li>✅ All buttons are still available and functional</li>
+            <li>✅ Header wraps with flex-wrap to accommodate buttons</li>
+            <li>✅ No increase in header height when space is available</li>
+            <li>✅ Bottom space now available for content</li>
+            <li>✅ <strong>User avatar moved to the right of Delete Project button</strong></li>
+        </ul>
+    </div>
+</body>
+</html>

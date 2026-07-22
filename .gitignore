@@ -1,0 +1,96 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/__pycache__/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# Build output
+frontend/build/
+frontend/dist/
+backend/dist/
+*.egg-info/
+
+# Jekyll / GitHub Pages
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/vendor/
+
+
+# Database files (keep for development, exclude for production)
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.cloud
+.env.self-hosted
+backend/.env
+*secret*.key
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.tmp
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+frontend/coverage/
+
+# Playwright
+frontend/playwright-report/
+frontend/test-results/
+frontend/playwright/.cache/
+
+# Testing
+.tox/
+.pytest_cache/
+test_deployment_env.html
+
+# Docker
+backend/coverage.lcov
+test.db
+backend/python-packages/
+
+# Prevent Copilot/AI-generated documentation spam
+# Generated docs should go through review process
+**/COPILOT_*.md
+**/copilot-*.md
+**/*-copilot-*.md
+**/*_SUMMARY.md
+!docs/DOCUMENTATION_CLEANUP_SUMMARY.md
+**/*_COMPLETE.md
+**/*_COMPLETION.md
+**/*_FIX_*.md
+docs/archive/
+docs/temp/
+docs/scratch/
+test_pr_workflow_update_ui.md
+failure.log

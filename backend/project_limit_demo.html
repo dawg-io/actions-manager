@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Free User Project Limit Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .demo-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .title {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        
+        .createButton {
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 12px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            margin-bottom: 1rem;
+        }
+        
+        .createButton:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            background: #6c757d;
+        }
+        
+        .warning-message {
+            margin-top: 0.5rem;
+            padding: 0.75rem;
+            background-color: #fff3cd;
+            border: 1px solid #ffeeba;
+            border-radius: 4px;
+            color: #856404;
+            font-size: 0.9rem;
+            text-align: center;
+        }
+        
+        .projectListContainer {
+            margin-top: 1rem;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .projectListHeader {
+            display: flex;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .projectItem {
+            display: flex;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        
+        .projectItem:hover {
+            background: #f8f9fa;
+        }
+        
+        .projectColumn {
+            flex: 2;
+        }
+        
+        .dateColumn {
+            flex: 1;
+            text-align: center;
+        }
+        
+        .code-demo {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Free User Project Limit Feature Demo</h1>
+    
+    <!-- Free User Under Limit -->
+    <div class="demo-section">
+        <h2>Scenario 1: Free User with 3 Projects (Under Limit)</h2>
+        <div class="title">Manage Your Projects</div>
+        <button class="createButton">➕ Create New Project</button>
+        <div class="projectListContainer">
+            <h3 class="subtitle">Saved Projects</h3>
+            <div class="projectListHeader">
+                <span class="projectColumn">Project Name</span>
+                <span class="dateColumn">Created</span>
+                <span class="dateColumn">Last Updated</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Free Project 1</span>
+                <span class="dateColumn">2025-09-01</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Free Project 2</span>
+                <span class="dateColumn">2025-09-02</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Free Project 3</span>
+                <span class="dateColumn">2025-09-03</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+        </div>
+        <p><strong>Result:</strong> ✅ Create button is enabled. No warning message.</p>
+    </div>
+    
+    <!-- Free User At Limit -->
+    <div class="demo-section">
+        <h2>Scenario 2: Free User with 3 Projects (At Limit)</h2>
+        <div class="title">Manage Your Projects</div>
+        <button class="createButton" disabled style="opacity: 0.6; cursor: not-allowed;">➕ Create New Project</button>
+        <div class="warning-message">
+            ⚠️ Free plan users can create up to 3 projects. Upgrade to create more.
+        </div>
+        <div class="projectListContainer">
+            <h3 class="subtitle">Saved Projects</h3>
+            <div class="projectListHeader">
+                <span class="projectColumn">Project Name</span>
+                <span class="dateColumn">Created</span>
+                <span class="dateColumn">Last Updated</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Free Project 1</span>
+                <span class="dateColumn">2025-09-01</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Free Project 2</span>
+                <span class="dateColumn">2025-09-02</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Free Project 3</span>
+                <span class="dateColumn">2025-09-02</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+        </div>
+        <p><strong>Result:</strong> ❌ Create button is disabled with reduced opacity. Warning message is displayed.</p>
+    </div>
+    
+    <!-- Pro User Over Limit -->
+    <div class="demo-section">
+        <h2>Scenario 3: Pro User with 7 Projects (Over Free Limit)</h2>
+        <div class="title">Manage Your Projects</div>
+        <button class="createButton">➕ Create New Project</button>
+        <div class="projectListContainer">
+            <h3 class="subtitle">Saved Projects</h3>
+            <div class="projectListHeader">
+                <span class="projectColumn">Project Name</span>
+                <span class="dateColumn">Created</span>
+                <span class="dateColumn">Last Updated</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 1</span>
+                <span class="dateColumn">2025-09-01</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 2</span>
+                <span class="dateColumn">2025-09-02</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 3</span>
+                <span class="dateColumn">2025-09-02</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 4</span>
+                <span class="dateColumn">2025-09-03</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 5</span>
+                <span class="dateColumn">2025-09-03</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 6</span>
+                <span class="dateColumn">2025-09-03</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+            <div class="projectItem">
+                <span class="projectColumn">Pro Project 7</span>
+                <span class="dateColumn">2025-09-03</span>
+                <span class="dateColumn">2025-09-03</span>
+            </div>
+        </div>
+        <p><strong>Result:</strong> ✅ Create button is enabled. No warning message (pro users are not limited).</p>
+    </div>
+    
+    <!-- API Error Handling -->
+    <div class="demo-section">
+        <h2>Scenario 4: Backend Error Handling</h2>
+        <div class="code-demo">
+            <strong>When a free user tries to create a 4th project via API:</strong><br><br>
+            Request: POST /projects/<br>
+            Response: 403 Forbidden<br>
+            {<br>
+            &nbsp;&nbsp;"detail": "Free accounts can only create up to 3 projects."<br>
+            }<br><br>
+            <strong>Frontend Error Message:</strong><br>
+            "❌ Free plan users can create up to 3 projects. You've reached your limit. Please upgrade to create more projects."
+        </div>
+    </div>
+    
+    <!-- Implementation Details -->
+    <div class="demo-section">
+        <h2>Implementation Details</h2>
+        <ul>
+            <li><strong>Backend:</strong> Enforces limit in POST /projects/ endpoint (403 error when limit exceeded)</li>
+            <li><strong>Frontend:</strong> Checks account_type and project count from API response</li>
+            <li><strong>UI Behavior:</strong> Disables create button and shows warning for free users at limit</li>
+            <li><strong>Error Handling:</strong> Graceful 403 error handling with user-friendly messages</li>
+            <li><strong>Testing:</strong> 16 new tests covering all scenarios (backend + frontend)</li>
+        </ul>
+    </div>
+</body>
+</html>

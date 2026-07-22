@@ -1,0 +1,77 @@
+title: ActionsManager Documentation
+description: Multi-repository GitHub Actions workflow management
+baseurl: ""
+url: "https://actionsmanager.io"
+logo: "/assets/images/shield-icon-transparent.svg"
+
+theme: just-the-docs
+
+# Navigation
+nav_sort: order
+
+# Search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Footer links
+footer_content: "&copy; 2026 ActionsManager. All rights reserved."
+
+# GitHub integration
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/dawg-io/actions-manager"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "edit"
+
+# Color scheme
+#color_scheme: light
+color_scheme: dark
+
+# Plugins
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: "default"
+
+# Exclude from build
+exclude:
+  - ARCHITECTURE.md
+  - CLOUD_DEPLOYMENT.md
+  - DEPLOYMENT.md
+  - DEPLOYMENT_GUIDE_INDEX.md
+  - DEVELOPMENT.md
+  - DOCUMENTATION_CLEANUP_SUMMARY.md
+  - ENVIRONMENT_VARIABLES.md
+  - FRONTEND_DEVELOPMENT.md
+  - GITHUB_PAT_SETUP.md
+  - GITHUB_PERMISSION_VALIDATION.md
+  - LICENSE_KEYS.md
+  - QUICK_START.md
+  - SELF_HOSTED_INSTALL.md
+  - TROUBLESHOOTING.md
+  - archive/
+  - guides/
+  - pipeline/
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+  - README.md

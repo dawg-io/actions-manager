@@ -1,0 +1,456 @@
+# Multi-stage Dockerfile for Self-Hosted Deployment
+# Combines frontend and backend into a single container for simplified deployment
+
+# Stage 1: Build Frontend
+FROM node:20-slim AS frontend-builder
+
+# Set Node.js memory limit to prevent OOM errors during build
+# Adjust NODE_OPTIONS if you have more/less memory available
+ENV NODE_OPTIONS="--max-old-space-size=2048"
+
+WORKDIR /app/frontend
+
+# Copy frontend package files
+COPY frontend/package*.json ./
+
+# Install frontend dependencies using lockfile for reproducible builds
+RUN npm ci
+
+# Copy frontend source code
+COPY frontend/ ./
+
+# Remove any local .env files that might interfere with build
+RUN rm -f .env .env.local .env.development .env.dev .env.production .env.production.local
+
+# Build production frontend with memory-efficient settings
+# Disable source maps and use single process to reduce memory usage
+#
+# Unique placeholders are baked into the JS bundle during the build (Vite
+# inlines VITE_* vars as string literals at build time). The container
+# startup script (start.sh) replaces these placeholders with the actual
+# runtime values from the environment, so users can change ports or domains
+# in .env.self-hosted without rebuilding.
+ENV VITE_APP_URL=__RUNTIME_CONFIG_APP_URL__
+ENV VITE_BACKEND_URL=__RUNTIME_CONFIG_BACKEND_URL__
+ENV VITE_FRONTEND_URL=__RUNTIME_CONFIG_FRONTEND_URL__
+ENV VITE_WEBSOCKET_URL=__RUNTIME_CONFIG_WEBSOCKET_URL__
+
+# Add build arg to force cache bust when needed
+ARG BUILD_DATE=unknown
+RUN echo "Build date: ${BUILD_DATE}" && \
+    NODE_OPTIONS="--max-old-space-size=4096" npm run build
+
+# Stage 2: Backend with Frontend
+FROM python:3.12-slim
+
+# Install nginx for serving static files, and gosu to drop root privileges
+# at runtime after fixing volume ownership (see start.sh below).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends nginx curl gosu && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user for running the application
+# Using UID 1001 to avoid conflicts with common system users
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid appuser --shell /bin/bash --create-home appuser
+
+# Set working directory for backend
+WORKDIR /app/backend
+
+# Copy backend requirements and install dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir psycopg2-binary websockets wsproto && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy backend source code
+COPY backend/ .
+
+# Remove local backend dotenv files so development defaults (mock/debug/admin)
+# are not baked into the self-hosted image.
+RUN rm -f .env .env.local .env.development .env.production
+
+# Self-hosted images ship without the admin panel. Removing the source file
+# (and its targeted tests) is a hard guarantee that /admin/* cannot be reached.
+# The companion try/except in backend/main.py ensures the app starts cleanly
+# even if INSTALLATION_MODE is accidentally set to "cloud" at runtime; it will
+# log a warning and skip the admin router rather than crash on a missing module.
+RUN rm -f admin.py && \
+    rm -f tests/test_admin_helper_functions.py
+
+# Bake the installation mode into the image as a defense-in-depth default.
+# docker-compose.self-hosted.yml also sets this; the ENV here ensures the
+# image cannot accidentally boot in cloud mode and try to import the
+# now-absent admin module.
+ENV INSTALLATION_MODE=self-hosted
+
+# Copy built frontend from stage 1
+COPY --from=frontend-builder /app/frontend/build /app/frontend/build
+
+# Ship the license terms with the image.
+COPY LICENSE COMMERCIAL-LICENSE.md /app/
+
+# Set ownership for application directories to appuser
+# This covers everything baked into the image (backend code, frontend build).
+# It does NOT cover /app/data — that path is a runtime volume mount point
+# that doesn't exist yet at build time, so Docker initializes it as root:root
+# when the volume is first attached. start.sh fixes that ownership on every
+# boot instead, since it must handle both fresh volumes and existing ones
+# left over from images that ran fully as root.
+RUN chown -R appuser:appuser /app
+
+# Configure nginx to run as non-root user
+# Create app-owned directories for nginx runtime files
+RUN mkdir -p /app/nginx/lib /app/nginx/logs /app/nginx/run /app/nginx/cache && \
+    chown -R appuser:appuser /app/nginx
+
+# Configure nginx main config to run as appuser and use custom paths
+RUN rm /etc/nginx/sites-enabled/default
+COPY <<'EOF' /etc/nginx/nginx.conf
+# start.sh launches nginx as root (needed to fix /app/data volume ownership
+# before anything else starts), so this directive is honored normally:
+# nginx's master process runs as root and its worker processes drop to
+# appuser, exactly as a standard nginx deployment does.
+user appuser;
+worker_processes auto;
+pid /app/nginx/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Basic settings
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    
+    # Logging - use app-owned directories
+    access_log /app/nginx/logs/access.log;
+    error_log /app/nginx/logs/error.log;
+    
+    # Performance settings
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    
+    # Client body temp path - use app-owned directory
+    client_body_temp_path /app/nginx/cache/client_temp;
+    proxy_temp_path /app/nginx/cache/proxy_temp;
+    fastcgi_temp_path /app/nginx/cache/fastcgi_temp;
+    uwsgi_temp_path /app/nginx/cache/uwsgi_temp;
+    scgi_temp_path /app/nginx/cache/scgi_temp;
+    
+    # Include site configs
+    include /etc/nginx/sites-enabled/*;
+}
+EOF
+
+# Configure site-specific nginx config
+COPY <<'EOF' /etc/nginx/sites-available/actions-manager
+server {
+    listen 8080;
+    server_name _;
+
+    # Proxy API requests to backend (MUST be before frontend catch-all)
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # Proxy auth endpoints (MUST be before frontend catch-all)
+    location /auth/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # Proxy WebSocket connections (MUST be before frontend catch-all)
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Proxy docs (MUST be before frontend catch-all)
+    location /docs {
+        proxy_pass http://127.0.0.1:8000/docs;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location /openapi.json {
+        proxy_pass http://127.0.0.1:8000/openapi.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # Health check (MUST be before frontend catch-all). Proxies to the
+    # backend's own "/" route, which is a real readiness check (requires
+    # uvicorn to be up and responding). Unlike the frontend catch-all below,
+    # which nginx serves from static files regardless of backend health,
+    # this endpoint actually fails if the backend is down or unresponsive.
+    location /healthz {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # Serve frontend static files (MUST be last - catch-all)
+    location / {
+        root /app/frontend/build;
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache" always;
+    }
+}
+EOF
+
+# Enable the site
+RUN ln -s /etc/nginx/sites-available/actions-manager /etc/nginx/sites-enabled/
+
+# Create startup script
+COPY <<'EOF' /app/start.sh
+#!/bin/bash
+set -e
+
+# ---------------------------------------------------------------------------
+# Runtime URL injection
+# ---------------------------------------------------------------------------
+# Vite bakes VITE_* environment variables as string literals at build time.
+# To allow users to change the port or domain in .env.self-hosted *without*
+# rebuilding the Docker image, the build uses unique placeholder strings.
+# We replace them here with the actual values from the environment.
+#
+# VITE_APP_URL  — deprecated alias for APP_URL; still honored for backward
+#                 compatibility. Users should set bare APP_URL instead.
+#
+# APP_URL       — simplified all-in-one option for self-hosted deployments.
+#                 Set it to your server's URL (e.g. http://192.168.1.100:8080)
+#                 and the backend, frontend, and WebSocket URLs are derived
+#                 automatically.
+#
+# VITE_BACKEND_URL / VITE_FRONTEND_URL / VITE_WEBSOCKET_URL
+#               — explicit per-service overrides; take priority over VITE_APP_URL.
+#
+# Legacy VITE_APP_URL and REACT_APP_* names are accepted as fallbacks so that
+# .env.self-hosted files from before this change keep working without
+# modification.
+#
+# When none are set the placeholders are replaced with empty strings and
+# config.tsx falls back to window.location at runtime, so the app works
+# correctly via localhost, a LAN IP, or a custom domain with no config.
+# ---------------------------------------------------------------------------
+
+# Simplified APP_URL: bare APP_URL is the primary var; VITE_APP_URL is a
+# deprecated alias still honored for backward compatibility.
+APP_URL="${APP_URL:-${VITE_APP_URL:-}}"
+
+# Derive WebSocket URL from APP_URL:
+#   https://example.com → wss://example.com/ws
+#   http://example.com  → ws://example.com/ws
+if [ -n "$APP_URL" ]; then
+  _app_host=$(printf '%s' "$APP_URL" | sed 's|^https://||; s|^http://||; s|/.*||')
+  if printf '%s' "$APP_URL" | grep -q '^https://'; then
+    DERIVED_WS_URL="wss://${_app_host}/ws"
+  else
+    DERIVED_WS_URL="ws://${_app_host}/ws"
+  fi
+else
+  DERIVED_WS_URL=""
+fi
+
+# Explicit per-service overrides; fall back to APP_URL-derived values.
+# REACT_APP_* names accepted for backward compatibility.
+BACKEND_URL="${VITE_BACKEND_URL:-${REACT_APP_BACKEND_URL:-${APP_URL:-}}}"
+FRONTEND_URL="${VITE_FRONTEND_URL:-${REACT_APP_FRONTEND_URL:-${APP_URL:-}}}"
+WEBSOCKET_URL="${VITE_WEBSOCKET_URL:-${REACT_APP_WEBSOCKET_URL:-${DERIVED_WS_URL:-}}}"
+
+echo "Configuring frontend URLs..."
+if [ -n "$APP_URL" ]; then
+  echo "  App URL:       $APP_URL (VITE_APP_URL -> derives backend/frontend/ws)"
+fi
+if [ -n "$BACKEND_URL" ]; then
+  echo "  Backend URL:   $BACKEND_URL"
+else
+  echo "  Backend URL:   (auto-detect via window.location at runtime)"
+fi
+if [ -n "$FRONTEND_URL" ]; then
+  echo "  Frontend URL:  $FRONTEND_URL"
+else
+  echo "  Frontend URL:  (auto-detect via window.location at runtime)"
+fi
+if [ -n "$WEBSOCKET_URL" ]; then
+  echo "  WebSocket URL: $WEBSOCKET_URL"
+else
+  echo "  WebSocket URL: (auto-detect via window.location at runtime)"
+fi
+
+# Escape characters that are meaningful in sed replacement strings.
+# We use | as the sed delimiter, so we must escape &, \, and |.
+escape_sed() { printf '%s\n' "$1" | sed 's/[&|\\]/\\&/g'; }
+SAFE_APP=$(escape_sed "$APP_URL")
+SAFE_BACKEND=$(escape_sed "$BACKEND_URL")
+SAFE_FRONTEND=$(escape_sed "$FRONTEND_URL")
+SAFE_WEBSOCKET=$(escape_sed "$WEBSOCKET_URL")
+
+# Replace placeholders in all built JS, CSS, and HTML assets.
+find /app/frontend/build -type f \( -name "*.js" -o -name "*.css" -o -name "*.html" \) -exec sed -i \
+  -e "s|__RUNTIME_CONFIG_APP_URL__|${SAFE_APP}|g" \
+  -e "s|__RUNTIME_CONFIG_BACKEND_URL__|${SAFE_BACKEND}|g" \
+  -e "s|__RUNTIME_CONFIG_FRONTEND_URL__|${SAFE_FRONTEND}|g" \
+  -e "s|__RUNTIME_CONFIG_WEBSOCKET_URL__|${SAFE_WEBSOCKET}|g" \
+  {} +
+
+# ---------------------------------------------------------------------------
+# Ensure the persistent data directory exists and is owned by appuser.
+# /app/data is the canonical path for all self-hosted runtime data including
+# the SQLite database. It's a volume mount point that doesn't exist in the
+# image at build time, so Docker (and any pre-existing volume from an image
+# version that ran fully as root) may leave it owned by root. This container
+# now starts as root specifically so this chown can run before anything else
+# touches the volume; everything after this point drops to appuser via gosu.
+mkdir -p /app/data
+chown -R appuser:appuser /app/data
+
+# ---------------------------------------------------------------------------
+# Persistent data diagnostics
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Self-Hosted Data Directory ==="
+echo "  Path:     /app/data"
+echo "  Contents: $(ls /app/data 2>/dev/null | tr '\n' ' ' || echo '(empty)')"
+
+# Determine which database will be used (mirrors logic in backend/database.py)
+if [ -n "${DATABASE_URL}" ]; then
+  if echo "$DATABASE_URL" | grep -q "sqlite"; then
+    echo "  Database: $DATABASE_URL (from DATABASE_URL env var)"
+  else
+    echo "  Database: PostgreSQL (from DATABASE_URL env var)"
+  fi
+elif [ -n "${POSTGRES_USER}" ] && [ -n "${POSTGRES_PASSWORD}" ] && \
+     [ -n "${POSTGRES_DB}" ] && [ -n "${POSTGRES_HOST}" ] && [ -n "${POSTGRES_PORT}" ]; then
+  echo "  Database: PostgreSQL (from POSTGRES_* env vars)"
+else
+  echo "  Database: /app/data/actions_manager.db (SQLite default)"
+fi
+
+# Warn if a legacy database exists at the old path.
+if [ -f "/app/backend/test.db" ]; then
+  echo ""
+  echo "⚠️  WARNING: Legacy database detected at /app/backend/test.db"
+  echo "   The current release stores the database at /app/data/actions_manager.db"
+  echo "   If you have existing data you want to keep, run:"
+  echo "     docker cp <container>:/app/backend/test.db /tmp/actions_manager.db"
+  echo "     docker cp /tmp/actions_manager.db <container>:/app/data/actions_manager.db"
+  echo "   Or set DATABASE_URL=sqlite:////app/backend/test.db in .env.self-hosted"
+  echo "   to keep using the legacy path until you are ready to migrate."
+fi
+echo "=================================="
+echo ""
+
+# Start nginx
+echo "Starting nginx..."
+nginx
+
+# ---------------------------------------------------------------------------
+# Startup diagnostics: validate the backend entrypoint before launching
+# Uvicorn.  This surfaces the real Python traceback instead of the generic
+# "Could not import module 'main'" Uvicorn error, making it far easier to
+# diagnose bad volume mounts, missing files, or broken imports.
+# ---------------------------------------------------------------------------
+echo "Validating backend entrypoint..."
+cd /app/backend
+
+if [ ! -f main.py ]; then
+  echo "ERROR: /app/backend/main.py is missing."
+  echo "This usually means a Docker volume mount is overriding /app/backend."
+  ls -la /app/backend || true
+  exit 1
+fi
+
+gosu appuser python -c "import main; print('Backend import validation passed')" || {
+  echo "ERROR: Failed to import backend main.py."
+  echo "Review the Python traceback above for the root cause."
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Database migrations
+# ---------------------------------------------------------------------------
+# Apply schema migrations (new tables AND new columns on existing tables)
+# before the API starts.  Base.metadata.create_all in main.py only creates
+# missing tables — it can NOT add new columns to an existing database, so
+# upgrades on a persistent /app/data volume require these migrations.
+# Runs as appuser (not root) — /app/data ownership was already fixed above,
+# so this has everything it needs without running the app's own code as root.
+echo "Running database migrations..."
+gosu appuser python run_migrations.py || {
+  echo "ERROR: Database migrations failed."
+  echo "The database schema may be out of date; review the output above."
+  exit 1
+}
+
+# Start backend as appuser. gosu execs uvicorn directly (no wrapper process
+# left behind), so it still ends up as PID 1 and receives docker stop's
+# SIGTERM directly, same as before this container started as root.
+#
+# Force INSTALLATION_MODE=self-hosted so the self-hosted image cannot be
+# started in cloud mode regardless of what the container environment says.
+# Cloud deployments use their own Dockerfile/compose path.
+#
+# --proxy-headers --forwarded-allow-ips=127.0.0.1: nginx and uvicorn are in
+# the same container, proxying over loopback. Only honour X-Forwarded-Proto /
+# X-Forwarded-For when they actually came through nginx, not from an
+# arbitrary caller hitting uvicorn directly.
+echo "Starting backend server..."
+export INSTALLATION_MODE=self-hosted
+exec gosu appuser uvicorn main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+EOF
+
+# Make startup script executable
+RUN chmod +x /app/start.sh
+
+# ---------------------------------------------------------------------------
+# Post-build smoke test: verify backend/main.py is importable.
+# This runs at IMAGE BUILD time, so a broken import fails the build rather
+# than silently shipping a container that crashes at runtime.
+# ---------------------------------------------------------------------------
+RUN python -c "import main; print('✅ Backend import validation passed')"
+
+# Container starts as root (the Docker default — no USER directive here).
+# This is intentional and required: /app/data is a runtime volume mount that
+# doesn't exist in the image, so its ownership can't be fixed at build time,
+# and an existing volume from an older, fully-root image may already be
+# root-owned. start.sh fixes /app/data's ownership as root at the very start
+# of the container, then uses gosu to drop to appuser for everything that
+# actually runs application code (migrations, uvicorn) and never runs the
+# app itself as root. This is the same root-then-drop-privileges pattern
+# used by official images like postgres and mysql for the same reason.
+
+# Expose only port 8080 (nginx handles routing)
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8080/healthz || exit 1
+
+# Start both services
+CMD ["/app/start.sh"]

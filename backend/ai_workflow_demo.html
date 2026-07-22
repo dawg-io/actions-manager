@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Workflow Editing Feature Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .feature-section {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background-color: #fafafa;
+        }
+        .workflow-item {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .button-container {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        .btn-ai {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-ai:hover {
+            background-color: #218838;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn-delete {
+            background-color: #dc3545;
+            color: white;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            flex-wrap: wrap;
+        }
+        .highlight {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .code-block {
+            background-color: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        .changes-list {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }
+        .changes-list h4 {
+            margin-top: 0;
+            color: #155724;
+        }
+        .changes-list ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .changes-list li {
+            margin: 5px 0;
+            color: #155724;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 AI-Powered Workflow Editing Feature</h1>
+            <p><strong>Feature Implementation Complete!</strong></p>
+            <p>This demo shows the new AI workflow editing capabilities added to Actions Manager</p>
+        </div>
+
+        <div class="changes-list">
+            <h4>✅ Implementation Summary</h4>
+            <ul>
+                <li><strong>Backend:</strong> New `/api/ai/edit-workflow` endpoint for workflow analysis</li>
+                <li><strong>Frontend:</strong> "Edit with AI" button added to each workflow</li>
+                <li><strong>UI Reorganization:</strong> "Generate with AI" moved to action-buttons section</li>
+                <li><strong>Integration:</strong> Reuses existing AIWorkflowChat component</li>
+                <li><strong>Technology-Specific:</strong> Provides Maven, Helm, Node.js specific suggestions</li>
+            </ul>
+        </div>
+
+        <div class="feature-section">
+            <h3>🎯 Feature #1: "Edit with AI" Button for Individual Workflows</h3>
+            <p>Each workflow now has an "Edit with AI" button that analyzes the existing workflow and provides intelligent enhancement suggestions.</p>
+            
+            <div class="workflow-item">
+                <h4>📝 Example Workflow: maven-build-1</h4>
+                <div class="code-block">name: Maven Build
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+      - name: Build with Maven
+        run: mvn compile</div>
+                
+                <div class="button-container">
+                    <button class="btn btn-ai">🤖 Edit with AI</button>
+                    <button class="btn btn-secondary">💾 Save Draft</button>
+                    <button class="btn btn-secondary">🔄 Create</button>
+                    <button class="btn btn-delete">❌ Delete GitHub Workflow</button>
+                </div>
+                
+                <div class="highlight">
+                    <strong>AI Analysis Preview:</strong> "I've analyzed your Maven workflow. It could benefit from test execution, Docker packaging, and security scanning."
+                </div>
+            </div>
+
+            <div class="workflow-item">
+                <h4>📝 Example Workflow: helm-chart-deploy</h4>
+                <div class="code-block">name: Helm Deploy
+on:
+  push:
+    branches: [ main ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Package Helm Chart
+        run: helm package chart/</div>
+                
+                <div class="button-container">
+                    <button class="btn btn-ai">🤖 Edit with AI</button>
+                    <button class="btn btn-secondary">💾 Save Draft</button>
+                    <button class="btn btn-secondary">🔄 Create</button>
+                    <button class="btn btn-delete">❌ Delete GitHub Workflow</button>
+                </div>
+                
+                <div class="highlight">
+                    <strong>AI Analysis Preview:</strong> "Your Helm workflow would benefit from helm lint validation, security scanning, and chart testing before deployment."
+                </div>
+            </div>
+        </div>
+
+        <div class="feature-section">
+            <h3>🎯 Feature #2: Relocated "Generate with AI" Button</h3>
+            <p>The "Generate with AI" button has been moved from the workflow header to the action-buttons section at the bottom of the page, alongside other workflow management buttons.</p>
+            
+            <div class="highlight">
+                <strong>Before:</strong> Button was in the "Manual Workflows" header section<br>
+                <strong>After:</strong> Button is now in the action-buttons section with consistent styling
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-secondary">➕ Add Workflow</button>
+                <button class="btn btn-secondary">🔄 Refresh Status</button>
+                <button class="btn btn-secondary">🔍 Detect Build Types</button>
+                <button class="btn btn-ai">🤖 Generate with AI</button>
+                <div style="width: 1px; height: 40px; background-color: #ddd; margin: 0 1rem;"></div>
+                <button class="btn btn-secondary">🚀 Save Project</button>
+                <button class="btn btn-secondary">🔙 Cancel</button>
+            </div>
+        </div>
+
+        <div class="feature-section">
+            <h3>🔧 Technical Implementation</h3>
+            
+            <h4>Backend API Endpoint:</h4>
+            <div class="code-block">POST /api/ai/edit-workflow
+{
+  "user": "username",
+  "project_name": "my-project", 
+  "workflow_name": "ci-pipeline",
+  "current_workflow": "yaml content...",
+  "build_types": ["Maven", "Java"]
+}</div>
+
+            <h4>Response:</h4>
+            <div class="code-block">{
+  "workflow_analysis": "Analysis of current workflow...",
+  "session_id": "session_123",
+  "suggested_questions": [
+    "Would you like me to add security scanning?",
+    "Should I include Docker containerization?"
+  ],
+  "enhancement_suggestions": [
+    "Add test execution with Maven Surefire",
+    "Include Docker image building with buildx"
+  ]
+}</div>
+
+            <h4>Technology-Specific Suggestions:</h4>
+            <ul>
+                <li><strong>Maven Projects:</strong> Test execution, Checkstyle, PMD, Docker packaging</li>
+                <li><strong>Helm Charts:</strong> helm lint, security scanning, chart testing</li>
+                <li><strong>Node.js Projects:</strong> npm audit, ESLint, test coverage</li>
+                <li><strong>Python Projects:</strong> pytest, pylint, security checks</li>
+            </ul>
+        </div>
+
+        <div class="feature-section">
+            <h3>✨ User Experience Flow</h3>
+            <ol>
+                <li><strong>Existing Workflow:</strong> User has a workflow already created</li>
+                <li><strong>Edit Request:</strong> User clicks "Edit with AI" button</li>
+                <li><strong>AI Analysis:</strong> Backend analyzes workflow and provides suggestions</li>
+                <li><strong>Interactive Chat:</strong> AIWorkflowChat modal opens with analysis</li>
+                <li><strong>Enhancements:</strong> User can ask for specific improvements</li>
+                <li><strong>Real-time Updates:</strong> Workflow content updates as changes are made</li>
+            </ol>
+        </div>
+
+        <div class="feature-section">
+            <h3>🚀 Status & Testing</h3>
+            <ul>
+                <li>✅ Backend endpoint implemented and tested</li>
+                <li>✅ Frontend integration complete</li>
+                <li>✅ UI layout changes implemented</li>
+                <li>✅ API validation completed</li>
+                <li>✅ Technology-specific suggestions working</li>
+                <li>✅ Fallback error handling robust</li>
+                <li>✅ Consistent styling applied</li>
+            </ul>
+            
+            <div class="highlight">
+                <strong>Ready for Production:</strong> The feature is fully implemented and ready for use. Just add your OpenAI API key to enable AI functionality!
+            </div>
+        </div>
+    </div>
+</body>
+</html>

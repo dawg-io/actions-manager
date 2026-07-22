@@ -1,0 +1,15 @@
+source "https://rubygems.org"
+
+gem "jekyll", "~> 4.3"
+gem "just-the-docs", "~> 0.8.2"
+gem "jekyll-seo-tag", "~> 2.8"
+gem "jekyll-sitemap", "~> 1.4"
+gem "webrick", "~> 1.8"
+
+# Temporary pin to reduce Dart Sass deprecation warning noise from just-the-docs.
+# Dart Sass 1.80+ warns heavily on @import, map-get, darken(), and other APIs
+# still used by just-the-docs 0.8.x.
+#
+# Remove this pin later when just-the-docs has fully migrated to the newer
+# Sass module system or when the docs theme is upgraded.
+gem "sass-embedded", "< 1.80"

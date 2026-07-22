@@ -1,0 +1,53 @@
+{
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2020,
+    "sourceType": "module",
+    "ecmaFeatures": {
+      "jsx": true
+    }
+  },
+  "rules": {
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "JSXAttribute[name.name='style']",
+        "message": "Inline styles are not allowed. Use Tailwind CSS utility classes instead. See: https://tailwindcss.com/docs"
+      }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "styled-components",
+            "message": "styled-components is not allowed. Use Tailwind CSS utility classes instead."
+          },
+          {
+            "name": "@emotion/react",
+            "message": "@emotion/react is not allowed. Use Tailwind CSS utility classes instead."
+          },
+          {
+            "name": "@emotion/styled",
+            "message": "@emotion/styled is not allowed. Use Tailwind CSS utility classes instead."
+          },
+          {
+            "name": "@emotion/css",
+            "message": "@emotion/css is not allowed. Use Tailwind CSS utility classes instead."
+          }
+        ],
+        "patterns": [
+          {
+            "group": ["**/*.css", "!./index.css"],
+            "message": "CSS file imports are not allowed. Use Tailwind CSS utility classes instead. Exception: ./index.css for Tailwind base directives.",
+            "caseSensitive": true
+          },
+          {
+            "group": ["**/*.scss"],
+            "message": "SCSS file imports are not allowed. Use Tailwind CSS utility classes instead."
+          }
+        ]
+      }
+    ]
+  }
+}

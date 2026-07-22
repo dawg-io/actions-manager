@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reusable Workflow GUI Editor Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(45deg, #2196F3, #21CBF3);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 40px;
+            background: #f8f9fa;
+        }
+
+        .feature {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .feature-icon {
+            font-size: 2rem;
+            min-width: 50px;
+        }
+
+        .feature-content strong {
+            color: #2196F3;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .demo-section {
+            padding: 40px;
+        }
+
+        .mode-toggle {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+            gap: 10px;
+        }
+
+        .mode-button {
+            padding: 12px 24px;
+            border: 2px solid #2196F3;
+            background: white;
+            color: #2196F3;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .mode-button.active {
+            background: #2196F3;
+            color: white;
+        }
+
+        .mode-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(33, 150, 243, 0.3);
+        }
+
+        .editor-container {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .editor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+        }
+
+        .editor-header h3 {
+            color: #333;
+            font-size: 1.5rem;
+        }
+
+        .editor-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .action-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .save-btn {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .create-btn {
+            background: #2196F3;
+            color: white;
+        }
+
+        .gui-demo {
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .form-section {
+            margin-bottom: 25px;
+        }
+
+        .form-label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #2196F3;
+        }
+
+        .event-info {
+            background: #e3f2fd;
+            border: 1px solid #2196F3;
+            border-radius: 6px;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .event-type {
+            font-weight: 600;
+            color: #1976D2;
+        }
+
+        .event-description {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .configure-btn {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .job-card {
+            background: #fff3e0;
+            border: 1px solid #ff9800;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .job-name {
+            font-weight: 600;
+            color: #e65100;
+        }
+
+        .job-runner {
+            background: #ff9800;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .job-steps {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .add-job-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        .yaml-demo {
+            display: none;
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 25px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            overflow-x: auto;
+        }
+
+        .yaml-demo.active {
+            display: block;
+        }
+
+        .keyword {
+            color: #81c784;
+            font-weight: 600;
+        }
+
+        .string {
+            color: #ffcc80;
+        }
+
+        .comment {
+            color: #90a4ae;
+            font-style: italic;
+        }
+
+        .info-notice {
+            background: #e8f5e8;
+            border: 1px solid #4CAF50;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+
+        .info-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            color: #2e7d32;
+            margin-bottom: 8px;
+        }
+
+        .info-content {
+            color: #388e3c;
+            line-height: 1.5;
+        }
+
+        .implementation-summary {
+            background: #f8f9fa;
+            padding: 40px;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .implementation-summary h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+        }
+
+        .implementation-summary ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .implementation-summary li {
+            background: white;
+            margin-bottom: 15px;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid #2196F3;
+        }
+
+        .implementation-summary strong {
+            color: #2196F3;
+            display: block;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>
+                <span>🔄</span>
+                Reusable Workflow GUI Editor
+            </h1>
+            <p>Create and edit reusable GitHub Actions workflows with workflow_call triggers</p>
+        </div>
+
+        <!-- Features -->
+        <div class="features">
+            <div class="feature">
+                <div class="feature-icon">🔄</div>
+                <div class="feature-content">
+                    <strong>Workflow Call Support:</strong>
+                    Specialized for workflow_call triggers only
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">⚙️</div>
+                <div class="feature-content">
+                    <strong>Input Configuration:</strong>
+                    Define and manage workflow inputs visually
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">📝</div>
+                <div class="feature-content">
+                    <strong>Visual Interface:</strong>
+                    Same GUI experience as regular workflows
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🔄</div>
+                <div class="feature-content">
+                    <strong>YAML ⇄ GUI Toggle:</strong>
+                    Switch between visual and code editing
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🎯</div>
+                <div class="feature-content">
+                    <strong>Smart Defaults:</strong>
+                    Pre-configured workflow_call template
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">✅</div>
+                <div class="feature-content">
+                    <strong>Validation:</strong>
+                    Real-time validation for reusable workflows
+                </div>
+            </div>
+        </div>
+
+        <!-- Demo Section -->
+        <div class="demo-section">
+            <div class="mode-toggle">
+                <button class="mode-button active" onclick="showMode('gui')">
+                    📝 GUI
+                </button>
+                <button class="mode-button" onclick="showMode('yaml')">
+                    📄 YAML
+                </button>
+            </div>
+
+            <div class="editor-container">
+                <div class="editor-header">
+                    <h3>Reusable Workflow Editor</h3>
+                    <div class="editor-actions">
+                        <button class="action-btn save-btn">💾 Save Draft</button>
+                        <button class="action-btn create-btn">🔄 Create</button>
+                    </div>
+                </div>
+
+                <!-- GUI Mode -->
+                <div id="gui-mode" class="gui-demo">
+                    <div class="form-section">
+                        <label for="workflow-name" class="form-label">Reusable Workflow Name *</label>
+                        <input 
+                          type="text" 
+                          id="workflow-name" 
+                          class="form-input" 
+                          value="build-and-deploy" 
+                          placeholder="Enter reusable workflow name..."
+                        >
+                    </div>
+
+                    <div class="form-section">
+                        <div class="form-label">Trigger Event</div>
+                        <div class="event-info">
+                            <div>
+                                <div class="event-type">Workflow Call</div>
+                                <div class="event-description">Triggered when called by another workflow</div>
+                            </div>
+                            <button class="configure-btn">▼ Configure Inputs</button>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <div class="form-label">Jobs *</div>
+                        <div class="job-card">
+                            <div class="job-header">
+                                <div class="job-name">Job: build</div>
+                                <div class="job-runner">ubuntu-latest</div>
+                            </div>
+                            <div class="job-steps">4 steps: Checkout → Setup Node.js → Install dependencies → Build application</div>
+                        </div>
+                        <button class="add-job-btn">➕ Add Job</button>
+                    </div>
+
+                    <div class="info-notice">
+                        <div class="info-header">
+                            <span>ℹ️</span>
+                            <span>Reusable Workflow</span>
+                        </div>
+                        <div class="info-content">
+                            This workflow uses <code>workflow_call</code> as the trigger event, making it reusable by other workflows.
+                            Configure inputs above to make the workflow parameterized.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- YAML Mode -->
+                <div id="yaml-mode" class="yaml-demo">
+<pre><span class="keyword">name:</span> <span class="string">build-and-deploy</span>
+
+<span class="keyword">on:</span>
+  <span class="keyword">workflow_call:</span>
+    <span class="keyword">inputs:</span>
+      <span class="keyword">environment:</span>
+        <span class="keyword">description:</span> <span class="string">'Target environment for deployment'</span>
+        <span class="keyword">required:</span> <span class="string">false</span>
+        <span class="keyword">type:</span> <span class="string">string</span>
+        <span class="keyword">default:</span> <span class="string">'staging'</span>
+
+<span class="keyword">jobs:</span>
+  <span class="keyword">build:</span>
+    <span class="keyword">runs-on:</span> <span class="string">ubuntu-latest</span>
+    <span class="keyword">steps:</span>
+      - <span class="keyword">name:</span> <span class="string">Checkout code</span>
+        <span class="keyword">uses:</span> <span class="string">actions/checkout@v5</span>
+      
+      - <span class="keyword">name:</span> <span class="string">Setup Node.js</span>
+        <span class="keyword">uses:</span> <span class="string">actions/setup-node@v4</span>
+        <span class="keyword">with:</span>
+          <span class="keyword">node-version:</span> <span class="string">'20'</span>
+      
+      - <span class="keyword">name:</span> <span class="string">Install dependencies</span>
+        <span class="keyword">run:</span> <span class="string">npm install</span>
+      
+      - <span class="keyword">name:</span> <span class="string">Build application</span>
+        <span class="keyword">run:</span> <span class="string">npm run build</span></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Implementation Summary -->
+        <div class="implementation-summary">
+            <h3>📋 Implementation Summary</h3>
+            <p style="margin-bottom: 30px; font-size: 1.1rem; color: #666;">
+                This reusable workflow GUI editor extends the main workflow editor functionality specifically for workflow_call triggers:
+            </p>
+            <ul>
+                <li>
+                    <strong>ReusableEventPicker.tsx:</strong>
+                    Specialized event picker that only supports workflow_call with input configuration
+                </li>
+                <li>
+                    <strong>ReusableGUIWorkflowEditor.tsx:</strong>
+                    Modified GUI editor that uses ReusableEventPicker instead of the full EventPicker
+                </li>
+                <li>
+                    <strong>Enhanced RXWorkflows.tsx:</strong>
+                    Updated ReusableWorkflowEditor with GUI/YAML toggle functionality
+                </li>
+                <li>
+                    <strong>Workflow Conversion Utils:</strong>
+                    Extended to support workflow_call events and input parameter parsing/serialization
+                </li>
+                <li>
+                    <strong>Input Management:</strong>
+                    Support for string, number, boolean, and choice input types with validation
+                </li>
+                <li>
+                    <strong>Round-trip Safe:</strong>
+                    Maintains workflow_call structure when switching between GUI and YAML modes
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function showMode(mode) {
+            // Update button states
+            document.querySelectorAll('.mode-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Show/hide content
+            if (mode === 'gui') {
+                document.getElementById('gui-mode').style.display = 'block';
+                document.getElementById('yaml-mode').classList.remove('active');
+            } else {
+                document.getElementById('gui-mode').style.display = 'none';
+                document.getElementById('yaml-mode').classList.add('active');
+            }
+        }
+    </script>
+</body>
+</html>

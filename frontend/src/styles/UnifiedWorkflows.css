@@ -1,0 +1,1688 @@
+/* Unified Workflows Container */
+.unified-workflows-container {
+  display: flex;
+  height: 100%;
+  gap: 1rem;
+  padding: 0;
+  max-width: 100%;
+}
+
+/* Unified workflow list on the left */
+.unified-workflows-list {
+  flex: 0 0 300px;
+  background: var(--container-background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  --workflow-compact-status-none-color: #94a3b8;
+  --workflow-compact-status-new-color: #2e7d32;
+  --workflow-compact-status-unsaved-color: #f59e0b;
+  --workflow-compact-status-committed-color: #3b82f6;
+  --workflow-compact-status-review-color: #a855f7;
+  --workflow-compact-status-synced-color: #22c55e;
+}
+
+.unified-workflows-list.collapsed {
+  flex: 0 0 128px;
+}
+
+/* Workflows list header */
+.workflows-list-header {
+  background: var(--header-background-color, var(--background-color));
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.workflows-list-header-content h4 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.workflows-list-toggle {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflows-list-toggle:hover {
+  background: var(--hover-background-color);
+  color: var(--text-primary);
+}
+
+.workflows-list-toggle-arrow {
+  display: block;
+  transition: transform 0.2s ease;
+}
+
+/* Workflows list container */
+.workflows-list-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflows-list-container.compact {
+  padding: 0.5rem 0.4rem;
+  gap: 0.5rem;
+}
+
+/* Add Workflow Button Container */
+.add-workflow-button-container {
+  padding: 0.5rem 0;
+  margin-top: auto;
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.75rem;
+  position: relative;
+}
+
+.add-file-menu {
+  position: absolute;
+  bottom: calc(100% + 0.25rem);
+  left: 0.5rem;
+  right: 0.5rem;
+  background: var(--background-color, #fff);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  z-index: 50;
+}
+
+.dark .add-file-menu {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* Header variant: dropdown opens downward, right-aligned */
+.add-file-menu-below {
+  top: calc(100% + 0.25rem);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  min-width: 180px;
+}
+
+.add-file-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  background: none;
+  border: none;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  font-size: 0.825rem;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.add-file-menu-item:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+}
+
+.add-workflow-button {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-primary, #007bff);
+  color: white;
+  border: none;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.add-workflow-button:hover {
+  background-color: var(--color-primary-dark, #0056b3);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.add-workflow-button:active {
+  transform: translateY(0);
+}
+
+/* Unified workflow sections */
+.unified-workflow-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Per-type section card */
+.pf-section {
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.pf-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.7rem;
+  background: var(--header-background-color, var(--background-color));
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pf-section-header .section-icon {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.pf-section-count {
+  margin-left: auto;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+  background: var(--border-color);
+  border-radius: 9999px;
+  padding: 0.1rem 0.45rem;
+  line-height: 1.4;
+}
+
+.pf-section-body {
+  padding: 0.4rem;
+}
+
+/* Section dividers */
+.workflow-section-divider {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workflow-section-title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.workflow-section-title .section-icon {
+  font-size: 1rem;
+}
+
+.workflow-section-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.workflow-section-action-btn:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg, rgba(0,0,0,0.05));
+}
+
+.empty-section-hint {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.workflow-section-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--border-color);
+  border-radius: 9999px;
+  padding: 0.1rem 0.45rem;
+  line-height: 1.4;
+}
+
+/* Compact CODEOWNERS repo list */
+.codeowners-repo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.5rem 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.codeowners-repo-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  padding: 0.3rem 0.5rem;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.codeowners-repo-item:hover {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
+  border-color: var(--border-color);
+}
+
+.codeowners-repo-item.selected {
+  background: var(--selected-bg, rgba(59, 130, 246, 0.1));
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.dark .codeowners-repo-item.selected {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.codeowners-repo-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.codeowners-repo-path {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  font-family: monospace;
+  opacity: 0.75;
+}
+
+/* Workflow items */
+.workflow-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.workflow-compact-sections,
+.workflow-compact-section,
+.workflow-compact-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-compact-sections {
+  gap: 0.5rem;
+}
+
+.workflow-compact-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 0.35rem;
+}
+
+.workflow-compact-section-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: 0.35rem 0 0.25rem;
+  margin-top: 0.15rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.workflow-compact-item {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.45rem 0.4rem;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 0.4rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.workflow-compact-item:hover {
+  background: var(--hover-background-color);
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.workflow-compact-item.selected {
+  background: var(--primary-background-color);
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-color-alpha);
+}
+
+.workflow-compact-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.workflow-compact-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.workflow-compact-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 9999px;
+  background: var(--text-secondary);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+
+.workflow-compact-status-dot.status-none {
+  background: var(--workflow-compact-status-none-color);
+}
+
+.workflow-compact-status-dot.status-new {
+  background: var(--workflow-compact-status-new-color);
+}
+
+.workflow-compact-status-dot.status-unsaved {
+  background: var(--workflow-compact-status-unsaved-color);
+}
+
+.workflow-compact-status-dot.status-committed {
+  background: var(--workflow-compact-status-committed-color);
+}
+
+.workflow-compact-status-dot.status-review {
+  background: var(--workflow-compact-status-review-color);
+}
+
+.workflow-compact-status-dot.status-synced {
+  background: var(--workflow-compact-status-synced-color);
+}
+
+.workflow-item {
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+  position: relative;
+  width: 100%;
+  text-align: left;
+}
+
+.workflow-item:hover {
+  background: var(--hover-background-color);
+  border-color: var(--primary-color);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.workflow-item.selected {
+  background: var(--primary-background-color);
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-color-alpha);
+}
+
+.workflow-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.workflow-name {
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-prefix {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.workflow-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.repo-status {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.repo-name {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.status-link, .status-icon {
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+
+.status-loading {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.workflow-type {
+  margin-top: 0.25rem;
+}
+
+.type-badge {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+}
+
+.type-badge.reusable {
+  background: var(--secondary-background-color);
+  color: #6b7280;
+  border: 1px solid var(--secondary-color);
+}
+
+.dark-theme .type-badge.reusable {
+  background: #374151;
+  color: #d1d5db;
+}
+
+.type-badge.linked {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+  border: 1px solid #6366f1;
+}
+
+/* Workflow lifecycle status badge — base layout used by DriftBadge */
+.workflow-lifecycle-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  margin-top: 0.2rem;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.workflow-lifecycle-status .lifecycle-label {
+  display: inline;
+}
+
+.modified-indicator {
+  color: var(--warning-color);
+  font-weight: bold;
+  font-size: 1.25rem;
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* Empty state */
+.empty-workflow-list {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--text-secondary);
+}
+
+.empty-workflow-list p {
+  margin: 0.5rem 0;
+}
+
+/* Editor area on the right */
+.unified-workflows-editor {
+  flex: 1;
+  background: var(--container-background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+}
+
+/* No workflow selected state */
+.no-workflow-selected {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+}
+
+.no-workflow-content {
+  text-align: center;
+  max-width: 400px;
+}
+
+.no-workflow-content h3 {
+  margin: 0 0 1rem 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.no-workflow-content p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Reusable workflow editor */
+.reusable-workflow-editor,
+.regular-workflow-editor,
+.linked-workflow-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* New cleaner workflow editor header */
+.workflow-editor-header-new {
+  background: var(--header-background-color, var(--background-color));
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* Top row: filename, badges, actions */
+.workflow-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* Left side: workflow identity */
+.workflow-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.workflow-filename-input[data-mode="readonly"] {
+  flex: 0 1 auto;
+  min-width: 200px;
+  max-width: 400px;
+}
+
+/*
+ * In edit mode the field expands into:
+ *   [locked AM_{CODE}_ chip] [editable input] [locked .yml chip] [Save] [Cancel]
+ * Allow the field to take the space it needs without forcing growth, and let
+ * the parent toolbar's flex-wrap push primary actions to the next row when
+ * there isn't enough space. The inner EditableNameField already has flex-wrap
+ * on its edit row, so Save/Cancel will wrap under the input on very narrow widths.
+ */
+.workflow-filename-input[data-mode="editing"] {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.workflow-type-badge-new {
+  font-size: 0.7rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.workflow-type-badge-new.reusable {
+  background: var(--secondary-background-color);
+  color: var(--secondary-text-color);
+  border: 1px solid var(--secondary-color);
+}
+
+.workflow-type-badge-new.regular {
+  background: var(--primary-background-color);
+  color: var(--primary-text-color);
+  border: 1px solid var(--primary-color);
+}
+
+.workflow-type-badge-new.linked {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+  border: 1px solid #6366f1;
+}
+
+/* workflow-state-badge styles are now handled by WorkflowStatusBadge inline styles */
+
+/* Right side: primary actions */
+.workflow-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* More menu dropdown */
+.more-menu-dropdown {
+  position: relative;
+}
+
+.more-menu-content {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background-color: var(--color-container, #fff);
+  border: 1px solid var(--border-color, #dee2e6);
+  border-radius: 0.375rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.more-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.875rem;
+  background: none;
+  border: none;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.more-menu-item:hover:not(:disabled) {
+  background-color: var(--hover-background-color, #f8f9fa);
+}
+
+.more-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.more-menu-item--danger {
+  color: var(--color-error, #dc3545);
+}
+
+.more-menu-item--danger:hover:not(:disabled) {
+  background-color: var(--color-error, #dc3545);
+  color: white;
+}
+
+.more-menu-divider {
+  height: 1px;
+  background-color: var(--border-color, #dee2e6);
+  margin: 0.25rem 0;
+}
+
+/* Second row: status/context */
+.workflow-toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.status-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.status-value {
+  color: var(--text-primary);
+}
+
+/* Editor mode selector */
+.editor-mode-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.mode-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.mode-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.mode-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mode-btn-active {
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.mode-separator {
+  color: var(--border-color);
+  user-select: none;
+}
+
+/* Inline help / docs link in the workflow editor status bar */
+.docs-help-link {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  opacity: 0.8;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.docs-help-link:hover {
+  color: var(--primary-color);
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* Legacy header (keep for compatibility during migration) */
+.workflow-editor-header {
+  background: var(--header-background-color, var(--background-color));
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.workflow-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.workflow-name-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.workflow-type-badge {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.workflow-type-badge.reusable {
+  background: var(--secondary-background-color);
+  color: var(--secondary-text-color);
+  border: 1px solid var(--secondary-color);
+}
+
+.workflow-type-badge.regular {
+  background: var(--primary-background-color);
+  color: var(--primary-text-color);
+  border: 1px solid var(--primary-color);
+}
+
+.workflow-type-badge.linked {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+  border: 1px solid #6366f1;
+}
+
+.workflow-linked-source {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.editor-mode-toggle {
+  display: flex;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.mode-button {
+  background: transparent;
+  border: none;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.mode-button:hover {
+  background: var(--hover-background-color);
+  color: var(--text-primary);
+}
+
+.mode-button.active {
+  background: var(--primary-color);
+  color: white;
+}
+
+.workflow-editor-content {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* GUI editor placeholder */
+.gui-editor-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-secondary);
+  background: var(--background-color);
+}
+
+.gui-editor-placeholder p {
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+  .unified-workflows-container {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .unified-workflows-list {
+    flex: none;
+    max-height: 300px;
+  }
+
+  .unified-workflows-editor {
+    flex: none;
+    height: 500px;
+  }
+
+  .workflow-toolbar-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workflow-identity {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workflow-primary-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .workflow-toolbar-status {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .editor-mode-selector {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .unified-workflows-container {
+    gap: 0.5rem;
+  }
+
+  .unified-workflows-list {
+    flex: 0 0 250px;
+  }
+
+  .unified-workflows-list.collapsed {
+    flex: 0 0 128px;
+  }
+
+  .workflows-list-header {
+    padding: 0.75rem;
+  }
+
+  .workflow-editor-header {
+    padding: 0.75rem 1rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .workflow-editor-header-new {
+    padding: 0.75rem 1rem;
+  }
+
+  .workflow-filename-input {
+    min-width: 100%;
+    max-width: 100%;
+  }
+
+  .workflow-primary-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workflow-primary-actions button {
+    width: 100%;
+  }
+
+  .status-item {
+    font-size: 0.8rem;
+  }
+
+  .workflow-info {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Dark mode specific adjustments */
+@media (prefers-color-scheme: dark) {
+  .unified-workflows-list,
+  .unified-workflows-editor {
+    background: var(--container-background-color);
+  }
+  
+  .workflows-list-header,
+  .workflow-editor-header {
+    background: var(--header-background-color, var(--background-color));
+    border-bottom-color: var(--border-color);
+  }
+}
+
+/* Workflow Creation Dialog Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+/* Dialog element styling */
+.modal-content {
+  background: var(--container-background-color);
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 0;
+  margin: auto;
+}
+
+/* Dialog backdrop - native dialog backdrop */
+.modal-content::backdrop {
+  background: transparent;
+}
+
+.modal-header {
+  padding: 1.5rem 1.5rem 0 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 1.5rem;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+}
+
+.modal-close:hover {
+  background: var(--hover-background-color);
+  color: var(--text-primary);
+}
+
+.workflow-type-selection {
+  padding: 0 1.5rem 1.5rem 1.5rem;
+}
+
+.workflow-type-selection p {
+  margin: 0 0 1.5rem 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.workflow-type-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.workflow-type-option {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  border: 2px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+  gap: 1rem;
+}
+
+.workflow-type-option:hover {
+  border-color: var(--color-primary);
+  background: var(--hover-background-color);
+}
+
+.workflow-type-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--border-color);
+}
+
+.workflow-type-option.disabled:hover {
+  border-color: var(--border-color);
+  background: transparent;
+}
+
+.workflow-type-option.disabled .option-content h4 {
+  color: var(--text-secondary);
+}
+
+.workflow-type-option.disabled .option-content p {
+  color: var(--text-muted, #666);
+}
+
+.option-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.option-content h4 {
+  margin: 0 0 0.25rem 0;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.option-content p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.workflow-creation-options {
+  padding: 0 1.5rem 1.5rem 1.5rem;
+}
+
+.workflow-creation-options h4 {
+  margin: 0 0 1.5rem 0;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.creation-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.creation-option {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+  gap: 0.75rem;
+}
+
+.creation-option:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--hover-background-color);
+}
+
+.creation-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.creation-option .option-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.creation-option .option-content h5 {
+  margin: 0 0 0.25rem 0;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.creation-option .option-content p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Template Modal Styles - Dialog element styling */
+.template-modal {
+  background: var(--container-background-color);
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+  max-width: 700px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 0;
+  margin: auto;
+}
+
+/* Dialog backdrop - native dialog backdrop */
+.template-modal::backdrop {
+  background: transparent;
+}
+
+.template-modal-header {
+  padding: 1.5rem 1.5rem 0 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 1.5rem;
+}
+
+.template-modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.template-modal-content {
+  padding: 0 1.5rem 1.5rem 1.5rem;
+}
+
+.template-loading {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-secondary);
+}
+
+.template-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.template-section h4 {
+  margin: 0 0 1rem 0;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.template-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  background: var(--background-color);
+}
+
+.template-info h5 {
+  margin: 0 0 0.25rem 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.template-info p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+/* Workflow Editor Actions */
+.workflow-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.workflow-editor-actions .btn {
+  font-size: 0.85rem;
+  padding: 0.375rem 0.75rem;
+  white-space: nowrap;
+}
+
+/* Project Options Dropdown */
+.project-options-dropdown {
+  position: relative;
+}
+
+.project-options-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background-color: var(--color-container, #fff);
+  border: 1px solid var(--border-color, #dee2e6);
+  border-radius: 0.375rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 160px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.project-options-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.875rem;
+  background: none;
+  border: none;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.project-options-item:hover:not(:disabled) {
+  background-color: var(--hover-background-color, #f8f9fa);
+}
+
+.project-options-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-options-item--danger {
+  color: var(--color-error, #dc3545);
+}
+
+.project-options-item--danger:hover:not(:disabled) {
+  background-color: var(--color-error, #dc3545);
+  color: white;
+}
+
+/* Button styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  gap: 0.25rem;
+}
+
+.btn-primary {
+  background-color: var(--color-primary, #007bff);
+  color: white;
+  border-color: var(--color-primary, #007bff);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--color-primary-dark, #0056b3);
+  border-color: var(--color-primary-dark, #0056b3);
+}
+
+.btn-secondary {
+  background-color: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--hover-background-color);
+  color: var(--text-primary);
+  border-color: var(--color-primary, #007bff);
+}
+
+.btn-danger {
+  background-color: transparent;
+  color: var(--color-error, #dc3545);
+  border-color: var(--color-error, #dc3545);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: var(--color-error, #dc3545);
+  color: white;
+}
+
+/* "Commit and Update PR" contextual action button */
+.btn-pr-update {
+  background-color: transparent;
+  color: #b45309;
+  border-color: #b45309;
+}
+
+.btn-pr-update:hover:not(:disabled) {
+  background-color: #fff7ed;
+  border-color: #92400e;
+  color: #92400e;
+}
+
+.dark-theme .btn-pr-update {
+  color: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.dark-theme .btn-pr-update:hover:not(:disabled) {
+  background-color: rgba(245, 158, 11, 0.15);
+  border-color: #fbbf24;
+  color: #fbbf24;
+}
+
+/* "Open in GitHub" compact action button */
+.btn-github {
+  background-color: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+  font-size: 0.8rem;
+  padding: 0.3rem 0.6rem;
+  gap: 0.3rem;
+}
+
+.btn-github:hover:not(:disabled) {
+  background-color: var(--hover-background-color);
+  color: var(--text-primary);
+  border-color: var(--color-primary, #007bff);
+}
+
+.github-icon {
+  font-style: normal;
+  font-size: 0.9rem;
+}
+
+/* Open in GitHub dropdown wrapper */
+.open-in-github-control {
+  position: relative;
+}
+
+/* Open in GitHub dropdown menu */
+.open-in-github-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background-color: var(--color-container, #fff);
+  border: 1px solid var(--border-color, #dee2e6);
+  border-radius: 0.375rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 200px;
+  max-width: 320px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.open-in-github-menu .project-options-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── Workflow lock overlay ────────────────────────────────────────────────── */
+
+/* Make the editor content area a stacking context for the overlay */
+.workflow-editor-content--lockable {
+  position: relative;
+}
+
+/* Translucent dimmed overlay that sits on top of the editor */
+.workflow-lock-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 17, 21, 0.65);
+  backdrop-filter: blur(1px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  border-radius: 0 0 0.5rem 0.5rem;
+}
+
+/* Centered lock button inside the overlay */
+.workflow-lock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  background: rgba(30, 33, 40, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.75rem;
+  padding: 1.25rem 2rem;
+  cursor: pointer;
+  color: var(--text-primary, #e2e8f0);
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.workflow-lock-btn:hover {
+  background: rgba(45, 50, 60, 0.95);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.04);
+}
+
+.workflow-lock-btn-static {
+  cursor: default;
+}
+
+.workflow-lock-btn-static:hover {
+  background: rgba(30, 33, 40, 0.9);
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: none;
+}
+
+.workflow-lock-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.workflow-lock-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.workflow-lock-label-strong {
+  font-weight: 600;
+}
+
+/* ─── Unlock confirmation modal ─────────────────────────────────────────────── */
+
+.workflow-lock-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.workflow-lock-modal {
+  background: var(--container-background-color, #1e2128);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 0.75rem;
+  padding: 1.75rem 2rem;
+  max-width: 440px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.workflow-lock-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.875rem;
+}
+
+.workflow-lock-modal-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.workflow-lock-modal-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary, #e2e8f0);
+}
+
+.workflow-lock-modal-body {
+  margin: 0 0 1.5rem 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.workflow-lock-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}

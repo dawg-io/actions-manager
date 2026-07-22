@@ -1,0 +1,8 @@
+{% if site.logo %}
+  <span class="brand-lockup">
+    <span class="brand-icon" role="img" aria-label="{{ site.title }}"></span>
+    <span class="brand-wordmark"><span class="brand-actions">Actions</span><span class="brand-manager">Manager</span></span>
+  </span>
+{% else %}
+  {{ site.title }}
+{% endif %}

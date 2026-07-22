@@ -1,0 +1,55 @@
+# Docker Compose configuration for SELF-HOSTED deployment
+# ----------------------------------------------------------------------------
+# This is the OFFICIAL self-hosted release flow.
+#
+# It pulls the pre-built single-container image published by Actions-Manager's
+# release pipeline to GitHub Container Registry. End users do NOT need to
+# build the image locally.
+#
+#   Image: ghcr.io/dawg-io/actions-manager/self-hosted
+#   Default tag: latest (stable). Override with ACTIONS_MANAGER_TAG=...
+#                e.g. ACTIONS_MANAGER_TAG=beta or a pinned version like 2026.05.14
+#
+# To use a fully custom image (private mirror, air-gapped registry, etc.) set
+# ACTIONS_MANAGER_IMAGE to the full reference, e.g.:
+#   ACTIONS_MANAGER_IMAGE=registry.internal/actions-manager:2026.05.14
+#
+# CONTRIBUTORS / DEVELOPERS who want to build from local source instead of
+# pulling should layer the dev overlay on top of this file:
+#
+#   docker compose -f docker-compose.self-hosted.yml \
+#                  -f docker-compose.self-hosted.dev.yml up --build
+#
+# For cloud / multi-tenant deployments use docker-compose.cloud.yml instead.
+# ----------------------------------------------------------------------------
+
+services:
+  app:
+    # Pre-built image from GHCR. Override the tag with ACTIONS_MANAGER_TAG,
+    # or replace the whole reference with ACTIONS_MANAGER_IMAGE.
+    image: ${ACTIONS_MANAGER_IMAGE:-ghcr.io/dawg-io/actions-manager/self-hosted:${ACTIONS_MANAGER_TAG:-latest}}
+    pull_policy: ${ACTIONS_MANAGER_PULL_POLICY:-always}
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file:
+      - .env.self-hosted
+    environment:
+      # Self-hosted deployment mode — also enforced at the image level in
+      # start.sh, so the self-hosted image cannot be started in cloud mode
+      # regardless of what this file says.
+      - INSTALLATION_MODE=self-hosted
+    volumes:
+      # Persist the SQLite database and any other runtime-generated data across
+      # image updates.  All self-hosted data is written under /app/data inside
+      # the container.  Do NOT mount a volume at /app/backend — that path
+      # contains the application source code and is owned by the image.
+      - actionsmanager:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  actionsmanager: {}

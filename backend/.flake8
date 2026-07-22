@@ -1,0 +1,34 @@
+[flake8]
+max-line-length = 127
+max-complexity = 15
+exclude =
+    .git,
+    __pycache__,
+    venv,
+    env,
+    .venv,
+    build,
+    dist,
+    *.egg-info,
+    .pytest_cache,
+    htmlcov,
+    migrations,
+    static
+
+# Error codes to ignore
+ignore =
+    E203,  # whitespace before ':'
+    E501,  # line too long (handled by max-line-length)
+    W503,  # line break before binary operator
+    W504,  # line break after binary operator
+
+# Select specific error codes
+select = E,W,F,C
+
+per-file-ignores =
+    __init__.py:F401
+    test_*.py:F401,F811
+
+count = True
+statistics = True
+show-source = True

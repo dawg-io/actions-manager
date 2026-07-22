@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0B1224">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192x192.png">
+    <link rel="icon" type="image/svg+xml" href="/branding/svg/shield-icon-transparent.svg">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="manifest" href="/site.webmanifest">
+    <title>ActionsManager</title>
+    <!--
+      Inline script: apply the saved theme (or dark-mode default) to <html> as early
+      as possible to prevent a flash of light mode before React hydrates.
+      This runs synchronously before any stylesheet or component renders.
+    -->
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('theme');
+          // Dark mode is the default for new users who have no saved preference.
+          var isDark = saved ? saved === 'dark' : true;
+          document.documentElement.classList.add(isDark ? 'dark-theme' : 'light-theme');
+          document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+        } catch (e) {
+          // If localStorage is unavailable, apply dark mode by default.
+          document.documentElement.classList.add('dark-theme');
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+</body>
+</html>

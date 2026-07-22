@@ -1,0 +1,253 @@
+/* Drift Detection Modal Styles */
+.drift-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.drift-modal {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.drift-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #e1e5e9;
+}
+
+.drift-modal-header h3 {
+  margin: 0;
+  color: #d73502;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #6a737d;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.close-btn:hover {
+  background-color: #f6f8fa;
+  color: #24292e;
+}
+
+.drift-modal-content {
+  padding: 20px 24px;
+}
+
+.drift-modal-content > p {
+  margin-bottom: 20px;
+  color: #586069;
+  line-height: 1.5;
+}
+
+.drift-item {
+  border: 1px solid #e1e5e9;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background-color: #fafbfc;
+}
+
+.drift-item:last-child {
+  margin-bottom: 0;
+}
+
+.drift-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.drift-item-header h4 {
+  margin: 0;
+  color: #24292e;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.drift-status {
+  background-color: #fff3cd;
+  color: #856404;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.drift-message {
+  color: #586069;
+  margin: 8px 0 16px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.drift-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.drift-actions .btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.drift-actions .btn-primary {
+  background-color: #0366d6;
+  color: white;
+  border-color: #0366d6;
+}
+
+.drift-actions .btn-primary:hover {
+  background-color: #0256cc;
+  border-color: #0256cc;
+}
+
+.drift-actions .btn-secondary {
+  background-color: #6f42c1;
+  color: white;
+  border-color: #6f42c1;
+}
+
+.drift-actions .btn-secondary:hover {
+  background-color: #5a32a3;
+  border-color: #5a32a3;
+}
+
+.drift-modal-footer {
+  padding: 16px 24px 20px;
+  border-top: 1px solid #e1e5e9;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.drift-modal-footer .btn-outline {
+  background-color: transparent;
+  color: #586069;
+  border: 1px solid #d1d5da;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.drift-modal-footer .btn-outline:hover {
+  background-color: #f6f8fa;
+  border-color: #c4c9cf;
+  color: #24292e;
+}
+
+.drift-detection-loading {
+  padding: 16px;
+  text-align: center;
+  background-color: #f6f8fa;
+  border: 1px solid #e1e5e9;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.drift-detection-loading p {
+  margin: 0;
+  color: #586069;
+  font-style: italic;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .drift-modal {
+    background: #21262d;
+    color: #c9d1d9;
+  }
+  
+  .drift-modal-header {
+    border-bottom-color: #30363d;
+  }
+  
+  .drift-modal-header h3 {
+    color: #f85149;
+  }
+  
+  .close-btn {
+    color: #8b949e;
+  }
+  
+  .close-btn:hover {
+    background-color: #30363d;
+    color: #c9d1d9;
+  }
+  
+  .drift-modal-content > p {
+    color: #8b949e;
+  }
+  
+  .drift-item {
+    background-color: #161b22;
+    border-color: #30363d;
+  }
+  
+  .drift-item-header h4 {
+    color: #c9d1d9;
+  }
+  
+  .drift-message {
+    color: #8b949e;
+  }
+  
+  .drift-modal-footer {
+    border-top-color: #30363d;
+  }
+  
+  .drift-modal-footer .btn-outline {
+    color: #8b949e;
+    border-color: #30363d;
+  }
+  
+  .drift-modal-footer .btn-outline:hover {
+    background-color: #30363d;
+    border-color: #484f58;
+    color: #c9d1d9;
+  }
+  
+  .drift-detection-loading {
+    background-color: #161b22;
+    border-color: #30363d;
+  }
+  
+  .drift-detection-loading p {
+    color: #8b949e;
+  }
+}

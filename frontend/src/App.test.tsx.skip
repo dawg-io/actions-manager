@@ -1,0 +1,245 @@
+import React from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import '@testing-library/jest-dom';
+import config from './config';
+
+// Mock the user API
+const mockGetUserDetails = jest.fn();
+vi.mock('./api/user', () => ({
+  getUserDetails: (...args: any[]) => mockGetUserDetails(...args),
+}));
+
+// Mock child components to avoid router dependencies
+vi.mock('./ProjectMgmt', () => {
+  return function ProjectMgmt({ userDetails, onLogout }: any) {
+    return (
+      <div data-testid="project-mgmt">
+        <button onClick={onLogout}>Logout</button>
+        <div>User: {userDetails?.github_user || 'none'}</div>
+      </div>
+    );
+  };
+});
+
+vi.mock('./NewProject', () => {
+  return function NewProject({ user }: any) {
+    return <div data-testid="new-project">New Project for {user}</div>;
+  };
+});
+
+vi.mock('./PrivateRoute', () => {
+  return function PrivateRoute({ children }: any) {
+    return <div data-testid="private-route">{children}</div>;
+  };
+});
+
+// Import App after mocks
+import App from './App';
+
+describe('App Component', () => {
+  const user = userEvent.setup();
+
+  beforeEach(() => {
+    localStorage.clear();
+    jest.clearAllMocks();
+    // Mock WebSocket
+    global.WebSocket = jest.fn().mockImplementation(() => ({
+      close: jest.fn(),
+      send: jest.fn(),
+      onopen: null,
+      onerror: null,
+      onclose: null,
+    })) as any;
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  describe('Unauthenticated State', () => {
+    test('renders login screen when no user is logged in', () => {
+      render(<App />);
+      
+      expect(screen.getByText('🔑 Log in with GitHub')).toBeInTheDocument();
+    });
+
+    test('displays login button with correct styling', () => {
+      render(<App />);
+      
+      const loginButton = screen.getByText('🔑 Log in with GitHub');
+      expect(loginButton).toBeInTheDocument();
+      expect(loginButton.tagName).toBe('BUTTON');
+    });
+
+    test('clicking login button redirects to auth endpoint', () => {
+      const originalLocation = window.location;
+      delete (window as any).location;
+      window.location = { href: '' } as any;
+
+      render(<App />);
+      
+      const loginButton = screen.getByText('🔑 Log in with GitHub');
+      loginButton.click();
+
+      expect(window.location.href).toBe(`${config.BACKEND_URL}/auth/github`);
+      
+      window.location = originalLocation;
+    });
+
+    test('shows logout message after logout', async () => {
+      localStorage.setItem('github_user', 'testuser');
+      mockGetUserDetails.mockResolvedValue({
+        avatar_url: 'https://example.com/avatar.png',
+        github_user: 'testuser',
+        account_type: 'free',
+        github_account_type: 'User',
+      });
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-mgmt')).toBeInTheDocument();
+      });
+
+      const logoutButton = screen.getByText('Logout');
+      await user.click(logoutButton);
+
+      await waitFor(() => {
+        expect(screen.getByText(/You've been logged out/)).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Authenticated State', () => {
+    test('renders ProjectMgmt when user is authenticated from localStorage', async () => {
+      localStorage.setItem('github_user', 'testuser');
+      mockGetUserDetails.mockResolvedValue({
+        avatar_url: 'https://example.com/avatar.png',
+        github_user: 'testuser',
+        account_type: 'free',
+        github_account_type: 'User',
+      });
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-mgmt')).toBeInTheDocument();
+      });
+    });
+
+    test('extracts user from URL query parameter', async () => {
+      const originalLocation = window.location;
+      delete (window as any).location;
+      window.location = {
+        ...originalLocation,
+        search: '?user=newuser',
+      } as any;
+
+      mockGetUserDetails.mockResolvedValue({
+        avatar_url: 'https://example.com/avatar.png',
+        github_user: 'newuser',
+        account_type: 'pro',
+        github_account_type: 'User',
+      });
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(localStorage.getItem('github_user')).toBe('newuser');
+      });
+
+      window.location = originalLocation;
+    });
+
+    test('fetches user details when user is set', async () => {
+      localStorage.setItem('github_user', 'testuser');
+      const mockUserDetails = {
+        avatar_url: 'https://example.com/avatar.png',
+        github_user: 'testuser',
+        account_type: 'enterprise',
+        github_account_type: 'Organization',
+      };
+      mockGetUserDetails.mockResolvedValue(mockUserDetails);
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(mockGetUserDetails).toHaveBeenCalledWith('testuser');
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('User: testuser')).toBeInTheDocument();
+      });
+    });
+
+    test('handles logout correctly', async () => {
+      localStorage.setItem('github_user', 'testuser');
+      mockGetUserDetails.mockResolvedValue({
+        avatar_url: 'https://example.com/avatar.png',
+        github_user: 'testuser',
+        account_type: 'free',
+        github_account_type: 'User',
+      });
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-mgmt')).toBeInTheDocument();
+      });
+
+      const logoutButton = screen.getByText('Logout');
+      await user.click(logoutButton);
+
+      await waitFor(() => {
+        expect(localStorage.getItem('github_user')).toBeNull();
+        expect(screen.getByText('🔑 Log in with GitHub')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('WebSocket Connection', () => {
+    test('establishes WebSocket connection on mount', () => {
+      render(<App />);
+      
+      expect(global.WebSocket).toHaveBeenCalledWith(config.WEBSOCKET_URL);
+    });
+
+    test('closes WebSocket connection on unmount', () => {
+      const closeMock = jest.fn();
+      global.WebSocket = jest.fn().mockImplementation(() => ({
+        close: closeMock,
+        send: jest.fn(),
+        onopen: null,
+        onerror: null,
+        onclose: null,
+      })) as any;
+
+      const { unmount } = render(<App />);
+      unmount();
+
+      expect(closeMock).toHaveBeenCalled();
+    });
+  });
+
+  describe('Config Validation', () => {
+    test('config exports expected values', () => {
+      expect(config).toBeDefined();
+      expect(typeof config.BACKEND_URL).toBe('string');
+      expect(typeof config.FRONTEND_URL).toBe('string');
+    });
+
+    test('should have valid URL format for backend', () => {
+      expect(config.BACKEND_URL).toMatch(/^https?:\/\//);
+    });
+
+    test('should have valid URL format for frontend', () => {
+      expect(config.FRONTEND_URL).toMatch(/^https?:\/\//);
+    });
+
+    test('URLs should not be undefined or null', () => {
+      expect(config.BACKEND_URL).toBeTruthy();
+      expect(config.FRONTEND_URL).toBeTruthy();
+    });
+  });
+});
