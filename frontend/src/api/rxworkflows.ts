@@ -1,4 +1,4 @@
-import axios, { AxiosResponse } from "axios";
+import { AxiosResponse } from "axios";
 import apiClient from "./apiClient";
 import config from "../config";
 import { RXWorkflow } from "../types/workflow";
@@ -11,11 +11,6 @@ interface SaveRxWorkflowsResponse {
   message?: string;
   project_code?: string;
   pr_state?: string;
-  [key: string]: any;
-}
-
-interface RxWorkflowsCountResponse {
-  count: number;
   [key: string]: any;
 }
 
@@ -54,26 +49,5 @@ export const saveRxWorkflows = async (
   } catch (error) {
     console.error("❌ Error saving RX workflows:", error);
     throw error;
-  }
-};
-
-// Get reusable workflows count for a project
-export const getRxWorkflowsCount = async (
-  user: string, 
-  projectName: string
-): Promise<number> => {
-  try {
-    const response: AxiosResponse<RxWorkflowsCountResponse> = await axios.get(`${BACKEND_URL}/api/rxworkflows-count`, {
-      params: {
-        user,
-        project_name: projectName,
-      },
-    });
-
-    console.log("✅ RX workflows count retrieved:", response.data);
-    return response.data.count || 0;
-  } catch (error) {
-    console.error("❌ Error fetching RX workflows count:", error);
-    return 0;
   }
 };

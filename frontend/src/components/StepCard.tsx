@@ -406,7 +406,7 @@ const StepCard: React.FC<StepCardProps> = ({
                   id={`step-timeout-${step.id}`}
                   type="number"
                   value={step.timeoutMinutes ?? ''}
-                  onChange={(e) => handleFieldChange('timeoutMinutes', e.target.value ? parseInt(e.target.value) : undefined)}
+                  onChange={(e) => handleFieldChange('timeoutMinutes', e.target.value ? Number.parseInt(e.target.value) : undefined)}
                   placeholder="30"
                   min="1"
                   max="2160"

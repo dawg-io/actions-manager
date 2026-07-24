@@ -41,15 +41,6 @@ export interface ProjectDriftSummary {
   last_checked: string;
 }
 
-export interface WorkflowDriftResponse {
-  workflow_id: number;
-  workflow_name: string;
-  workflow_filename: string;
-  has_drift: boolean;
-  drift_details: WorkflowDriftDetail[];
-  last_checked: string;
-}
-
 export type DriftResolution = "use_github" | "restore_actionsmanager";
 export type DriftDeliveryMode = "pr" | "direct";
 
@@ -116,17 +107,6 @@ export async function getProjectDrift(
 ): Promise<ProjectDriftSummary> {
   const resp = await apiClient.get<ProjectDriftSummary>(
     `/api/projects/${projectId}/drift`,
-    { params: { github_user: githubUser } },
-  );
-  return resp.data;
-}
-
-export async function getWorkflowDrift(
-  workflowId: number,
-  githubUser: string,
-): Promise<WorkflowDriftResponse> {
-  const resp = await apiClient.get<WorkflowDriftResponse>(
-    `/api/workflows/${workflowId}/drift`,
     { params: { github_user: githubUser } },
   );
   return resp.data;

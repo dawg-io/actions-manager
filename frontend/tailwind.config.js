@@ -53,6 +53,11 @@ module.exports = {
           light: '#fee2e2',
           'dark-light': '#7f1d1d',
         },
+        merge: {
+          DEFAULT: '#16A34A',
+          hover: '#15803D',
+          ring: '#22C55E',
+        },
         warning: {
           DEFAULT: '#f59e0b',
           light: '#fef3c7',

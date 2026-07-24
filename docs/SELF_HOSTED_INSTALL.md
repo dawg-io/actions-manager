@@ -204,7 +204,6 @@ For PAT setup, see [GitHub PAT Setup](GITHUB_PAT_SETUP.md).
 - GitHub API (api.github.com) on port 443
 - GitHub OAuth servers
 - **GitHub Container Registry (ghcr.io) on port 443** — required to pull the official self-hosted image. Air-gapped installs can mirror the image to an internal registry and point `ACTIONS_MANAGER_IMAGE` at it.
-- Optional: OpenAI API (for AI features)
 
 **Inbound Access:**
 - Port 8080 (or custom port) must be accessible to users
@@ -714,27 +713,6 @@ docker compose -f docker-compose.self-hosted.yml start
 # LICENSE_KEY=your_jwt_license_key_here
 ```
 
-#### AI Features (Optional)
-
-```bash
-# Enable AI-powered workflow generation (optional, separate service)
-# This feature enables AI-powered workflow suggestions and code generation
-# Only required if you want to use AI-powered features
-OPENAI_API_KEY=sk-your_openai_api_key
-```
-
-**AI Capabilities:**
-- **Workflow Generation:** Generate GitHub Actions workflows from natural language descriptions
-- **Code Analysis:** Analyze repository code and suggest appropriate build configurations
-- **Optimization:** Provide recommendations to optimize existing workflows
-
-**Important Notes:**
-- Requires OpenAI API account with active subscription
-- API usage incurs costs based on OpenAI's pricing (separate from ActionsManager.io)
-- Get your key from: https://platform.openai.com/api-keys
-- Optional feature - ActionsManager.io functions fully without it
-- Can be configured/disabled at any time
-
 #### Debug & Development
 
 ```bash
@@ -743,21 +721,6 @@ DEBUG_MODE=false  # Set to true only for troubleshooting
 
 # Enable mock responses (bypasses GitHub OAuth)
 USE_MOCK_RESPONSES=false  # Only for development
-
-# Enable source maps (larger bundle size)
-GENERATE_SOURCEMAP=false
-```
-
-#### Container Settings
-
-```bash
-# Fix file watching in containers
-WATCHPACK_POLLING=true
-CHOKIDAR_USEPOLLING=true
-CHOKIDAR_INTERVAL=1000
-
-# Optimize production builds
-INLINE_RUNTIME_CHUNK=false
 ```
 
 ---

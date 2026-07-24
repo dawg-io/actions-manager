@@ -13,6 +13,8 @@ const buttonVariants = cva(
           "bg-primary text-white shadow hover:bg-primary-hover dark:bg-primary-dark dark:hover:bg-primary-dark-hover",
         destructive:
           "bg-danger text-white shadow-sm hover:bg-danger/90 dark:bg-danger dark:hover:bg-danger/90",
+        merge:
+          "bg-merge text-white shadow hover:bg-merge-hover focus-visible:ring-merge-ring dark:bg-merge dark:hover:bg-merge-hover",
         outline:
           "border border-input-border bg-background text-text-primary shadow-sm hover:bg-hover-bg hover:text-text-primary dark:border-border-color dark:bg-container-background-color dark:text-text-primary dark:hover:bg-hover-background-color dark:hover:text-text-primary",
         secondary:

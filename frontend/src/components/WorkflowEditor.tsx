@@ -13,7 +13,6 @@ import {
   ValidationError, 
   DEFAULT_WORKFLOW_GUI 
 } from '../utils/workflowGuiConversion';
-import { AIWorkflowAction } from '../types/workflow';
 import { toast } from '../utils/toast';
 
 // TypeScript interfaces
@@ -36,8 +35,6 @@ interface WorkflowEditorProps {
   onCreate?: (index: number | null) => void;
   onDelete?: (index: number | null) => void;
   onSync?: (workflowName: string) => void;
-  onEditWithAI?: (index: number | null, action?: AIWorkflowAction) => void;
-  isAILoading: boolean;
   workflowSyncStatus?: any; // Legacy prop, not used
 }
 
@@ -52,8 +49,6 @@ const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
   onCreate,
   onDelete,
   onSync,
-  onEditWithAI,
-  isAILoading,
   workflowSyncStatus,
 }) => {
   const [editMode, setEditMode] = useState<'yaml' | 'gui'>('yaml');
@@ -193,17 +188,6 @@ const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
           <div className="workflow-editor-actions">
             {workflow.name && workflow.content && (
               <>
-                {onEditWithAI && (
-                  <button
-                    className="action-button ai-button"
-                    onClick={() => onEditWithAI(workflowIndex, 'improve')}
-                    disabled={isAILoading}
-                    title="Edit this workflow with AI assistance"
-                  >
-                    {isAILoading ? "⏳ Loading..." : "🤖 Edit with AI"}
-                  </button>
-                )}
-                
                 {onSave && (
                   <button
                     className="action-button save-button"

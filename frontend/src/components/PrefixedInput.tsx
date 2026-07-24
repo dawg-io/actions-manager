@@ -29,22 +29,9 @@ const PrefixedInput: React.FC<PrefixedInputProps> = ({
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleContainerClick = () => {
-    if (inputRef.current && !disabled) {
-      inputRef.current.focus();
-    }
-  };
-
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (onChange) {
       onChange(event.target.value);
-    }
-  };
-
-  const handleContainerKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleContainerClick();
     }
   };
 
@@ -97,13 +84,8 @@ const PrefixedInput: React.FC<PrefixedInputProps> = ({
   // No prefix, with suffix — container with editable area + right suffix segment
   if (!showPrefix && suffix) {
     return (
-      <div
+      <label
         className={cn(containerClasses, className)}
-        onClick={handleContainerClick}
-        onKeyDown={handleContainerKeyDown}
-        role="button"
-        tabIndex={0}
-        aria-label="Focus input field"
         style={style}
       >
         <input
@@ -117,7 +99,7 @@ const PrefixedInput: React.FC<PrefixedInputProps> = ({
           {...props}
         />
         <span className={suffixClasses} data-testid="prefixed-input-suffix">{suffix}</span>
-      </div>
+      </label>
     );
   }
 
@@ -148,13 +130,8 @@ const PrefixedInput: React.FC<PrefixedInputProps> = ({
 
   // Full prefix segment + editable area + optional suffix segment
   return (
-    <div
+    <label
       className={cn(containerClasses, className)}
-      onClick={handleContainerClick}
-      onKeyDown={handleContainerKeyDown}
-      role="button"
-      tabIndex={0}
-      aria-label="Focus input field"
       style={style}
     >
       {/* Grayed-out prefix */}
@@ -174,7 +151,7 @@ const PrefixedInput: React.FC<PrefixedInputProps> = ({
 
       {/* Non-editable suffix (e.g. ".yml") */}
       {suffix && <span className={suffixClasses} data-testid="prefixed-input-suffix">{suffix}</span>}
-    </div>
+    </label>
   );
 };
 

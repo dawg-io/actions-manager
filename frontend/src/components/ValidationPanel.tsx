@@ -57,20 +57,8 @@ const ValidationPanel: React.FC<ValidationPanelProps> = ({ diagnostics, onDiagno
           const occurrence = (keyOccurrences.get(identity) ?? 0) + 1;
           keyOccurrences.set(identity, occurrence);
 
-          return (
-            <li
-              key={occurrence === 1 ? identity : `${identity}:${occurrence}`}
-              className={`validation-panel-item severity-${diag.severity}${isClickable ? ' clickable' : ''}`}
-              onClick={isClickable ? () => onDiagnosticClick?.(diag) : undefined}
-              role={isClickable ? 'button' : undefined}
-              tabIndex={isClickable ? 0 : undefined}
-              onKeyDown={isClickable ? (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onDiagnosticClick?.(diag);
-                }
-              } : undefined}
-            >
+          const content = (
+            <>
               <span className="validation-item-icon">{severityIcon[diag.severity]}</span>
               <span className="validation-item-content">
                 {diag.line && <span className="validation-item-line">Line {diag.line}</span>}
@@ -78,6 +66,25 @@ const ValidationPanel: React.FC<ValidationPanelProps> = ({ diagnostics, onDiagno
                 {diag.source && <span className="validation-item-source">{diag.source}</span>}
               </span>
               <span className="validation-item-severity">{severityLabel[diag.severity]}</span>
+            </>
+          );
+
+          return (
+            <li
+              key={occurrence === 1 ? identity : `${identity}:${occurrence}`}
+              className={`validation-panel-item severity-${diag.severity}`}
+            >
+              {isClickable ? (
+                <button
+                  type="button"
+                  className="validation-panel-item-inner"
+                  onClick={() => onDiagnosticClick?.(diag)}
+                >
+                  {content}
+                </button>
+              ) : (
+                <span className="validation-panel-item-inner">{content}</span>
+              )}
             </li>
           );
         })}

@@ -1,10 +1,9 @@
 import { useCallback, useState } from 'react';
 import { getWorkflowsCount } from '../api/workflows';
-import { Workflow, RXWorkflow, DetectedBuildResult, BuildType, WorkflowTemplate, AIEditResponse, AIWorkflowAction } from '../types/workflow';
+import { Workflow, RXWorkflow, DetectedBuildResult, BuildType, WorkflowTemplate } from '../types/workflow';
 import { RwxWorkflow, unlinkReusableWorkflow } from '../api/projects';
 import { saveDraftWorkflow, commitAndUpdatePRWorkflow, commitAndUpdatePRLinkedWorkflow, saveDraftLinkedWorkflow, deleteWorkflow, createBlankWorkflow } from '../utils/workflowOperations';
 import { detectBuildTypesForRepos, addWorkflowFromDetection, generateTemplates, selectTemplate } from '../utils/buildDetectionUtils';
-import { generateRegularWorkflowWithAI, generateReusableWorkflowWithAI, editWithAI } from '../utils/aiWorkflowUtils';
 
 export interface UseWorkflowOperationsProps {
   workflows: Workflow[];
@@ -29,14 +28,10 @@ export interface UseWorkflowOperationsProps {
   setShowTemplateModal: (show: boolean) => void;
   setShowWorkflowCreationDialog: (show: boolean) => void;
   setWorkflowCreationType: (type: 'regular' | 'reusable' | null) => void;
-  setAISessionId: (id: string) => void;
-  setAIChatMessages: (messages: any[] | ((prev: any[]) => any[])) => void;
-  setShowAIChat: (show: boolean) => void;
   setEditingWorkflowIndex: (index: number | null) => void;
   setEditingWorkflowType: (type: 'regular' | 'reusable' | null) => void;
   setWorkflowsCount: (count: number | null) => void;
   setIsDetecting: (detecting: boolean) => void;
-  setIsAILoading: (loading: boolean) => void;
   setIsGeneratingTemplates: (generating: boolean) => void;
   refreshProjectsList?: () => Promise<void>;
   onProjectStateChange?: (state: string) => void;
@@ -69,14 +64,8 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     setShowTemplateModal,
     setShowWorkflowCreationDialog,
     setWorkflowCreationType,
-    setAISessionId,
-    setAIChatMessages,
-    setShowAIChat,
-    setEditingWorkflowIndex,
-    setEditingWorkflowType,
     setWorkflowsCount,
     setIsDetecting,
-    setIsAILoading,
     setIsGeneratingTemplates,
     refreshProjectsList,
     onProjectStateChange,
@@ -198,50 +187,6 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     setWorkflowCreationType(null);
   }, [workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId, setShowWorkflowCreationDialog, setWorkflowCreationType]);
 
-  // Generate AI workflow wrappers
-  const handleGenerateRegularWorkflowWithAI = useCallback(async (workflowName: string = ''): Promise<void> => {
-    setIsAILoading(true);
-    try {
-      await generateRegularWorkflowWithAI(
-        selectedRepos, projectName, projectCode, detectedBuildTypes, workflows, workflowName, user,
-        setWorkflows, setAISessionId, setSelectedWorkflowId, setAIChatMessages, setShowAIChat
-      );
-    } finally {
-      setIsAILoading(false);
-    }
-  }, [selectedRepos, projectName, projectCode, detectedBuildTypes, workflows, user, setWorkflows, setAISessionId, setSelectedWorkflowId, setAIChatMessages, setShowAIChat, setIsAILoading]);
-
-  const handleGenerateReusableWorkflowWithAI = useCallback(async (workflowName: string = ''): Promise<void> => {
-    setIsAILoading(true);
-    try {
-      await generateReusableWorkflowWithAI(
-        selectedRepos, projectName, projectCode, detectedBuildTypes, workflowName, user,
-        setRXWorkflows, setAISessionId, setSelectedWorkflowId, setAIChatMessages, setShowAIChat
-      );
-    } finally {
-      setIsAILoading(false);
-    }
-  }, [selectedRepos, projectName, projectCode, detectedBuildTypes, user, setRXWorkflows, setAISessionId, setSelectedWorkflowId, setAIChatMessages, setShowAIChat, setIsAILoading]);
-
-  // Edit with AI wrapper
-  const handleEditWithAI = useCallback(async (
-    index: number,
-    type: 'regular' | 'reusable',
-    action: AIWorkflowAction,
-    optionalInstruction: string = ''
-  ): Promise<AIEditResponse | null> => {
-    setIsAILoading(true);
-    try {
-      return await editWithAI(
-        index, type, action, workflows, rxworkflows, user, projectName, projectCode, selectedRepos,
-        detectedBuildTypes, optionalInstruction, setAISessionId, setAIChatMessages, setShowAIChat, 
-        setEditingWorkflowIndex, setEditingWorkflowType
-      );
-    } finally {
-      setIsAILoading(false);
-    }
-  }, [workflows, rxworkflows, user, projectName, projectCode, selectedRepos, detectedBuildTypes, setAISessionId, setAIChatMessages, setShowAIChat, setEditingWorkflowIndex, setEditingWorkflowType, setIsAILoading]);
-
   // Workflow creation dialog functions
   const openWorkflowCreationDialog = useCallback(() => {
     setShowWorkflowCreationDialog(true);
@@ -259,17 +204,6 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     handleGenerateTemplates();
   }, [setShowWorkflowCreationDialog, setWorkflowCreationType, handleGenerateTemplates]);
 
-  const handleCreateWithAI = useCallback((type: 'regular' | 'reusable', workflowName: string) => {
-    setShowWorkflowCreationDialog(false);
-    setWorkflowCreationType(null);
-    
-    if (type === 'regular') {
-      handleGenerateRegularWorkflowWithAI(workflowName);
-    } else {
-      handleGenerateReusableWorkflowWithAI(workflowName);
-    }
-  }, [setShowWorkflowCreationDialog, setWorkflowCreationType, handleGenerateRegularWorkflowWithAI, handleGenerateReusableWorkflowWithAI]);
-
   return {
     fetchWorkflowsCount,
     handleSaveDraftWorkflow,
@@ -283,12 +217,8 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     handleGenerateTemplates,
     handleSelectTemplate,
     handleCreateBlankWorkflow,
-    handleGenerateRegularWorkflowWithAI,
-    handleGenerateReusableWorkflowWithAI,
-    handleEditWithAI,
     openWorkflowCreationDialog,
     selectWorkflowType,
-    handleCreateFromTemplates,
-    handleCreateWithAI
+    handleCreateFromTemplates
   };
 };

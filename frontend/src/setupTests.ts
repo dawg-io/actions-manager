@@ -10,7 +10,7 @@ jest.mock('axios');
 // Mock HTMLDialogElement methods for jsdom
 // jsdom doesn't fully support the native dialog element yet
 if (typeof HTMLDialogElement === 'undefined') {
-  (global as any).HTMLDialogElement = class HTMLDialogElement extends HTMLElement {
+  (globalThis as any).HTMLDialogElement = class HTMLDialogElement extends HTMLElement {
     open = false;
     returnValue = '';
     
@@ -44,6 +44,7 @@ if (typeof HTMLDialogElement === 'undefined') {
         originalShowModal.call(this);
       } catch (e) {
         // Fallback if showModal is not fully implemented
+        console.warn('showModal fallback:', e);
         this.setAttribute('open', '');
         (this as any).open = true;
       }
@@ -58,6 +59,7 @@ if (typeof HTMLDialogElement === 'undefined') {
       try {
         originalShow.call(this);
       } catch (e) {
+        console.warn('show fallback:', e);
         this.setAttribute('open', '');
         (this as any).open = true;
       }
@@ -72,6 +74,7 @@ if (typeof HTMLDialogElement === 'undefined') {
       try {
         originalClose.call(this, returnValue);
       } catch (e) {
+        console.warn('close fallback:', e);
         this.removeAttribute('open');
         (this as any).open = false;
         if (returnValue !== undefined) {

@@ -341,7 +341,7 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
                             checked={keepDeploymentEnvironments}
                             onChange={(e) => setKeepDeploymentEnvironments(e.target.checked)}
                             className="mr-2"
-                          />
+                          />{' '}
                           Keep deployment environments (don't delete them from GitHub)
                         </label>
                       )}

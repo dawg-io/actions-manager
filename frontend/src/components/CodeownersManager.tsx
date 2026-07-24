@@ -164,6 +164,7 @@ const CodeownersManager: React.FC<CodeownersManagerProps> = ({
         const driftData = await getCodeownersDrift(repoName, user, projectName);
         setDrift(driftData);
       } catch (err) {
+        console.warn('Failed to load CODEOWNERS drift:', err);
         setDrift(null);
       }
     } catch (err: any) {

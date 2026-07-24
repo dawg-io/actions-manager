@@ -180,6 +180,7 @@ const EnvVars: React.FC<EnvVarsProps> = ({
       setEnvVarsCount(count);
     } catch (error) {
       // Surface fetch errors but do not block the UI.
+      console.error('Failed to load environment variable usage count:', error);
       setErrorMessage("Failed to load environment variable usage count.");
     } finally {
       setIsCountLoading(false);

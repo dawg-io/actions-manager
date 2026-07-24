@@ -194,7 +194,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
             };
       const updated = await updateProjectRepoBranchConfig(
         user,
-        projectId!,
+        projectId,
         activeRepo.repo_id,
         payload,
       );
@@ -227,7 +227,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
     setSaveError(null);
     setSaveSuccess(null);
     try {
-      const updated = await resetProjectRepoBranchConfig(user, projectId!, activeRepo.repo_id);
+      const updated = await resetProjectRepoBranchConfig(user, projectId, activeRepo.repo_id);
       setData((prev) =>
         prev
           ? {
@@ -416,7 +416,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
                           checked={draft.branch_option === "default"}
                           onChange={() => updateDraft({ branch_option: "default", branch_regex: "" })}
                           data-testid="option-default"
-                        />
+                        />{' '}
                         Default branch
                       </label>
                       <label className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-200 cursor-pointer">
@@ -427,7 +427,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
                           checked={draft.branch_option === "pattern"}
                           onChange={() => updateDraft({ branch_option: "pattern" })}
                           data-testid="option-pattern"
-                        />
+                        />{' '}
                         Branch name or pattern
                       </label>
                     </div>

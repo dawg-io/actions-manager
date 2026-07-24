@@ -145,6 +145,7 @@ const Secrets: React.FC<SecretsProps> = ({
       const count = await getSecretsCount(user, projectName, selectedRepos);
       setSecretsCount(count);
     } catch (error) {
+      console.error('Failed to load secrets usage count:', error);
       setErrorMessage("Failed to load secrets usage count.");
     } finally {
       setIsCountLoading(false);

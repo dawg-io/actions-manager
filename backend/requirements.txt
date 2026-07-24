@@ -1,13 +1,13 @@
 fastapi
 uvicorn
 requests
+httpx
 sqlalchemy
 pydantic
 python-dotenv
 PyJWT
 pynacl>=1.6.2
 python-multipart
-openai
 pytest
 pytest-cov
 pytest-asyncio

@@ -4,11 +4,6 @@
 
 **IMPORTANT**: This pipeline has been recently optimized to reduce parallel job execution and prevent K8s worker node overload. 
 
-📚 **See detailed documentation**:
-- [WORKFLOW_OPTIMIZATION.md](WORKFLOW_OPTIMIZATION.md) - Technical details and implementation
-- [WORKFLOW_VISUALIZATION.md](WORKFLOW_VISUALIZATION.md) - Visual diagrams and metrics
-- **[MAIN_PIPELINE.md](MAIN_PIPELINE.md) - Main orchestrator workflow** ⭐ NEW
-
 **Key improvements**:
 - 80% reduction in peak concurrent jobs (20+ → 3-4)
 - Sequential staging for better resource management
@@ -26,8 +21,6 @@ The project now uses a **main orchestrator workflow** (`main-pipeline.yml`) that
 ✅ **Clear stage progression** from quality checks to deployment
 ✅ **Consolidated summary** of all pipeline activities
 ✅ **Easy debugging** with all stages in one place
-
-See [MAIN_PIPELINE.md](MAIN_PIPELINE.md) for detailed documentation.
 
 ---
 

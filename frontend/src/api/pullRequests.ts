@@ -110,14 +110,6 @@ export interface PRHistoryItem {
   source_project_name: string | null;
 }
 
-/** Response envelope from GET /api/project-pr-history */
-export interface PRHistoryResponse {
-  pull_requests: PRHistoryItem[];
-  total: number;
-  merged_count: number;
-  closed_count: number;
-}
-
 export interface PRCampaignPRItem extends PRHistoryItem {
   pr_state: "open" | "merged" | "closed" | string;
   actor?: string | null;
@@ -494,55 +486,6 @@ export async function closePullRequest(
     return await response.json();
   } catch (error) {
     console.error("Error closing pull request:", error);
-    throw error;
-  }
-}
-
-/**
- * Fetch PR history (merged and closed PRs) for a project.
- *
- * This is a read-only endpoint — open PRs are excluded from the response.
- *
- * @param githubUser     - GitHub username
- * @param projectName    - Project name
- * @param stateFilter    - "all" (default), "merged", or "closed"
- * @param repoFilter     - Optional full repo name (owner/repo) to narrow results
- * @param workflowFilter - Optional workflow name substring to narrow results
- * @returns Promise with PR history response
- */
-export async function getPRHistory(
-  githubUser: string,
-  projectName: string,
-  stateFilter: "all" | "merged" | "closed" = "all",
-  repoFilter?: string,
-  workflowFilter?: string
-): Promise<PRHistoryResponse> {
-  try {
-    const params = new URLSearchParams({
-      github_user: githubUser,
-      project_name: projectName,
-      state_filter: stateFilter,
-    });
-    if (repoFilter) params.set("repo_filter", repoFilter);
-    if (workflowFilter) params.set("workflow_filter", workflowFilter);
-
-    const response = await fetch(
-      `${BACKEND_URL}/api/project-pr-history?${params.toString()}`,
-      {
-        method: "GET",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || `Failed to fetch PR history: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error fetching PR history:", error);
     throw error;
   }
 }

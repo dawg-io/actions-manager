@@ -31,9 +31,6 @@ export interface UpdateCustomFilePayload {
   description?: string;
 }
 
-export const listCustomFiles = (projectId: number): Promise<{ custom_files: CustomFile[] }> =>
-  apiClient.get(`/api/projects/${projectId}/custom-files`).then((r) => r.data);
-
 export const createCustomFile = (projectId: number, data: CreateCustomFilePayload): Promise<{ custom_file: CustomFile }> =>
   apiClient.post(`/api/projects/${projectId}/custom-files`, data).then((r) => r.data);
 

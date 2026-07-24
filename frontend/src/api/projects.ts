@@ -112,13 +112,6 @@ export interface UpdateProjectNameResponse {
   project_code: string;
 }
 
-export interface ToggleReusableWorkflowsResponse {
-  message?: string;
-  project_name?: string;
-  enabled?: boolean;
-  [key: string]: any;
-}
-
 export interface ExportProjectBackupResponse {
   blob: Blob;
   filename?: string;
@@ -296,27 +289,6 @@ export const updateProjectName = async (
   }
 };
 
-// Delete a project
-export const deleteProject = async (user: string, projectName: string): Promise<any> => {
-  try {
-    if (!projectName || projectName.trim() === "") {
-      throw new Error("❌ Missing project name in DELETE request");
-    }
-
-
-    const response: AxiosResponse<any> = await apiClient.delete(`${BACKEND_URL}/api/projects/${encodeURIComponent(projectName)}`, {
-      params: { github_user: user },
-    });
-
-    console.log("✅ Project deleted successfully:", response.data);
-    return response.data;
-  } catch (error) {
-    const axiosError = error as AxiosError;
-    console.error("❌ Error deleting project:", axiosError.response?.data || axiosError);
-    throw error;
-  }
-};
-
 export const exportProjectBackup = async (
   projectId: string | number,
 ): Promise<ExportProjectBackupResponse> => {
@@ -333,31 +305,6 @@ export const exportProjectBackup = async (
   } catch (error) {
     const axiosError = error as AxiosError;
     console.error("❌ Error exporting project backup:", axiosError.response?.data || axiosError);
-    throw error;
-  }
-};
-
-// Toggle reusable workflows for a project
-export const toggleReusableWorkflows = async (
-  user: string, 
-  projectName: string, 
-  enabled: boolean
-): Promise<ToggleReusableWorkflowsResponse> => {
-  try {
-
-    const response: AxiosResponse<ToggleReusableWorkflowsResponse> = await apiClient.post(
-      `${BACKEND_URL}/api/projects/${encodeURIComponent(projectName)}/toggle-reusable-workflows`,
-      {
-        project_name: projectName,
-        enabled: enabled
-      }
-    );
-
-    console.log("✅ Reusable workflows setting updated:", response.data);
-    return response.data;
-  } catch (error) {
-    const axiosError = error as AxiosError;
-    console.error("❌ Error toggling reusable workflows:", axiosError.response?.data || axiosError);
     throw error;
   }
 };

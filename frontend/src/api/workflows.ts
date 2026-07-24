@@ -30,24 +30,8 @@ interface DeleteWorkflowResponse {
   skipped?: boolean;
 }
 
-interface SyncWorkflowResponse {
-  success?: boolean;
-  message?: string;
-  results?: Record<string, string | number>;
-}
-
 interface WorkflowsCountResponse {
   count: number;
-}
-
-interface WorkflowStatusData {
-  status?: string;
-  html_url?: string;
-  message?: string;
-}
-
-interface WorkflowStatusResponse {
-  workflow_statuses: Record<string, WorkflowStatusData>;
 }
 
 // ===== API Functions =====
@@ -274,93 +258,6 @@ export const handleDeleteWorkflow = async (
   }
 };
 
-// Remove workflow from DB only
-export const removeLocalWorkflow = async (
-  user: string,
-  workflows: Workflow[],
-  projectName: string,
-  setWorkflows: (workflows: Workflow[]) => void,
-  index: number
-): Promise<void> => {
-  const workflowToDelete = workflows[index];
-
-  if (!workflowToDelete?.name?.trim()) {
-    console.log("🛑 Skipping delete for empty workflow entry.");
-    setWorkflows(workflows.filter((_, i) => i !== index));
-    return;
-  }
-
-  try {
-    const requestData = {
-      user,
-      workflow_name: workflowToDelete.name,
-      project_name: projectName,
-    };
-
-    console.log(`📌 Deleting workflow '${workflowToDelete.name}' from database...`);
-
-    await apiClient.delete(`${BACKEND_URL}/api/delete-db-workflow`, { data: requestData });
-
-    setWorkflows(workflows.filter((_, i) => i !== index));
-  } catch (error) {
-    console.error("❌ Error deleting workflow:", error);
-    toast.error("Error deleting workflow. Check console for details.");
-  }
-};
-
-// Get workflow status from GitHub Actions
-export const getWorkflowStatus = async (
-  user: string,
-  selectedRepos: string[],
-  workflowNames: string[],
-  projectName: string
-): Promise<Record<string, WorkflowStatusData>> => {
-  try {
-    const params = new URLSearchParams({
-      user,
-      repo_names: selectedRepos.join(","),
-      workflow_names: workflowNames.join(","),
-      project_name: projectName,
-    });
-
-    const response: AxiosResponse<WorkflowStatusResponse> = await axios.get(
-      `${BACKEND_URL}/api/workflow-status?${params}`
-    );
-    return response.data.workflow_statuses;
-  } catch (error) {
-    console.error("❌ Error fetching workflow status:", error);
-    return {};
-  }
-};
-
-// Sync workflow to all repositories
-export const syncWorkflow = async (
-  user: string,
-  projectName: string,
-  selectedRepos: string[],
-  workflowName: string
-): Promise<SyncWorkflowResponse> => {
-  try {
-    console.log("📌 Debug: Syncing Workflow:", { user, projectName, selectedRepos, workflowName });
-
-    const response: AxiosResponse<SyncWorkflowResponse> = await apiClient.post(
-      `${BACKEND_URL}/api/sync-workflow`,
-      {
-        user,
-        project_name: projectName,
-        repo_names: selectedRepos,
-        workflow_name: workflowName,
-      }
-    );
-
-    console.log("✅ Sync response:", response.data);
-    return response.data;
-  } catch (error) {
-    console.error("❌ Error syncing workflow:", error);
-    throw error;
-  }
-};
-
 // Get workflows count for a project
 export const getWorkflowsCount = async (
   user: string,
@@ -432,34 +329,6 @@ export const getWorkflowVersions = async (
     return response.data;
   } catch (error) {
     console.error(`❌ Error fetching workflow versions for '${workflowName}':`, error);
-    throw error;
-  }
-};
-
-/**
- * Get a specific version of a workflow
- */
-export const getWorkflowVersion = async (
-  user: string,
-  projectName: string,
-  workflowName: string,
-  versionId: number
-): Promise<WorkflowVersion> => {
-  try {
-    const response: AxiosResponse<WorkflowVersion> = await axios.get(
-      `${BACKEND_URL}/api/workflows/${encodeURIComponent(workflowName)}/versions/${versionId}`,
-      {
-        params: {
-          user,
-          project_name: projectName,
-        },
-      }
-    );
-
-    console.log(`✅ Retrieved version ${versionId} for workflow '${workflowName}'`);
-    return response.data;
-  } catch (error) {
-    console.error(`❌ Error fetching workflow version ${versionId}:`, error);
     throw error;
   }
 };

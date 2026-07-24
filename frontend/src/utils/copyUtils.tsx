@@ -7,7 +7,7 @@ export const copyToClipboard = async (
   onError?: (err: unknown) => void
 ): Promise<void> => {
   try {
-    if (navigator.clipboard && window.isSecureContext) {
+    if (navigator.clipboard && globalThis.isSecureContext) {
       // Use modern clipboard API
       await navigator.clipboard.writeText(text);
     } else {

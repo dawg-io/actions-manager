@@ -739,7 +739,7 @@ const NewProject: React.FC<NewProjectProps> = ({ user }) => {
                         aria-expanded={rwxHelpOpen}
                         onClick={() => setRwxHelpOpen((open) => !open)}
                       >
-                        What should this repository look like?
+                        What should this repository look like?{' '}
                         <span aria-hidden="true">{rwxHelpOpen ? "−" : "+"}</span>
                       </button>
                       {rwxHelpOpen && (
@@ -920,7 +920,7 @@ jobs:
                     disabled={useCustomKey}
                     onClick={() => setAdvancedOptionsOpen((open) => !open)}
                   >
-                    Advanced Options
+                    Advanced Options{' '}
                     <span aria-hidden="true">
                       {useCustomKey ? "Custom key enabled" : advancedOptionsVisible ? "−" : "+"}
                     </span>

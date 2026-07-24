@@ -5,7 +5,6 @@ import ValidationPanel from './ValidationPanel';
 import ReusableGUIWorkflowEditor from './ReusableGUIWorkflowEditor';
 import GUIWorkflowEditor from './GUIWorkflowEditor';
 import VersionHistoryPanel from './VersionHistoryPanel';
-import WorkflowAIDrawer from './WorkflowAIDrawer';
 import OpenInGitHubModal from './OpenInGitHubModal';
 import EditableNameField from './EditableNameField';
 import WorkflowStatusBadge, { WorkflowStatus } from './WorkflowStatusBadge';
@@ -112,7 +111,6 @@ interface UnifiedWorkflowEditorProps {
   regularGuiWorkflow: WorkflowGUI;
   guiWorkflow: WorkflowGUI;
   projectCode: string | null;
-  isAILoading: boolean;
   projectPRState?: ProjectPRState;
   usePrefix?: boolean;
   isReadOnly?: boolean;
@@ -138,7 +136,6 @@ interface UnifiedWorkflowEditorProps {
 interface WorkflowEditorHeaderProps {
   selectedWorkflow: UnifiedWorkflowItem;
   projectCode: string | null;
-  isAILoading: boolean;
   editMode: 'yaml' | 'gui';
   projectPRState?: ProjectPRState;
   usePrefix?: boolean;
@@ -175,7 +172,6 @@ interface WorkflowEditorContentProps {
 const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   selectedWorkflow,
   projectCode,
-  isAILoading,
   editMode,
   projectPRState = "new",
   usePrefix = true,
@@ -194,7 +190,6 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   onShowVersionHistory
 }) => {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [aiDrawerOpen, setAIDrawerOpen] = useState(false);
   const [githubModalOpen, setGithubModalOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
@@ -222,7 +217,6 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   // Close More menu whenever the selected workflow changes
   useEffect(() => {
     setMoreMenuOpen(false);
-    setAIDrawerOpen(false);
   }, [selectedWorkflow?.id]);
 
   const workflowType = selectedWorkflow.type;
@@ -479,17 +473,6 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
                     <button
                       className="more-menu-item"
                       role="menuitem"
-                      onClick={() => { setAIDrawerOpen(true); setMoreMenuOpen(false); }}
-                      disabled={isAILoading}
-                      aria-label="Edit workflow with AI assistance"
-                      title="AI workflow editing — coming soon"
-                    >
-                      {isAILoading ? 'Analyzing...' : '🤖 Edit with AI'}
-                      <span className="ml-2 text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded">Soon</span>
-                    </button>
-                    <button
-                      className="more-menu-item"
-                      role="menuitem"
                       disabled
                       title="Duplicate workflow — coming soon"
                     >
@@ -631,14 +614,6 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
         </div>
       </div>
 
-      <WorkflowAIDrawer
-        isOpen={aiDrawerOpen}
-        onClose={() => setAIDrawerOpen(false)}
-        workflowName={selectedWorkflow.name}
-        workflowType={badge}
-        selectedRepos={selectedRepos}
-      />
-
       {/* Open in GitHub Modal */}
       <OpenInGitHubModal
         isOpen={githubModalOpen}
@@ -737,7 +712,6 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   regularGuiWorkflow,
   guiWorkflow,
   projectCode,
-  isAILoading,
   projectPRState = "new",
   usePrefix = true,
   isReadOnly = false,
@@ -838,7 +812,6 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
         <WorkflowEditorHeader
           selectedWorkflow={selectedWorkflow}
           projectCode={projectCode}
-          isAILoading={isAILoading}
           editMode={editMode}
           projectPRState={projectPRState}
           usePrefix={usePrefix}

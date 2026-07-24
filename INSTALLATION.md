@@ -186,7 +186,6 @@ Replace `YOUR_SERVER_IP_OR_DOMAIN` with the actual IP or domain users will acces
 Optional:
 - Omit OAuth credentials if you plan to sign in only with a GitHub PAT
 - `LICENSE_KEY` is optional and reserved for future/commercial licensing behavior; no paid plans are currently available during beta
-- Add `-e OPENAI_API_KEY=your_openai_api_key` only if you intentionally want to enable optional AI features that may call external APIs
 
 ## Option 2: Docker Compose
 
@@ -239,7 +238,6 @@ For OAuth login, uncomment and configure `APP_URL`, `GITHUB_CLIENT_ID`, and `GIT
 | `GITHUB_CLIENT_ID` | No | GitHub OAuth client ID (required only for OAuth login) |
 | `GITHUB_CLIENT_SECRET` | No | GitHub OAuth client secret (required only for OAuth login) |
 | `LICENSE_KEY` | No | Optional self-hosted license key; no paid plans are currently available during beta |
-| `OPENAI_API_KEY` | No | Optional AI features; configure only if you accept external API calls for those features |
 
 For advanced configuration and architecture details, see [DOCKER_DEPLOYMENT_MODES.md](DOCKER_DEPLOYMENT_MODES.md) and [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md).
 

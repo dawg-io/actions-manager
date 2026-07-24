@@ -160,6 +160,7 @@ const DeployEnvironments: React.FC<DeployEnvironmentsProps> = ({
       const count = await getEnvironmentsCount(user, selectedRepos);
       setEnvironmentsCount(count);
     } catch (error) {
+      console.error('Failed to load environment count:', error);
       setErrorMessage("Failed to load environment count.");
     } finally {
       setIsCountLoading(false);

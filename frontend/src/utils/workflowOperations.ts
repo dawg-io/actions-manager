@@ -146,7 +146,7 @@ export const commitAndUpdatePRWorkflow = async (
     const workflowsPayload: Workflow[] = type === 'regular' ? [{ ...workflows[index], name: stem }] : [];
     // RXWorkflow is structurally compatible with Workflow for the API (name + content)
     const rxworkflowsPayload: Workflow[] = type === 'reusable'
-      ? [{ name: stem, content: workflow.content!, isReusable: true }]
+      ? [{ name: stem, content: workflow.content, isReusable: true }]
       : [];
 
     const updateResponse = await updateWorkflows(
@@ -160,7 +160,7 @@ export const commitAndUpdatePRWorkflow = async (
     );
 
     if (updateResponse.error) {
-      throw new Error(updateResponse.error as string);
+      throw new Error(updateResponse.error);
     }
 
     // Check per-repo results for errors
@@ -253,7 +253,7 @@ export const commitAndUpdatePRLinkedWorkflow = async (
     );
 
     if (updateResponse.error) {
-      throw new Error(updateResponse.error as string);
+      throw new Error(updateResponse.error);
     }
 
     const results = updateResponse.results || {};

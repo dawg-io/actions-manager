@@ -25,8 +25,6 @@ Operators must protect GitHub OAuth credentials, saved personal access tokens, l
 
 The self-hosted beta does not include documented product telemetry, crash reporting, or phone-home analytics. The application does call external services that the operator configures or explicitly uses, including GitHub APIs for authentication and repository/workflow operations.
 
-AI-assisted features are optional. If an operator configures `OPENAI_API_KEY` or another external API key for optional AI features, prompts or related workflow-generation data may be sent to that provider according to the configured feature behavior and the provider's terms. Do not configure external API keys if you do not want those features to make external API calls.
-
 ## Backups and deletion
 
 Self-hosted operators control database backups, retention, access, and deletion. Review backups before sharing logs or support bundles, because they may contain repository metadata, workflow YAML, pull request metadata, credentials metadata, and other configuration details.

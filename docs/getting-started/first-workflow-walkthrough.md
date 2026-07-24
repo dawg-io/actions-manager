@@ -164,14 +164,13 @@ Choose **Regular Workflow** for a first workflow and click **Next**.
 
 Enter a workflow name and choose how to create the initial YAML content:
 
-![Regular Workflow Options modal showing workflow name entry and options: Open Blank Workflow, Detect Build Types, Generate Templates, and Generate with AI](../assets/screenshots/walkthrough/11-regular-workflow-options.png)
+![Regular Workflow Options modal showing workflow name entry and options: Open Blank Workflow, Detect Build Types, and Generate Templates](../assets/screenshots/walkthrough/11-regular-workflow-options.png)
 
 | Option | Description |
 |--------|-------------|
 | **Open Blank Workflow** | Starts with an empty YAML editor. |
 | **Detect Build Types** | Inspects the selected repositories and recommends matching workflow templates based on detected build tooling (Maven, npm, .NET, Python, Go, Rust, Docker, etc.). |
 | **Generate Templates** | Presents a library of curated workflow templates. |
-| **Generate with AI** | Uses AI-assisted generation to create a workflow based on a natural-language description. |
 
 Enter a workflow name, choose an option, and click **Create**.
 

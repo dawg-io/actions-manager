@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import PrefixedInput from './PrefixedInput';
 
@@ -73,88 +74,59 @@ describe('PrefixedInput Component', () => {
     expect(getByText('PREFIX_')).toBeInTheDocument();
   });
 
-  test('should have keyboard accessibility attributes', () => {
+  test('container should not have a redundant button role — the input inside is already focusable', () => {
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
       onChange: jest.fn()
     };
-    
+
     const { container } = render(<PrefixedInput {...props} />);
     const containerDiv = container.querySelector('.prefixed-input-container');
-    
-    expect(containerDiv).toHaveAttribute('role', 'button');
-    expect(containerDiv).toHaveAttribute('tabIndex', '0');
-    expect(containerDiv).toHaveAttribute('aria-label', 'Focus input field');
+
+    expect(containerDiv).not.toHaveAttribute('role');
+    expect(containerDiv).not.toHaveAttribute('tabIndex');
+    expect(containerDiv).not.toHaveAttribute('aria-label');
   });
 
-  test('should focus input when Enter key is pressed on container', () => {
+  test('should focus input when container is clicked', async () => {
+    const user = userEvent.setup();
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
       onChange: jest.fn()
     };
-    
+
     const { container } = render(<PrefixedInput {...props} />);
-    const containerDiv = container.querySelector('.prefixed-input-container');
+    const containerLabel = container.querySelector('.prefixed-input-container');
     const input = container.querySelector('input');
-    
-    if (containerDiv && input) {
-      fireEvent.keyDown(containerDiv, { key: 'Enter' });
+
+    // The container is a native <label> wrapping the <input> — clicking it
+    // focuses the input via real label-to-control forwarding, no JS needed.
+    // Plain fireEvent.click doesn't simulate that browser behavior in jsdom,
+    // so this needs userEvent (which does).
+    if (containerLabel && input) {
+      await user.click(containerLabel);
       expect(document.activeElement).toBe(input);
     }
   });
 
-  test('should focus input when Space key is pressed on container', () => {
-    const props = {
-      prefix: 'PREFIX_',
-      value: 'test',
-      onChange: jest.fn()
-    };
-    
-    const { container } = render(<PrefixedInput {...props} />);
-    const containerDiv = container.querySelector('.prefixed-input-container');
-    const input = container.querySelector('input');
-    
-    if (containerDiv && input) {
-      fireEvent.keyDown(containerDiv, { key: ' ' });
-      expect(document.activeElement).toBe(input);
-    }
-  });
-
-  test('should not focus input when other keys are pressed on container', () => {
-    const props = {
-      prefix: 'PREFIX_',
-      value: 'test',
-      onChange: jest.fn()
-    };
-    
-    const { container } = render(<PrefixedInput {...props} />);
-    const containerDiv = container.querySelector('.prefixed-input-container');
-    const input = container.querySelector('input');
-    
-    if (containerDiv && input) {
-      const initialActiveElement = document.activeElement;
-      fireEvent.keyDown(containerDiv, { key: 'Tab' });
-      expect(document.activeElement).toBe(initialActiveElement);
-    }
-  });
-
-  test('should not focus input when disabled and keyboard event is triggered', () => {
+  test('should not focus input when container is clicked while disabled', async () => {
+    const user = userEvent.setup();
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
       onChange: jest.fn(),
       disabled: true
     };
-    
+
     const { container } = render(<PrefixedInput {...props} />);
-    const containerDiv = container.querySelector('.prefixed-input-container');
+    const containerLabel = container.querySelector('.prefixed-input-container');
     const input = container.querySelector('input');
-    
-    if (containerDiv && input) {
+
+    if (containerLabel && input) {
       const initialActiveElement = document.activeElement;
-      fireEvent.keyDown(containerDiv, { key: 'Enter' });
+      await user.click(containerLabel);
       expect(document.activeElement).not.toBe(input);
       expect(document.activeElement).toBe(initialActiveElement);
     }
