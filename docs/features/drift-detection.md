@@ -55,14 +55,72 @@ The drift dashboard shows:
 - Per-repository drift state with last-checked timestamp
 - A diff view comparing the repository workflow against the managed definition
 
+## Managed version vs. GitHub version
+
+Every drift is a difference between two versions of the same workflow:
+
+- **ActionsManager managed version** — the workflow definition ActionsManager stores and delivers for the project. Shown in the left column of the diff.
+- **Current GitHub version** — the workflow file as it exists in the repository right now. Shown in the right column of the diff.
+
+Resolving a drift means deciding which of these two should win, and how the change is applied.
+
 ## Resolving Drift
 
-When a repository is drifted, you can:
+Open **Review Drift → View Diff** for a drifted workflow to see the side-by-side diff and the resolution actions. Each action names the repository and target branch it affects. There are three actions.
 
-1. **View the diff** — see exactly what changed in the repository versus the managed definition
-2. **Sync the repository** — overwrite the repository's workflow with the managed definition, either by direct commit or a new PR
-3. **Accept the drift** — update the managed definition to match the repository's current state
-4. **Ignore** — mark as acknowledged without changing either side
+### Create Fix Pull Request
+
+Opens a pull request **only** in the drifted repository that restores the workflow to the ActionsManager-managed version. No other repository is changed.
+
+- **Writes to GitHub?** Yes, but only as a pull request branch — nothing lands on the target branch until you merge it.
+- **Pull request created?** Yes, one, in the affected repository, against that repository's configured target branch.
+- **Repository affected:** just the one shown in the drift record.
+- **Resulting state:** the workflow moves to `under_review` and the project's PR state becomes `open`. The drift is **not** cleared yet — it still shows as drifted until the PR is merged.
+- **After the PR merges:** the target branch now matches the managed version, ActionsManager marks the workflow `synced_with_github`, and the drift clears on the next check.
+
+This is the recommended option: the change is reviewable and reversible before it reaches your default branch.
+
+### Restore Directly
+
+Immediately overwrites the workflow on the target branch in the drifted repository with the ActionsManager-managed version. No pull request is created.
+
+- **Writes to GitHub?** Yes, immediately, straight to the target branch.
+- **Pull request created?** No.
+- **Repository affected:** just the one shown in the drift record.
+- **Resulting state:** the commit is pushed and the workflow is marked `synced_with_github` once the push succeeds.
+- **Why it is riskier:** there is no review step. The current GitHub version is replaced right away, so a mistake reaches your default branch (and anyone watching it) with no chance to catch it in a PR. ActionsManager asks you to confirm the repository and target branch before running it.
+
+### Adopt GitHub Version
+
+Imports the current GitHub version into ActionsManager instead of restoring the managed version. Opening this action presents three sub-modes:
+
+| Sub-mode | Writes to GitHub? | What it does |
+|----------|-------------------|--------------|
+| Adopt for project and sync other repositories (recommended) | **Yes** | Makes the GitHub version the new managed project workflow, then delivers it to the project's other repositories via pull request or direct commit (your choice). |
+| Adopt locally only | **No** | Updates the ActionsManager managed draft to the GitHub version and stops. The draft is reviewed and delivered later through the normal workflow flow. |
+| Create repo-specific override | **No** | Pins this repository to its own GitHub version as a per-repo override. The shared project workflow and the other repositories are left unchanged. |
+
+**Effect on other repositories:** because a project workflow is shared across its repositories, changing the managed version affects them all. "Adopt for project and sync" brings the others into line immediately. "Adopt locally only" changes the managed draft without touching GitHub, so the other repositories may now show drift against the new managed version until they are delivered to. "Create repo-specific override" isolates this one repository and leaves everything else as it was.
+
+## Which option should I use?
+
+| Option | Writes to GitHub | Pull request | Repositories changed |
+|--------|------------------|--------------|----------------------|
+| Create Fix Pull Request | One repository, via a reviewable PR | Yes | One |
+| Adopt GitHub Version | Only "adopt & sync" writes; local-only and override make no GitHub change | Only in "adopt & sync" (PR mode) | "Adopt & sync": the project's repos; otherwise none |
+| Restore Directly | One repository, immediately | No | One |
+
+## When Resolution Fails
+
+Resolution talks to GitHub with your stored credentials, so most failures come from GitHub itself. ActionsManager surfaces the specific reason (not a generic error); common cases:
+
+- **Insufficient permissions** — your token lacks write access (or `workflow` scope) for the repository. Reconnect with a token that can push and open pull requests.
+- **Branch protection** — the target branch requires reviews, status checks, or blocks direct pushes. "Restore Directly" will be rejected; use "Create Fix Pull Request" so the change goes through review.
+- **Missing branch** — the configured target branch no longer exists in the repository. Recreate it or update the project's branch configuration.
+- **Existing pull request conflict** — an open ActionsManager PR/branch for this workflow already exists. Merge or close it before opening a new fix PR; ActionsManager will not silently reuse an unrelated PR.
+- **Expired or revoked credentials** — the GitHub token is no longer valid. Re-authenticate, then retry.
+
+If a resolution fails, the diff stays open with the reason shown, and no partial state is left behind — nothing is marked synced and no PR record is created.
 
 ## Reusable Workflow Drift
 

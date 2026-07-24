@@ -2657,7 +2657,10 @@ def _direct_push_workflow_to_branch(
     return {"status_code": resp.status_code, "error": resp.text[:500]}
 
 
-@router.post("/api/workflows/{workflow_id}/resolve-drift")
+@router.post(
+    "/api/workflows/{workflow_id}/resolve-drift",
+    responses={500: {"description": "Unexpected error during drift restoration"}},
+)
 def resolve_workflow_drift(
     workflow_id: int,
     payload: ResolveWorkflowDriftRequest,
@@ -2808,66 +2811,93 @@ def resolve_workflow_drift(
         delivery_mode = (payload.delivery_mode or "pr").lower()
         print(f"🔄 Resolving drift for workflow {workflow_id} (restore_actionsmanager, {delivery_mode}): {payload.repo}@{payload.branch}")
 
-        if delivery_mode == "direct":
-            path = f".github/workflows/{formatted_name}"
-            commit_msg = (
-                f"Restore {formatted_name} from ActionsManager for "
-                f"{project.project_code} [skip ci]"
-            )
-            result = _direct_push_workflow_to_branch(
-                owner, repo, branch, path, wf.workflow_yaml or "",
-                commit_msg, headers, github_user, db,
-            )
-            if result.get("status_code") in (200, 201):
-                if result.get("sha"):
-                    wf.workflow_git_hash = result["sha"]
-                wf.last_modified_by = github_user
-                db.commit()
+        try:
+            if delivery_mode == "direct":
+                path = f".github/workflows/{formatted_name}"
+                commit_msg = (
+                    f"Restore {formatted_name} from ActionsManager for "
+                    f"{project.project_code} [skip ci]"
+                )
+                result = _direct_push_workflow_to_branch(
+                    owner, repo, branch, path, wf.workflow_yaml or "",
+                    commit_msg, headers, github_user, db,
+                )
+                if result.get("status_code") in (200, 201):
+                    if result.get("sha"):
+                        wf.workflow_git_hash = result["sha"]
+                    wf.last_modified_by = github_user
+                    db.commit()
 
-                print(f"  ✅ Direct push successful, new SHA: {result.get('sha')}")
+                    print(f"  ✅ Direct push successful, new SHA: {result.get('sha')}")
+
+                    return {
+                        "message": f"Workflow '{wf.workflow_name}' restored to {payload.repo}@{branch} (direct commit)",
+                        "action": "restore_actionsmanager",
+                        "delivery_mode": "direct",
+                        "workflow_id": wf.workflow_id,
+                        "repo": payload.repo,
+                        "branch": branch,
+                        "state": "synced",
+                        "github_sha": result.get("sha"),
+                    }
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Failed to push workflow to GitHub: {result.get('status_code')} "
+                        f"{result.get('error', '')}"
+                    ),
+                )
+
+            if delivery_mode == "pr":
+                # Reuse the create-pull-requests pipeline scoped to this one
+                # workflow + repo. create_pull_requests is a route function
+                # whose signature is (payload, background_tasks, db, ...) - when
+                # called directly (not via FastAPI routing) db has no injected
+                # default, so background_tasks must be supplied positionally and
+                # db passed explicitly. async_mode defaults False, so the
+                # BackgroundTasks instance is never used.
+                pr_payload = CreatePullRequestsRequest(
+                    github_user=github_user,
+                    project_name=project.project_name,
+                    selected_repos=[payload.repo],
+                    selected_workflows=[wf.workflow_name],
+                )
+                pr_result = create_pull_requests(
+                    pr_payload, BackgroundTasks(), db, github_user=github_user
+                )
+
+                print("  ✅ PR created for restoring workflow")
 
                 return {
-                    "message": f"Workflow '{wf.workflow_name}' restored to {payload.repo}@{branch} (direct commit)",
+                    "message": f"PR opened to restore '{wf.workflow_name}' in {payload.repo}",
                     "action": "restore_actionsmanager",
-                    "delivery_mode": "direct",
+                    "delivery_mode": "pr",
                     "workflow_id": wf.workflow_id,
                     "repo": payload.repo,
                     "branch": branch,
-                    "state": "synced",
-                    "github_sha": result.get("sha"),
+                    "state": "pr_pending",
+                    "pr_result": pr_result,
                 }
+
+            raise HTTPException(status_code=400, detail="delivery_mode must be 'pr' or 'direct'")
+        except HTTPException:
+            # Already-shaped errors (GitHub 502, pipeline failures, bad input)
+            # carry a useful status + detail - let them through unchanged.
+            raise
+        except Exception as e:  # noqa: BLE001 - convert unexpected errors to a safe 500
+            import traceback
+            traceback.print_exc()
+            db.rollback()
+            # Server-side context for diagnosis - never logs the token/headers.
+            print(
+                f"❌ Drift restore failed (workflow_id={workflow_id}, "
+                f"repo={payload.repo}, branch={branch}, delivery_mode={delivery_mode}): "
+                f"{type(e).__name__}: {e}"
+            )
             raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"Failed to push workflow to GitHub: {result.get('status_code')} "
-                    f"{result.get('error', '')}"
-                ),
+                status_code=500,
+                detail=f"Failed to restore workflow via {delivery_mode}: {e}",
             )
-
-        if delivery_mode == "pr":
-            # Reuse the create-pull-requests pipeline scoped to this workflow + repo
-            pr_payload = CreatePullRequestsRequest(
-                github_user=github_user,
-                project_name=project.project_name,
-                selected_repos=[payload.repo],
-                selected_workflows=[wf.workflow_name],
-            )
-            pr_result = create_pull_requests(pr_payload, db, github_user=github_user)
-
-            print("  ✅ PR created for restoring workflow")
-
-            return {
-                "message": f"PR opened to restore '{wf.workflow_name}' in {payload.repo}",
-                "action": "restore_actionsmanager",
-                "delivery_mode": "pr",
-                "workflow_id": wf.workflow_id,
-                "repo": payload.repo,
-                "branch": branch,
-                "state": "pr_pending",
-                "pr_result": pr_result,
-            }
-
-        raise HTTPException(status_code=400, detail="delivery_mode must be 'pr' or 'direct'")
 
     raise HTTPException(
         status_code=400,
@@ -3234,7 +3264,12 @@ def _handle_sync_pr_mode(
         selected_repos=[r.repo_name for r in target_repos],
         selected_workflows=[workflow.workflow_name],
     )
-    pr_result = create_pull_requests(pr_payload, db, github_user=github_user)
+    # create_pull_requests is a route function (payload, background_tasks, db,
+    # ...); called directly it needs background_tasks supplied and db passed
+    # explicitly. async_mode defaults False, so BackgroundTasks() is unused.
+    pr_result = create_pull_requests(
+        pr_payload, BackgroundTasks(), db, github_user=github_user
+    )
 
     if project.pr_state in ("new", "draft", "synced"):
         project.pr_state = "open"

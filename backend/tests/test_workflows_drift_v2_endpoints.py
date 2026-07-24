@@ -27,6 +27,7 @@ from workflows import get_db as real_get_db, WorkflowDriftDetail  # noqa: E402
 from projects import get_db as projects_get_db  # noqa: E402
 from models import (  # noqa: E402
     Base, Account, Project, Repo, ProjectRepo, Workflow, ProjectWorkflow,
+    ProjectPullRequest, ProjectPRCampaign,
 )
 from auth import user_tokens  # noqa: E402
 
@@ -406,3 +407,127 @@ def test_resolve_drift_unauthenticated_returns_401(db_state):
         },
     )
     assert resp.status_code == 401
+
+
+# ----------------------------------------------------------------------------
+# POST /api/workflows/{workflow_id}/resolve-drift — restore_actionsmanager + pr
+# (regression coverage for the create_pull_requests call-site 500)
+# ----------------------------------------------------------------------------
+
+def _add_second_repo(project_id: int, repo_name: str = "alice/repo2"):
+    """Attach a second repo to the sample project so scoping is observable."""
+    db = TestingSessionLocal()
+    try:
+        repo = Repo(repo_name=repo_name)
+        db.add(repo); db.commit(); db.refresh(repo)
+        db.add(ProjectRepo(project_id=project_id, repo_id=repo.repo_id))
+        db.commit()
+    finally:
+        db.close()
+
+
+@patch('workflows._process_reusable_workflows_update', return_value={})
+@patch('workflows._process_regular_workflows_update')
+def test_resolve_drift_restore_pr_creates_single_pr(mock_regular, _mock_reusable, db_state):
+    """restore_actionsmanager + pr opens exactly one PR in the drifted repo,
+    persists the PR record, and moves the workflow to under_review — without
+    500-ing (regression for the create_pull_requests(payload, db, ...) call
+    that dropped the required background_tasks arg).
+    """
+    _add_second_repo(db_state["project_id"])  # a repo that must NOT be touched
+    mock_regular.return_value = {
+        "alice/repo1 on main": {
+            "status": "pr_created",
+            "pr_number": 42,
+            "pr_url": "https://github.com/alice/repo1/pull/42",
+            "branch_name": "actions-manager/p001/alice-repo1/abc-main",
+            "workflows_committed": ["AM_P001_ci.yml"],
+        }
+    }
+
+    resp = client.post(
+        f"/api/workflows/{db_state['workflow_id']}/resolve-drift",
+        json={
+            "github_user": "alice",
+            "repo": "alice/repo1",
+            "branch": "main",
+            "resolution": "restore_actionsmanager",
+            "delivery_mode": "pr",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["delivery_mode"] == "pr"
+    assert body["state"] == "pr_pending"
+
+    # Scoped to exactly the drifted repo — repo2 was filtered out before any write.
+    assert mock_regular.called
+    assert mock_regular.call_args.kwargs["repo_names"] == ["alice/repo1"]
+
+    db = TestingSessionLocal()
+    try:
+        prs = db.query(ProjectPullRequest).filter_by(
+            project_id=db_state["project_id"]
+        ).all()
+        assert len(prs) == 1
+        assert prs[0].repo_name == "alice/repo1"
+        assert prs[0].pr_number == 42
+        assert prs[0].target_branch == "main"
+
+        wf = db.query(Workflow).filter_by(workflow_id=db_state["workflow_id"]).first()
+        assert wf.workflow_status == "under_review"  # not synced before merge
+    finally:
+        db.close()
+
+
+@patch('workflows._process_reusable_workflows_update', return_value={})
+@patch('workflows._process_regular_workflows_update',
+       side_effect=RuntimeError("GitHub API exploded"))
+def test_resolve_drift_restore_pr_github_failure_rolls_back(mock_regular, _mock_reusable, db_state):
+    """A GitHub failure in the PR path returns a useful (non-generic) error and
+    leaves no partial PR/campaign rows behind."""
+    resp = client.post(
+        f"/api/workflows/{db_state['workflow_id']}/resolve-drift",
+        json={
+            "github_user": "alice",
+            "repo": "alice/repo1",
+            "branch": "main",
+            "resolution": "restore_actionsmanager",
+            "delivery_mode": "pr",
+        },
+    )
+
+    assert resp.status_code == 500
+    # A shaped HTTPException detail, not FastAPI's bare "Internal Server Error".
+    detail = resp.json().get("detail", "")
+    assert detail and detail != "Internal Server Error"
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(ProjectPullRequest).count() == 0
+        assert db.query(ProjectPRCampaign).count() == 0
+        wf = db.query(Workflow).filter_by(workflow_id=db_state["workflow_id"]).first()
+        assert wf.workflow_status == "synced_with_github"  # unchanged
+    finally:
+        db.close()
+
+
+def test_resolve_drift_wrong_user_returns_403(db_state):
+    """A user who doesn't own the workflow's project is rejected before any
+    GitHub/PR work runs."""
+    user_tokens["mallory"] = "mallory-token"
+    try:
+        resp = client.post(
+            f"/api/workflows/{db_state['workflow_id']}/resolve-drift",
+            json={
+                "github_user": "mallory",
+                "repo": "alice/repo1",
+                "branch": "main",
+                "resolution": "restore_actionsmanager",
+                "delivery_mode": "pr",
+            },
+        )
+        assert resp.status_code == 403
+    finally:
+        user_tokens.pop("mallory", None)
