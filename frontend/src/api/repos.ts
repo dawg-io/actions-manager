@@ -46,23 +46,6 @@ export const createGitHubRepo = async (
   }
 };
 
-export const createRwxRepo = async (
-  user: string | undefined,
-  repoName: string,
-  owner?: string
-): Promise<unknown> => {
-  try {
-    const payload: Record<string, unknown> = { user, repo_name: repoName };
-    if (owner && owner !== user) payload.owner = owner;
-    const response = await apiClient.post(`${BACKEND_URL}/api/rwx-repos`, payload);
-    return response.data;
-  } catch (error: any) {
-    console.error("❌ Error creating RWX repository:", error);
-    const detail = error.response?.data?.detail || error.response?.data?.error || error.message;
-    return { error: detail, status: error.response?.status };
-  }
-};
-
 export const fetchRwxRepos = async (
   user: string | undefined,
   owner?: string

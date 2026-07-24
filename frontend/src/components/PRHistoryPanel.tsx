@@ -11,7 +11,9 @@ import { formatRelativeTime } from "../utils/timeFormat";
 import { normalizeWorkflowFilename } from "../utils/workflowFilename";
 import ConfirmDialog from "./ConfirmDialog";
 import { Button } from "./ui/button";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "./ui/accordion";
 import { toast } from "../utils/toast";
+import { usePagedList, PAGE_SIZE_OPTIONS, UsePagedListResult } from "../hooks/usePagedList";
 
 interface PRCampaignsPanelProps {
   user: string;
@@ -99,6 +101,7 @@ const PRRow: React.FC<PRRowProps> = ({ pr, includeActions, processingKey, setPen
               )}
               <Button
                 size="sm"
+                variant="merge"
                 disabled={mergeDisabled}
                 title={pr.can_merge === false ? pr.merge_block_reason || undefined : undefined}
                 onClick={() => setPendingAction({ type: "merge", pr })}
@@ -223,6 +226,9 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     });
   }, [data, filters]);
 
+  const completedPaged = usePagedList(completedCampaigns);
+  const activityPaged = usePagedList(filteredActivity);
+
   const allRepos = useMemo(
     () => Array.from(new Set((data?.pull_requests ?? []).map((pr) => pr.repo_name))).sort((a, b) => a.localeCompare(b)),
     [data]
@@ -292,6 +298,35 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     );
   };
 
+  const renderPaginationControls = (paged: UsePagedListResult<unknown>, idPrefix: string) => (
+    <div className="pr-pagination">
+      <div className="pr-history-filter-group">
+        <label className="pr-history-filter-label" htmlFor={`${idPrefix}-page-size`}>Per page</label>
+        <select
+          id={`${idPrefix}-page-size`}
+          className="pr-history-filter-select"
+          value={String(paged.pageSize)}
+          onChange={(e) => paged.setPageSize(e.target.value === "all" ? "all" : Number(e.target.value))}
+        >
+          {PAGE_SIZE_OPTIONS.map((opt) => (
+            <option key={String(opt)} value={String(opt)}>{opt === "all" ? "All" : opt}</option>
+          ))}
+        </select>
+      </div>
+      {paged.pageSize !== "all" && paged.totalPages > 1 && (
+        <div className="pr-pagination-nav">
+          <button type="button" className="pr-pagination-btn" disabled={paged.page <= 1} onClick={() => paged.setPage(paged.page - 1)}>
+            Previous
+          </button>
+          <span className="pr-pagination-info">Page {paged.page} of {paged.totalPages}</span>
+          <button type="button" className="pr-pagination-btn" disabled={paged.page >= paged.totalPages} onClick={() => paged.setPage(paged.page + 1)}>
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   const renderPRTable = (prs: PRCampaignPRItem[], includeActions: boolean) => {
     // Group PRs by repository
     const grouped = prs.reduce((acc, pr) => {
@@ -326,8 +361,8 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     const openPRs = openPRsForCampaign(campaign);
     const mergeableOpenPRs = mergeableOpenPRsForCampaign(campaign);
     return (
-      <div key={campaign.campaign_id} className="pr-campaign-card">
-        <div className="pr-campaign-card-header">
+      <AccordionItem key={campaign.campaign_id} value={campaign.campaign_id} className="pr-campaign-card">
+        <AccordionTrigger className="pr-campaign-card-header">
           <div>
             <div className="pr-campaign-eyebrow">Campaign: {campaign.campaign_name}</div>
             <h3>{campaign.campaign_name}</h3>
@@ -340,48 +375,50 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
           <div className="pr-campaign-progress" aria-label={`${campaign.completion_percentage}% complete`}>
             <span>{campaign.completion_percentage}%</span>
           </div>
-        </div>
-
-        <div className="pr-campaign-meta-grid">
-          <div><span>Project</span><strong>{campaign.project_name}{campaign.project_code ? ` (${campaign.project_code})` : ""}</strong></div>
-          <div><span>Created by</span><strong>{campaign.created_by || "Unknown"}</strong></div>
-          <div><span>Created</span><strong>{formatRelativeTime(campaign.created_at)}</strong></div>
-          <div><span>Target branch</span><strong>{campaign.target_branches.join(", ") || "Unknown"}</strong></div>
-          <div><span>Repositories affected</span><strong>{campaign.repositories.length}</strong></div>
-          <div><span>Completed</span><strong>{campaign.completed_at ? formatRelativeTime(campaign.completed_at) : "In progress"}</strong></div>
-        </div>
-
-        {renderWorkflowChips(campaign.workflow_names)}
-        {campaign.custom_file_paths && campaign.custom_file_paths.length > 0 && (
-          <div className="pr-history-workflows">
-            {campaign.custom_file_paths.map((path) => (
-              <span key={path} className="pr-history-workflow-chip opacity-[0.85]">📄 {path}</span>
-            ))}
+        </AccordionTrigger>
+        <AccordionContent>
+          <div className="pr-campaign-meta-grid">
+            <div><span>Project</span><strong>{campaign.project_name}{campaign.project_code ? ` (${campaign.project_code})` : ""}</strong></div>
+            <div><span>Created by</span><strong>{campaign.created_by || "Unknown"}</strong></div>
+            <div><span>Created</span><strong>{formatRelativeTime(campaign.created_at)}</strong></div>
+            <div><span>Target branch</span><strong>{campaign.target_branches.join(", ") || "Unknown"}</strong></div>
+            <div><span>Repositories affected</span><strong>{campaign.repositories.length}</strong></div>
+            <div><span>Completed</span><strong>{campaign.completed_at ? formatRelativeTime(campaign.completed_at) : "In progress"}</strong></div>
           </div>
-        )}
 
-        {operational && (
-          <div className="pr-campaign-actions">
-            <Button onClick={handleRefreshStatus} disabled={refreshing}>Refresh Status</Button>
-            <Button
-              onClick={() => setPendingAction({ type: "mergeCampaign", campaign })}
-              disabled={mergeableOpenPRs.length === 0 || processingKey !== null}
-              title={mergeableOpenPRs.length === 0 && openPRs.length > 0 ? "No open PRs are currently mergeable. Refresh status or resolve the listed blockers." : undefined}
-            >
-              Merge Open PRs
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => setPendingAction({ type: "closeCampaign", campaign })}
-              disabled={openPRs.length === 0 || processingKey !== null || !openPRs.some((pr) => pr.can_close !== false)}
-            >
-              Close Open PRs
-            </Button>
-          </div>
-        )}
+          {renderWorkflowChips(campaign.workflow_names)}
+          {campaign.custom_file_paths && campaign.custom_file_paths.length > 0 && (
+            <div className="pr-history-workflows">
+              {campaign.custom_file_paths.map((path) => (
+                <span key={path} className="pr-history-workflow-chip opacity-[0.85]">📄 {path}</span>
+              ))}
+            </div>
+          )}
 
-        {renderPRTable(campaign.pull_requests, operational)}
-      </div>
+          {operational && (
+            <div className="pr-campaign-actions">
+              <Button onClick={handleRefreshStatus} disabled={refreshing}>Refresh Status</Button>
+              <Button
+                variant="merge"
+                onClick={() => setPendingAction({ type: "mergeCampaign", campaign })}
+                disabled={mergeableOpenPRs.length === 0 || processingKey !== null}
+                title={mergeableOpenPRs.length === 0 && openPRs.length > 0 ? "No open PRs are currently mergeable. Refresh status or resolve the listed blockers." : undefined}
+              >
+                Merge Open PRs
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => setPendingAction({ type: "closeCampaign", campaign })}
+                disabled={openPRs.length === 0 || processingKey !== null || !openPRs.some((pr) => pr.can_close !== false)}
+              >
+                Close Open PRs
+              </Button>
+            </div>
+          )}
+
+          {renderPRTable(campaign.pull_requests, operational)}
+        </AccordionContent>
+      </AccordionItem>
     );
   };
 
@@ -426,7 +463,7 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
 
       {loading && (
         <div className="pr-history-loading">
-          <span className="pr-history-spinner" />
+          <span className="pr-history-spinner" />{' '}
           Loading PR campaigns…
         </div>
       )}
@@ -450,7 +487,9 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
 
       {!loading && !error && hasAnyCampaigns && activeTab === "active" && (
         activeCampaigns.length > 0 ? (
-          <div className="pr-campaign-list">{activeCampaigns.map((campaign) => renderCampaignCard(campaign, true))}</div>
+          <Accordion type="multiple" defaultValue={activeCampaigns.map((c) => c.campaign_id)} className="pr-campaign-list">
+            {activeCampaigns.map((campaign) => renderCampaignCard(campaign, true))}
+          </Accordion>
         ) : (
           <div className="pr-history-empty">
             <div className="pr-history-empty-icon">✅</div>
@@ -462,7 +501,12 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
 
       {!loading && !error && hasAnyCampaigns && activeTab === "completed" && (
         completedCampaigns.length > 0 ? (
-          <div className="pr-campaign-list">{completedCampaigns.map((campaign) => renderCampaignCard(campaign, false))}</div>
+          <>
+            {renderPaginationControls(completedPaged, "completed")}
+            <Accordion type="multiple" className="pr-campaign-list">
+              {completedPaged.pageItems.map((campaign) => renderCampaignCard(campaign, false))}
+            </Accordion>
+          </>
         ) : (
           <div className="pr-history-empty">
             <div className="pr-history-empty-icon">📭</div>
@@ -511,7 +555,8 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
               <input className="pr-history-filter-input" value={filters.actor} onChange={(e) => setFilters({ ...filters, actor: e.target.value })} placeholder="Filter by actor" />
             </div>
           </div>
-          {filteredActivity.length > 0 ? renderPRTable(filteredActivity, false) : (
+          {renderPaginationControls(activityPaged, "activity")}
+          {filteredActivity.length > 0 ? renderPRTable(activityPaged.pageItems, false) : (
             <div className="pr-history-empty">
               <p className="pr-history-empty-title">No PR activity matches these filters</p>
               <p className="pr-history-empty-body">Adjust the filters to review completed PR activity for this project.</p>

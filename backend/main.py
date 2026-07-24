@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.exc import OperationalError
-import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, ai_workflows, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files
+import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files
 from database import engine, Base, SessionLocal
 from models import Account, WorkspaceMember
 import config
@@ -221,7 +221,6 @@ app.include_router(github_secrets.router)
 app.include_router(github_env_vars.router)
 app.include_router(project_deletion.router, prefix="/api")
 app.include_router(rulesets.router)
-app.include_router(ai_workflows.router)
 # Admin router is cloud-only — module is absent from the self-hosted image.
 if config.INSTALLATION_MODE == "cloud" and admin is not None:
     app.include_router(admin.router)
@@ -310,22 +309,6 @@ async def root():
         "version": "1.0.0",
         "allow_insecure_http": auth.ALLOW_INSECURE_HTTP,
     }
-
-
-@app.get("/demo", response_class=HTMLResponse)
-async def ai_feature_demo():
-    """Demo page for AI workflow generation feature"""
-    try:
-        # Get the directory where this script is located
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(current_dir, "static_demo.html")
-        
-        # Use anyio.open_file to handle file operations asynchronously
-        async with await anyio.open_file(file_path, "r") as file:
-            content = await file.read()
-        return HTMLResponse(content=content)
-    except FileNotFoundError:
-        return HTMLResponse(content="<h1>Demo file not found</h1>", status_code=404)
 
 
 @app.get("/gui-workflow-editor-demo", response_class=HTMLResponse)

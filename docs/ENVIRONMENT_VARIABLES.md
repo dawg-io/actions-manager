@@ -454,44 +454,6 @@ USE_MOCK_RESPONSES=false
 
 ---
 
-### AI Features (Optional)
-
-| Variable | Required | Default | Description | Mode | Example |
-|----------|----------|---------|-------------|------|---------|
-| `OPENAI_API_KEY` | ❌ No | Not set | OpenAI API key for AI-powered features | Both | `sk-xxxxxxxxxxxxxxxxxxx` |
-
-**Details:**
-
-- **Purpose**: Enables AI-powered workflow generation and suggestions
-- **Provider**: OpenAI (GPT-3.5/GPT-4)
-- **API Key Format**: Starts with `sk-` prefix
-- **Optional**: Application works without it; AI features disabled
-- **Cost**: Charged per API call by OpenAI
-- **Rate Limiting**: Implement your own rate limiting if needed
-
-**Getting an API Key**:
-1. Create account at https://platform.openai.com
-2. Navigate to API keys: https://platform.openai.com/account/api-keys
-3. Click "Create new secret key"
-4. Copy and store securely (only shown once)
-
-**Implementation Notes**:
-- AI features gracefully disabled if key not set
-- Can be added/removed without restarting
-- Requires separate billing account with OpenAI
-- Monitor usage and costs in OpenAI dashboard
-
-**Security**:
-- ❌ Never commit API key to version control
-- ❌ Don't expose in client-side code
-- ❌ Don't log or display in error messages
-- ✅ Store in `.env` file (in `.gitignore`)
-- ✅ Use environment-specific secrets management
-- ✅ Rotate keys periodically
-- ✅ Use separate keys per environment
-
----
-
 ### Development & Debug Settings
 
 | Variable | Required | Default | Description | Mode | Example |
@@ -577,9 +539,6 @@ ADMIN_PASSWORD=GeneratedSecurePasswordWith32CharsMinimum!
 # Production settings
 DEBUG_MODE=false
 USE_MOCK_RESPONSES=false
-
-# Optional: AI Features
-OPENAI_API_KEY=sk-your_production_key
 ```
 
 **Setup Steps**:
@@ -632,9 +591,6 @@ ADMIN_PASSWORD=GeneratedSecureCloudAdminPassword32Chars!
 # Production settings
 DEBUG_MODE=false
 USE_MOCK_RESPONSES=false
-
-# Optional: AI Features
-OPENAI_API_KEY=sk-your_cloud_key
 ```
 
 **Setup Steps**:
@@ -1139,7 +1095,7 @@ USE_MOCK_RESPONSES=false
 | **All Deployments** | `INSTALLATION_MODE`, `SECRET_KEY` (required for PAT login), `APP_URL` (preferred for self-hosted), `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` |
 | **Cloud Only** | `GITHUB_WEBHOOK_SECRET`, `DATABASE_URL` |
 | **Self-Hosted Optional** | `DATABASE_URL` (defaults to SQLite), `LICENSE_KEY` |
-| **Optional (All)** | `GITHUB_TOKEN`, `OPENAI_API_KEY`, `DEBUG_MODE`, `USE_MOCK_RESPONSES` |
+| **Optional (All)** | `GITHUB_TOKEN`, `DEBUG_MODE`, `USE_MOCK_RESPONSES` |
 
 ### Variable by Category
 
@@ -1152,7 +1108,6 @@ USE_MOCK_RESPONSES=false
 | **Licensing** | LICENSE_KEY | ✅ | ❌ |
 | **Webhooks** | GITHUB_WEBHOOK_* | ❌ | ✅ |
 | **Admin** | ADMIN_* | ✅ | ✅ |
-| **AI** | OPENAI_API_KEY | ✅ | ✅ |
 | **Development** | DEBUG_MODE, etc | ✅ | ✅ |
 | **Security** | SECRET_KEY, ENVIRONMENT, ALLOW_INSECURE_HTTP, CORS_ALLOWED_ORIGINS | ✅ | ✅ |
 

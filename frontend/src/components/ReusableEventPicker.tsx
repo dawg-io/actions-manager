@@ -202,7 +202,7 @@ const ReusableEventPicker: React.FC<ReusableEventPickerProps> = ({ events, onCha
                               onChange={(e) => {
                                 let value: string | number | boolean = e.target.value;
                                 if (input.type === 'number') {
-                                  value = parseFloat(e.target.value) || 0;
+                                  value = Number.parseFloat(e.target.value) || 0;
                                 } else if (input.type === 'boolean') {
                                   value = e.target.value.toLowerCase() === 'true';
                                 }

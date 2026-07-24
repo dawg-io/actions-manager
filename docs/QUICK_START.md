@@ -299,14 +299,13 @@ The project workspace shows the project sidebar and an empty workflow state. Cli
 
 In the **Create New Workflow** modal, choose **Regular Workflow** and click **Next**.
 
-### 9. Create a blank workflow, detect build types, use a template, or generate with AI
+### 9. Create a blank workflow, detect build types, or use a template
 
 Enter a workflow name and select one of the creation options:
 
 - **Open Blank Workflow** — empty YAML editor
 - **Detect Build Types** — inspects selected repositories and recommends templates
 - **Generate Templates** — curated template library
-- **Generate with AI** — AI-assisted workflow generation
 
 ### 10. Review the YAML in the editor
 
@@ -778,7 +777,6 @@ lsof -i :8080
    - Workflow templates
 
 3. **Configure advanced features:**
-   - AI-powered workflow generation (if OpenAI API configured)
    - Custom OAuth apps for different environments
    - Multiple GitHub organizations
 
@@ -826,7 +824,7 @@ lsof -i :8080
 
 🔒 **Security Best Practices:**
 - Rotate admin passwords regularly
-- Use strong secrets (OpenAI API keys, Docker credentials, etc.)
+- Use strong secrets (Docker credentials, etc.)
 - Enable HTTPS for cloud deployments
 - Audit team member access regularly
 - Keep ActionsManager.io updated with latest security patches

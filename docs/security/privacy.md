@@ -59,7 +59,6 @@ The self-hosted beta does **not** include documented product telemetry, crash re
 
 The application does call external services that the operator configures or explicitly uses:
 - **GitHub APIs** for authentication and repository/workflow operations
-- **Optional AI features** — if an operator configures an external API key (e.g., `OPENAI_API_KEY`), prompts or workflow-generation data may be sent to that provider. Do not configure external API keys if you do not want those features to make external API calls.
 
 ## Backups and Deletion
 

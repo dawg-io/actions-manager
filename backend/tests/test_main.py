@@ -73,25 +73,4 @@ class TestMainEndpoints:
         assert data["message"] == "ActionsManager.xyz API is running"
         assert data["version"] == "1.0.0"
         assert isinstance(data["allow_insecure_http"], bool)
-    
-    def test_demo_endpoint_success(self):
-        """Test the demo endpoint returns HTML when file exists"""
-        response = self.client.get("/demo")
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "text/html; charset=utf-8"
-        # Check that it contains expected HTML content
-        assert "<!DOCTYPE html>" in response.text
-        assert "AI Workflow Generation Demo" in response.text
-    
-    def test_demo_endpoint_file_structure(self):
-        """Test that the demo endpoint reads from the correct file"""
-        # This test validates that the endpoint properly handles file reading
-        response = self.client.get("/demo")
-        if response.status_code == 200:
-            # File exists and should contain the expected demo content
-            assert "🤖 AI Workflow Generation Feature" in response.text
-            assert "Interactive AI-powered GitHub Actions" in response.text
-        else:
-            # File not found case
-            assert response.status_code == 404
-            assert "Demo file not found" in response.text
+

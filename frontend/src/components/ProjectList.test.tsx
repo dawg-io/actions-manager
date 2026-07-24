@@ -481,7 +481,7 @@ describe('ProjectList', () => {
     });
 
     test('shows Open PR only when a PR URL is available', async () => {
-      const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+      const openSpy = jest.spyOn(globalThis, 'open').mockImplementation(() => null);
       renderProjectList({
         projects: [
           {

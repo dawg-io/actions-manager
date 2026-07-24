@@ -63,8 +63,6 @@ describe('WorkflowEditor Component', () => {
     onCreate: jest.fn(),
     onDelete: jest.fn(),
     onSync: jest.fn(),
-    onEditWithAI: jest.fn(),
-    isAILoading: false,
   };
 
   beforeEach(() => {
@@ -220,37 +218,6 @@ describe('WorkflowEditor Component', () => {
       render(<WorkflowEditor {...defaultProps} isModified={false} />);
 
       expect(screen.queryByText(/Modified|Unsaved/i)).not.toBeInTheDocument();
-    });
-  });
-
-  describe('AI Integration', () => {
-    test('renders edit with AI button when onEditWithAI is provided', () => {
-      render(<WorkflowEditor {...defaultProps} />);
-
-      expect(screen.getByRole('button', { name: /Edit with AI/i })).toBeInTheDocument();
-      expect(screen.queryByText(/Improve Workflow/i)).not.toBeInTheDocument();
-    });
-
-    test('calls onEditWithAI when AI button is clicked', async () => {
-      render(<WorkflowEditor {...defaultProps} />);
-
-      const aiButton = screen.getByRole('button', { name: /Edit with AI/i });
-      await user.click(aiButton);
-
-      expect(defaultProps.onEditWithAI).toHaveBeenCalledWith(0, 'improve');
-    });
-
-    test('disables AI button when isAILoading is true', () => {
-      render(<WorkflowEditor {...defaultProps} isAILoading={true} />);
-
-      const aiButton = screen.getByRole('button', { name: /Loading/i });
-      expect(aiButton).toBeDisabled();
-    });
-
-    test('shows loading state in AI button when isAILoading is true', () => {
-      render(<WorkflowEditor {...defaultProps} isAILoading={true} />);
-
-      expect(screen.getByText(/Loading|Processing/i)).toBeInTheDocument();
     });
   });
 

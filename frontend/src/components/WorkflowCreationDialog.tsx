@@ -18,7 +18,6 @@ interface WorkflowCreationDialogProps {
   isDetecting: boolean;
   detectedBuildTypesState: DetectedBuildResult[];
   isGeneratingTemplates: boolean;
-  isAILoading: boolean;
   reusableWorkflowsEnabled: boolean;
   showLinkReusableWorkflow?: boolean;
   existingWorkflowNames?: string[];
@@ -28,7 +27,6 @@ interface WorkflowCreationDialogProps {
   createBlankWorkflow: (type: 'regular' | 'reusable', workflowName: string) => void;
   handleDetectBuildTypes: () => void;
   handleCreateFromTemplates: (type: 'regular' | 'reusable', workflowName: string) => void;
-  handleCreateWithAI: (type: 'regular' | 'reusable', workflowName: string) => void;
   addWorkflowFromDetection: (repo: string, buildType: BuildType, workflowName: string) => Promise<void>;
   setWorkflowCreationType: (type: 'regular' | 'reusable' | null) => void;
   setShowDetectionResultsInModal: (show: boolean) => void;
@@ -42,7 +40,6 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
   isDetecting,
   detectedBuildTypesState,
   isGeneratingTemplates,
-  isAILoading,
   reusableWorkflowsEnabled,
   showLinkReusableWorkflow = false,
   existingWorkflowNames = [],
@@ -52,7 +49,6 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
   createBlankWorkflow,
   handleDetectBuildTypes,
   handleCreateFromTemplates,
-  handleCreateWithAI,
   addWorkflowFromDetection,
   setWorkflowCreationType,
   setShowDetectionResultsInModal,
@@ -123,7 +119,7 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
         <DialogHeader>
           <DialogTitle>Create New Workflow</DialogTitle>
           <DialogDescription className="sr-only">
-            Create a new workflow by selecting type and creation method including blank, templates, detection, or AI generation
+            Create a new workflow by selecting type and creation method including blank, templates, or detection
           </DialogDescription>
         </DialogHeader>
         
@@ -336,24 +332,6 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
                     </h5>
                     <p className="text-sm text-slate-600 dark:text-slate-400">
                       Create workflows from pre-built templates
-                    </p>
-                  </div>
-                </div>
-              </button>
-              
-              <button
-                className="border border-slate-200 rounded-lg p-4 hover:border-blue-500 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed dark:border-slate-700 dark:hover:border-blue-400"
-                onClick={() => handleCreateWithAI(workflowCreationType, normalizedWorkflowName)}
-                disabled={isAILoading || !isWorkflowNameValid}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="text-2xl">🤖</div>
-                  <div className="flex-1">
-                    <h5 className="font-semibold text-slate-900 mb-1 dark:text-slate-100">
-                      Generate with AI
-                    </h5>
-                    <p className="text-sm text-slate-600 dark:text-slate-400">
-                      Let AI create a customized workflow for your needs
                     </p>
                   </div>
                 </div>

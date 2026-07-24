@@ -15,7 +15,7 @@
  * Drift state is also reported up via the optional onDriftLoaded callback
  * so callers can render per-workflow badges and gate destructive actions.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -285,7 +285,7 @@ const AdoptGithubVersionModal: React.FC<{
                         name="adopt-delivery"
                         checked={delivery === "pr"}
                         onChange={() => setDelivery("pr")}
-                      />
+                      />{' '}
                       Pull request
                     </label>
                     <label className="flex items-center gap-1">
@@ -294,7 +294,7 @@ const AdoptGithubVersionModal: React.FC<{
                         name="adopt-delivery"
                         checked={delivery === "direct"}
                         onChange={() => setDelivery("direct")}
-                      />
+                      />{' '}
                       Direct commit
                     </label>
                   </div>
@@ -402,7 +402,6 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   refreshSignal,
 }) => {
   const [drifts, setDrifts] = useState<WorkflowDriftDetail[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -415,28 +414,37 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
     [],
   );
 
+  // Mirrors `drifts` so a failed background check can fall back to the last
+  // known state without adding `drifts` as a loadDrift dependency (which would
+  // re-trigger the load-on-mount effect on every successful load).
+  const driftsRef = useRef<WorkflowDriftDetail[]>([]);
+  // Discards out-of-order responses, e.g. the user navigates to a different
+  // project before an in-flight request resolves. Same idiom as
+  // ProjectMgmt.tsx's loadRequestCounterRef.
+  const requestIdRef = useRef(0);
+
   const loadDrift = useCallback(async (): Promise<WorkflowDriftDetail[]> => {
+    const requestId = ++requestIdRef.current;
     if (!user || !projectId || !projectName || selectedRepos.length === 0) {
+      driftsRef.current = [];
       setDrifts([]);
       onDriftLoaded?.([]);
       return [];
     }
-    setLoading(true);
     setError(null);
     try {
       const summary = await getProjectDrift(projectId, user);
+      if (requestId !== requestIdRef.current) return driftsRef.current;
+      driftsRef.current = summary.drifted_workflows;
       setDrifts(summary.drifted_workflows);
       onDriftLoaded?.(summary.drifted_workflows);
       return summary.drifted_workflows;
     } catch (err: unknown) {
+      if (requestId !== requestIdRef.current) return driftsRef.current;
       const msg = err instanceof Error ? err.message : "Failed to check drift";
       setError(msg);
-      // Non-fatal — leave the alert hidden
-      setDrifts([]);
-      onDriftLoaded?.([]);
-      return [];
-    } finally {
-      setLoading(false);
+      // A failed background check must not erase a previously known drift state.
+      return driftsRef.current;
     }
   }, [user, projectId, projectName, selectedRepos, onDriftLoaded]);
 
@@ -521,18 +529,6 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
     if (driftCount === 1) return "1 workflow changed in GitHub";
     return `${driftCount} workflows changed in GitHub`;
   }, [driftCount]);
-
-  if (loading && driftCount === 0) {
-    return (
-      <div
-        className="px-4 py-2 mb-2 text-sm text-slate-600 dark:text-slate-400 italic"
-        role="status"
-        aria-live="polite"
-      >
-        🔍 Checking for workflow drift…
-      </div>
-    );
-  }
 
   if (driftCount === 0 && !showModal) {
     return null;

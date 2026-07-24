@@ -1309,6 +1309,16 @@
   margin-bottom: 14px;
 }
 
+button.pr-campaign-card-header {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
 .pr-campaign-card h3 {
   color: var(--text-primary, #111827);
   font-size: 1.1rem;
@@ -1489,6 +1499,44 @@
 .pr-history-filter-input:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.pr-pagination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.pr-pagination-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pr-pagination-btn {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary, #374151);
+  cursor: pointer;
+}
+
+.pr-pagination-btn:hover:not(:disabled) {
+  background: var(--hover-background-color, #f3f4f6);
+}
+
+.pr-pagination-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pr-pagination-info {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #6b7280);
 }
 
 /* Loading / error / empty states */
@@ -1978,6 +2026,15 @@
 .dark-theme .pr-history-filter-select option {
   background: #1e293b;
   color: #f8fafc;
+}
+
+.dark-theme .pr-pagination-btn {
+  border-color: #475569;
+  color: #f8fafc;
+}
+
+.dark-theme .pr-pagination-btn:hover:not(:disabled) {
+  background: #1e293b;
 }
 
 /* ─── Campaign Dark Mode Overrides ─── */

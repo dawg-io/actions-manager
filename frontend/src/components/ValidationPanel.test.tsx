@@ -1,5 +1,6 @@
 import React from 'react';
-import { createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import ValidationPanel from './ValidationPanel';
 import type { WorkflowDiagnostic } from './YAMLEditor';
@@ -49,7 +50,7 @@ describe('ValidationPanel', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  test('activates interactive items from keyboard and prevents space scrolling', () => {
+  test('clickable items render as a real button and activate on click', () => {
     const handleDiagnosticClick = jest.fn();
 
     render(
@@ -60,15 +61,31 @@ describe('ValidationPanel', () => {
     );
 
     const item = screen.getByRole('button', { name: /workflow is missing "jobs" section/i });
-    expect(item).toHaveClass('clickable');
+    expect(item.tagName).toBe('BUTTON');
+    expect(item).toHaveClass('validation-panel-item-inner');
 
-    const spaceEvent = createEvent.keyDown(item, { key: ' ' });
-    fireEvent(item, spaceEvent);
-
-    expect(spaceEvent.defaultPrevented).toBe(true);
+    item.click();
     expect(handleDiagnosticClick).toHaveBeenCalledWith(warningDiagnostic);
+  });
 
-    fireEvent.keyDown(item, { key: 'Enter' });
+  test('activates interactive items from the keyboard (native button behavior)', async () => {
+    const user = userEvent.setup();
+    const handleDiagnosticClick = jest.fn();
+
+    render(
+      <ValidationPanel
+        diagnostics={[warningDiagnostic]}
+        onDiagnosticClick={handleDiagnosticClick}
+      />
+    );
+
+    const item = screen.getByRole('button', { name: /workflow is missing "jobs" section/i });
+    item.focus();
+
+    await user.keyboard('[Space]');
+    expect(handleDiagnosticClick).toHaveBeenCalledTimes(1);
+
+    await user.keyboard('[Enter]');
     expect(handleDiagnosticClick).toHaveBeenCalledTimes(2);
   });
 });

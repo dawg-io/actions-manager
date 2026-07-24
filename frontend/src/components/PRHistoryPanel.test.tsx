@@ -46,6 +46,27 @@ const openPR = {
   source_project_name: null,
 };
 
+const makeCampaign = (n: number) => ({
+  campaign_id: `campaign-${n}`,
+  campaign_name: `Campaign ${n}`,
+  campaign_status: 'merged',
+  project_name: 'history_project',
+  project_code: 'HPS',
+  created_by: 'historyuser',
+  created_at: '2026-05-21T06:00:00+00:00',
+  updated_at: '2026-05-21T06:05:00+00:00',
+  completed_at: '2026-05-21T06:05:00+00:00',
+  target_branches: ['main'],
+  workflow_names: ['done.yml'],
+  repositories: ['org/repo'],
+  open_count: 0,
+  merged_count: 1,
+  closed_count: 0,
+  failed_count: 0,
+  completion_percentage: 100,
+  pull_requests: [{ ...openPR, pr_id: n, pr_number: 100 + n, pr_state: 'merged', merged_at: '2026-05-21T06:05:00+00:00' }],
+});
+
 describe('PRHistoryPanel as PR Campaigns', () => {
   beforeEach(() => {
     mockGetPRCampaigns.mockReset();
@@ -99,6 +120,13 @@ describe('PRHistoryPanel as PR Campaigns', () => {
     expect(screen.getByText(/#42/)).toBeInTheDocument();
     expect(screen.getByText('Merge Open PRs')).toBeInTheDocument();
     expect(screen.getByText('Close Open PRs')).toBeInTheDocument();
+
+    // Merge actions are green, refresh stays blue (default), close stays red
+    expect(screen.getByRole('button', { name: 'Refresh Status' })).not.toHaveClass('bg-merge');
+    expect(screen.getByRole('button', { name: 'Merge Open PRs' })).toHaveClass('bg-merge');
+    expect(screen.getByRole('button', { name: 'Merge' })).toHaveClass('bg-merge');
+    expect(screen.getByRole('button', { name: 'Close Open PRs' })).toHaveClass('bg-danger');
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveClass('bg-danger');
   });
 
   test('Completed Campaigns tab renders merged and closed PRs without action buttons', async () => {
@@ -142,6 +170,98 @@ describe('PRHistoryPanel as PR Campaigns', () => {
     expect(screen.queryByText('Close Open PRs')).not.toBeInTheDocument();
   });
 
+  test('Completed Campaigns tab cards start collapsed and toggle open/closed on click', async () => {
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [{
+        campaign_id: 'campaign-2',
+        campaign_name: 'Update done.yml',
+        campaign_status: 'partially_completed',
+        project_name: 'history_project',
+        project_code: 'HPS',
+        created_by: 'historyuser',
+        created_at: '2026-05-21T06:00:00+00:00',
+        updated_at: '2026-05-21T06:05:00+00:00',
+        completed_at: '2026-05-21T06:05:00+00:00',
+        target_branches: ['main'],
+        workflow_names: ['done.yml'],
+        repositories: ['org/repo'],
+        open_count: 0,
+        merged_count: 1,
+        closed_count: 1,
+        failed_count: 0,
+        completion_percentage: 100,
+        pull_requests: [
+          { ...openPR, pr_id: 2, pr_number: 43, pr_state: 'merged', merged_at: '2026-05-21T06:05:00+00:00', workflow_names: 'done.yml' },
+        ],
+      }],
+      total_campaigns: 1,
+      completed_campaigns: 1,
+      merged_prs: 1,
+      repositories_affected: 1,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /Completed Campaigns/i }));
+
+    expect(await screen.findByText('Campaign: Update done.yml')).toBeInTheDocument();
+    expect(screen.queryByText(/#43/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repo-pr-row')).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole('button', { name: /Update done\.yml/i });
+    await userEvent.click(trigger);
+
+    expect(await screen.findByText(/#43/)).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+
+    expect(screen.queryByText(/#43/)).not.toBeInTheDocument();
+  });
+
+  test('expanding one Completed campaign does not expand a sibling campaign', async () => {
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [makeCampaign(1), makeCampaign(2)],
+      total_campaigns: 2,
+      completed_campaigns: 2,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /Completed Campaigns/i }));
+    await screen.findByText('Campaign: Campaign 1');
+
+    await userEvent.click(screen.getByRole('button', { name: /Campaign 1\b/i }));
+
+    expect(await screen.findByText(/#101/)).toBeInTheDocument();
+    expect(screen.queryByText(/#102/)).not.toBeInTheDocument();
+  });
+
+  test('Completed Campaigns tab paginates and defaults to 5 per page', async () => {
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: Array.from({ length: 7 }, (_, i) => makeCampaign(i + 1)),
+      total_campaigns: 7,
+      completed_campaigns: 7,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /Completed Campaigns/i }));
+
+    expect(await screen.findByText('Campaign: Campaign 1')).toBeInTheDocument();
+    expect(screen.getByText('Campaign: Campaign 5')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign: Campaign 6')).not.toBeInTheDocument();
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(screen.getByText('Campaign: Campaign 6')).toBeInTheDocument();
+    expect(screen.getByText('Campaign: Campaign 7')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign: Campaign 1')).not.toBeInTheDocument();
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+
   test('All PRs tab filters campaign activity by repository', async () => {
     mockGetPRCampaigns.mockResolvedValue({
       ...baseResponse,
@@ -178,6 +298,90 @@ describe('PRHistoryPanel as PR Campaigns', () => {
 
     await waitFor(() => expect(screen.getByText(/#43/)).toBeInTheDocument());
     expect(screen.queryByText(/#42/)).not.toBeInTheDocument();
+  });
+
+  test('All PRs tab paginates the flat PR list, not repo groups', async () => {
+    const prs = [
+      ...Array.from({ length: 4 }, (_, i) => ({ ...openPR, pr_id: i + 1, pr_number: 100 + i, repo_name: 'org/repo-a' })),
+      ...Array.from({ length: 3 }, (_, i) => ({ ...openPR, pr_id: i + 10, pr_number: 200 + i, repo_name: 'org/repo-b' })),
+    ];
+
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [],
+      pull_requests: prs,
+      total_campaigns: 1,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /All PRs/i }));
+
+    expect(await screen.findAllByTestId('repo-pr-row')).toHaveLength(5);
+  });
+
+  test('changing page size on the All PRs tab shows more items and hides pagination nav', async () => {
+    const prs = Array.from({ length: 7 }, (_, i) => ({ ...openPR, pr_id: i + 1, pr_number: 100 + i }));
+
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [],
+      pull_requests: prs,
+      total_campaigns: 1,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /All PRs/i }));
+
+    expect(await screen.findAllByTestId('repo-pr-row')).toHaveLength(5);
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByDisplayValue('5'), '25');
+
+    expect(screen.getAllByTestId('repo-pr-row')).toHaveLength(7);
+    expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
+  });
+
+  test('selecting the "All" page size shows every item with no nav controls', async () => {
+    const prs = Array.from({ length: 12 }, (_, i) => ({ ...openPR, pr_id: i + 1, pr_number: 100 + i }));
+
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [],
+      pull_requests: prs,
+      total_campaigns: 1,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /All PRs/i }));
+
+    await userEvent.selectOptions(screen.getByDisplayValue('5'), 'all');
+
+    expect(await screen.findAllByTestId('repo-pr-row')).toHaveLength(12);
+    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
+  });
+
+  test('changing a filter on the All PRs tab resets pagination to page 1', async () => {
+    const repoAPRs = Array.from({ length: 6 }, (_, i) => ({ ...openPR, pr_id: i + 1, pr_number: 100 + i, repo_name: 'org/repo-a' }));
+    const repoBPRs = [{ ...openPR, pr_id: 20, pr_number: 999, repo_name: 'org/repo-b' }];
+
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [],
+      pull_requests: [...repoAPRs, ...repoBPRs],
+      total_campaigns: 1,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+    await userEvent.click(await screen.findByRole('button', { name: /All PRs/i }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByDisplayValue('All repositories'), 'org/repo-b');
+
+    await waitFor(() => expect(screen.getByText(/#999/)).toBeInTheDocument());
+    expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
   });
 
   test('merge completion refreshes project state and moves campaign to Completed Campaigns', async () => {
@@ -515,6 +719,7 @@ describe('PRHistoryPanel as PR Campaigns', () => {
 
     render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
     await userEvent.click(await screen.findByRole('button', { name: /Completed Campaigns/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Done campaign/i }));
 
     const prRows = await screen.findAllByTestId('repo-pr-row');
 

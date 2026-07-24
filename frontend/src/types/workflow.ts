@@ -45,38 +45,6 @@ export interface WorkflowStatusData {
   message?: string;
 }
 
-export interface AIChatMessage {
-  type: "user" | "ai" | "error";
-  message: string;
-  workflow_updates?: string[];
-  timestamp: string;
-}
-
-export interface AIWorkflowResponse {
-  session_id: string;
-  workflow_yaml: string;
-  explanation: string;
-  suggested_questions?: string[];
-}
-
-export interface AIEditResponse {
-  session_id: string;
-  workflow_analysis: string;
-  updated_workflow?: string;
-  enhancement_suggestions?: string[];
-  suggested_questions?: string[];
-  changes_summary?: string[];
-}
-
-export type AIWorkflowAction = 'generate' | 'improve' | 'make_reusable';
-
-export interface AIChatResponse {
-  response_message: string;
-  updated_workflow?: string;
-  workflow_updates?: string[];
-  suggested_questions?: string[];
-}
-
 export interface WorkflowTemplate {
   name: string;
   content: string;

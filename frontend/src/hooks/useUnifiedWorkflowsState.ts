@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { WorkflowGUI, DEFAULT_REUSABLE_WORKFLOW_GUI, DEFAULT_WORKFLOW_GUI } from '../utils/workflowGuiConversion';
-import { AIChatMessage, WorkflowStatusData, DetectedBuildResult, TemplatesByType } from '../types/workflow';
+import { WorkflowStatusData, DetectedBuildResult, TemplatesByType } from '../types/workflow';
 
 export interface UseUnifiedWorkflowsStateReturn {
   // UI State
@@ -16,16 +16,6 @@ export interface UseUnifiedWorkflowsStateReturn {
   setGuiWorkflow: (workflow: WorkflowGUI) => void;
   regularGuiWorkflow: WorkflowGUI;
   setRegularGuiWorkflow: (workflow: WorkflowGUI) => void;
-  
-  // AI State
-  showAIChat: boolean;
-  setShowAIChat: (show: boolean) => void;
-  aiChatMessages: AIChatMessage[];
-  setAIChatMessages: (messages: AIChatMessage[] | ((prev: AIChatMessage[]) => AIChatMessage[])) => void;
-  isAILoading: boolean;
-  setIsAILoading: (loading: boolean) => void;
-  aiSessionId: string;
-  setAISessionId: (id: string) => void;
   
   // Workflow Modification State
   modifiedWorkflows: Set<number>;
@@ -91,12 +81,6 @@ export const useUnifiedWorkflowsState = (
   // GUI Workflow State
   const [guiWorkflow, setGuiWorkflow] = useState<WorkflowGUI>(DEFAULT_REUSABLE_WORKFLOW_GUI);
   const [regularGuiWorkflow, setRegularGuiWorkflow] = useState<WorkflowGUI>(DEFAULT_WORKFLOW_GUI);
-  
-  // AI State
-  const [showAIChat, setShowAIChat] = useState(false);
-  const [aiChatMessages, setAIChatMessages] = useState<AIChatMessage[]>([]);
-  const [isAILoading, setIsAILoading] = useState(false);
-  const [aiSessionId, setAISessionId] = useState<string>("");
   
   // Workflow Modification State
   const [modifiedWorkflows, setModifiedWorkflows] = useState<Set<number>>(new Set());
@@ -195,16 +179,6 @@ export const useUnifiedWorkflowsState = (
     setGuiWorkflow,
     regularGuiWorkflow,
     setRegularGuiWorkflow,
-    
-    // AI State
-    showAIChat,
-    setShowAIChat,
-    aiChatMessages,
-    setAIChatMessages,
-    isAILoading,
-    setIsAILoading,
-    aiSessionId,
-    setAISessionId,
     
     // Workflow Modification State
     modifiedWorkflows,

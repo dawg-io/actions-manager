@@ -55,7 +55,7 @@ After starting the container and opening `http://localhost:8080`, follow these s
 5. **Review resource naming** — keep **Prefix Mode** enabled unless you intentionally want unmanaged filenames. Review the summary and create the project.
 6. **Project workspace** — the empty workspace shows **Import Existing**, **Create Pull Requests**, and **Add Workflow**. Click **Add Workflow**.
 7. **Choose workflow type** — select **Regular Workflow**.
-8. **Configure the workflow** — enter a name and choose **Open Blank Workflow**, **Detect Build Types**, **Generate Templates**, or **Generate with AI**.
+8. **Configure the workflow** — enter a name and choose **Open Blank Workflow**, **Detect Build Types**, or **Generate Templates**.
 9. **Review the YAML editor** — the editor shows the prefixed filename, selected repository, and **Unsaved** state.
 10. **Save as a local draft** — click **Commit Locally**, confirm in the modal.
 11. **New Local status** — the editor shows the **New Local** badge and a toast confirms the draft is saved.

@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import AIWorkflowChat from './AIWorkflowChat';
 import UnifiedWorkflowList from './UnifiedWorkflowList';
 import UnifiedWorkflowEditor from './UnifiedWorkflowEditor';
 import WorkflowCreationDialog from './WorkflowCreationDialog';
@@ -8,7 +7,6 @@ import { handleWorkflowChange } from '../utils/workflowOperations';
 import { useUnifiedWorkflowsState } from '../hooks/useUnifiedWorkflowsState';
 import { useWorkflowOperations } from '../hooks/useWorkflowOperations';
 import { useWorkflowSelectionLogic } from '../hooks/useWorkflowSelectionLogic';
-import { useAIChatLogic } from '../hooks/useAIChatLogic';
 import { useParentCallbacks } from '../hooks/useParentCallbacks';
 import { UnifiedWorkflowsProps, UnifiedWorkflowItem } from '../types/workflow';
 import { CustomFilePanel } from './CustomFiles';
@@ -152,14 +150,10 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
     setShowTemplateModal: state.setShowTemplateModal,
     setShowWorkflowCreationDialog: state.setShowWorkflowCreationDialog,
     setWorkflowCreationType: state.setWorkflowCreationType,
-    setAISessionId: state.setAISessionId,
-    setAIChatMessages: state.setAIChatMessages,
-    setShowAIChat: state.setShowAIChat,
     setEditingWorkflowIndex: state.setEditingWorkflowIndex,
     setEditingWorkflowType: state.setEditingWorkflowType,
     setWorkflowsCount: state.setWorkflowsCount,
     setIsDetecting: state.setIsDetecting,
-    setIsAILoading: state.setIsAILoading,
     setIsGeneratingTemplates: state.setIsGeneratingTemplates,
     refreshProjectsList,
     onProjectStateChange,
@@ -180,13 +174,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
     setSelectedCodeownersRepo(null);
     _handleSelectWorkflow(workflowId);
   };
-
-  // Use AI chat logic hook
-  const { handleAIChatMessageWrapper } = useAIChatLogic({
-    aiSessionId: state.aiSessionId,
-    setIsAILoading: state.setIsAILoading,
-    setAIChatMessages: state.setAIChatMessages
-  });
 
   // Workflow change handler
   const handleWorkflowChangeWrapper = (field: string, value: string) => {
@@ -300,7 +287,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
           regularGuiWorkflow={state.regularGuiWorkflow}
           guiWorkflow={state.guiWorkflow}
           projectCode={projectCode}
-          isAILoading={state.isAILoading}
           projectPRState={projectPRState}
           usePrefix={usePrefix}
           isReadOnly={isReadOnly}
@@ -328,7 +314,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
         isDetecting={state.isDetecting}
         detectedBuildTypesState={state.detectedBuildTypesState}
         isGeneratingTemplates={state.isGeneratingTemplates}
-        isAILoading={state.isAILoading}
         reusableWorkflowsEnabled={reusableWorkflowsEnabled}
         showLinkReusableWorkflow={canLinkReusableWorkflows}
         existingWorkflowNames={[...workflows.map(workflow => workflow.name), ...rxworkflows.map(workflow => workflow.name)]}
@@ -338,7 +323,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
         createBlankWorkflow={operations.handleCreateBlankWorkflow}
         handleDetectBuildTypes={operations.handleDetectBuildTypes}
         handleCreateFromTemplates={operations.handleCreateFromTemplates}
-        handleCreateWithAI={operations.handleCreateWithAI}
         addWorkflowFromDetection={operations.handleAddWorkflowFromDetection}
         setWorkflowCreationType={state.setWorkflowCreationType}
         setShowDetectionResultsInModal={state.setShowDetectionResultsInModal}
@@ -352,30 +336,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
         setShowTemplateModal={state.setShowTemplateModal}
         selectTemplate={operations.handleSelectTemplate}
       />
-      
-      {/* AI Chat Interface */}
-      {state.showAIChat && (
-        <AIWorkflowChat
-          isOpen={state.showAIChat}
-          onClose={() => state.setShowAIChat(false)}
-          sessionId={state.aiSessionId}
-          currentWorkflow={selectedWorkflow?.content || ''}
-          onWorkflowUpdate={(updatedWorkflow: string) => {
-            if (selectedWorkflow) {
-              handleWorkflowChangeWrapper('content', updatedWorkflow);
-            }
-          }}
-          chatHistory={state.aiChatMessages.map(msg => ({
-            type: msg.type,
-            message: msg.message,
-            timestamp: msg.timestamp,
-            workflow_updates: msg.workflow_updates
-          }))}
-          suggestedQuestions={[]}
-          isLoading={state.isAILoading}
-          onSendMessage={(message: string) => handleAIChatMessageWrapper(message, selectedWorkflow, handleWorkflowChangeWrapper)}
-        />
-      )}
     </div>
   );
 };

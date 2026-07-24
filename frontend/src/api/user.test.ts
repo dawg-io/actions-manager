@@ -2,7 +2,7 @@ import { getGitHubTokenStatus, getUserDetails, loginWithGitHubToken, removeGitHu
 import config from '../config';
 
 // Mock fetch globally
-global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
+globalThis.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 
 describe('user API', () => {
   beforeEach(() => {

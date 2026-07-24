@@ -282,7 +282,7 @@ const JobCard: React.FC<JobCardProps> = memo(({
                   id={`job-timeout-${job.id}`}
                   type="number"
                   value={job.timeoutMinutes || ''}
-                  onChange={(e) => handleFieldChange('timeoutMinutes', e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                  onChange={(e) => handleFieldChange('timeoutMinutes', e.target.value ? Number.parseInt(e.target.value, 10) : undefined)}
                   placeholder="360"
                   min="1"
                   max="2160"

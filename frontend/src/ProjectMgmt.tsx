@@ -1431,10 +1431,9 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     return (
       <div className="repo-configs-page">
         {/* Repositories & Branches */}
-        <div
+        <section
           id="repo-config-repos-and-branches"
           className={`repo-config-section ${REPO_CONFIG_SLIDE_CLASS}`}
-          role="region"
           aria-label="Repositories & Branches"
           aria-current={scrollActiveSection === 'repos-and-branches' ? 'location' : undefined}
         >
@@ -1462,13 +1461,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               />
             )}
           </div>
-        </div>
+        </section>
 
         {/* Deploy Environments */}
-        <div
+        <section
           id="repo-config-environments"
           className={`repo-config-section ${REPO_CONFIG_SLIDE_CLASS}`}
-          role="region"
           aria-label="Deploy Environments"
           aria-current={scrollActiveSection === 'environments' ? 'location' : undefined}
         >
@@ -1486,13 +1484,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               setManualEnvironments={setManualEnvironments}
             />
           </div>
-        </div>
+        </section>
 
         {/* Environment Variables */}
-        <div
+        <section
           id="repo-config-envvars"
           className={`repo-config-section ${REPO_CONFIG_SLIDE_CLASS}`}
-          role="region"
           aria-label="Environment Variables"
           aria-current={scrollActiveSection === 'envvars' ? 'location' : undefined}
         >
@@ -1513,13 +1510,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               usePrefix={usePrefix}
             />
           </div>
-        </div>
+        </section>
 
         {/* Environment Secrets */}
-        <div
+        <section
           id="repo-config-secrets"
           className={`repo-config-section ${REPO_CONFIG_SLIDE_CLASS}`}
-          role="region"
           aria-label="Environment Secrets"
           aria-current={scrollActiveSection === 'secrets' ? 'location' : undefined}
         >
@@ -1540,13 +1536,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               usePrefix={usePrefix}
             />
           </div>
-        </div>
+        </section>
 
         {/* Environment Rulesets */}
-        <div
+        <section
           id="repo-config-rulesets"
           className={`repo-config-section ${REPO_CONFIG_SLIDE_CLASS}`}
-          role="region"
           aria-label="Environment Rulesets"
           aria-current={scrollActiveSection === 'rulesets' ? 'location' : undefined}
         >
@@ -1558,7 +1553,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               selectedRepos={selectedRepos}
             />
           </div>
-        </div>
+        </section>
 
       </div>
     );
@@ -2028,7 +2023,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                 {userDetails && (
                   <UserAvatar 
                     avatarUrl={userDetails.avatar_url} 
-                    username={userDetails.github_user!} 
+                    username={userDetails.github_user} 
                     accountType={userDetails.account_type}
                     installationMode={userDetails.installation_mode}
                     githubAccountType={userDetails.github_account_type}
@@ -2065,7 +2060,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                   className="back-to-projects-button"
                   onClick={handleGoToMain}
                 >
-                  <span aria-hidden="true">←</span>
+                  <span aria-hidden="true">←</span>{' '}
                   Back to Projects
                 </button>
               </div>
@@ -2250,7 +2245,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                 {userDetails && (
                   <UserAvatar 
                     avatarUrl={userDetails.avatar_url} 
-                    username={userDetails.github_user!} 
+                    username={userDetails.github_user} 
                     accountType={userDetails.account_type}
                     installationMode={userDetails.installation_mode}
                     githubAccountType={userDetails.github_account_type}

@@ -444,4 +444,3 @@ The feature is stateless — detection results are computed on-demand and not ca
 
 - [Workflows]({% link features/workflows.md %}) — create and manage workflows in ActionsManager
 - [Projects]({% link features/projects.md %}) — group repositories for bulk workflow operations
-- [AI Workflow Generation](AI_WORKFLOW_FEATURE.md) — use AI to generate customized workflows beyond templates

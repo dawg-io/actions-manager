@@ -445,12 +445,6 @@ SECRET_KEY=$SECRET_KEY
 DEBUG_MODE=false
 USE_MOCK_RESPONSES=false
 
-# =============================================================================
-# AI Features (Optional)
-# =============================================================================
-# OpenAI API key for AI-powered workflow generation
-# OPENAI_API_KEY=your_openai_api_key
-
 # (No CRA/webpack file-watching variables needed; Vite handles polling internally)
 EOF
 

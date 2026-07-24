@@ -124,7 +124,6 @@ const defaultProps = {
   regularGuiWorkflow: mockGuiWorkflow,
   guiWorkflow: mockGuiWorkflow,
   projectCode: 'TEST',
-  isAILoading: false,
   user: 'test-user',
   projectName: 'test-project',
   setEditMode: jest.fn(),
@@ -586,7 +585,6 @@ describe('UnifiedWorkflowEditor', () => {
       fireEvent.click(screen.getByLabelText('More options'));
       expect(screen.getByText(/Open in GitHub/)).toBeInTheDocument();
       expect(screen.getByText(/History/)).toBeInTheDocument();
-      expect(screen.getByText(/Edit with AI/)).toBeInTheDocument();
       expect(screen.getByText(/Duplicate workflow/)).toBeInTheDocument();
       expect(screen.getByText(/Rename workflow/)).toBeInTheDocument();
       expect(screen.getByText(/Delete workflow/)).toBeInTheDocument();
@@ -653,35 +651,6 @@ describe('UnifiedWorkflowEditor', () => {
       expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     });
 
-    test('shows Analyzing text in AI item when isAILoading is true', () => {
-      render(<UnifiedWorkflowEditor {...defaultProps} isAILoading={true} />);
-      fireEvent.click(screen.getByLabelText('More options'));
-      expect(screen.getByText('Analyzing...')).toBeInTheDocument();
-    });
-  });
-
-  describe('Edit with AI drawer', () => {
-    test('keeps AI out of the top toolbar and opens the AI drawer from More', () => {
-      render(<UnifiedWorkflowEditor {...defaultProps} />);
-      expect(screen.queryByRole('button', { name: /Improve Workflow/ })).not.toBeInTheDocument();
-      expect(screen.queryByText('AI-assisted workflow generation and optimization')).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByLabelText('More options'));
-      fireEvent.click(screen.getByText(/Edit with AI/));
-
-      expect(screen.getByText('Edit Workflow with AI')).toBeInTheDocument();
-      expect(screen.getByText(/AI workflow editing is coming soon/)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Preview Changes' })).toBeDisabled();
-    });
-
-    test('clicking Cancel closes the AI drawer', () => {
-      render(<UnifiedWorkflowEditor {...defaultProps} />);
-      fireEvent.click(screen.getByLabelText('More options'));
-      fireEvent.click(screen.getByText(/Edit with AI/));
-      expect(screen.getByText('Edit Workflow with AI')).toBeInTheDocument();
-      fireEvent.click(screen.getByText('Cancel'));
-      expect(screen.queryByText('Edit Workflow with AI')).not.toBeInTheDocument();
-    });
   });
 
   describe('Open in GitHub modal', () => {

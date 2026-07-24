@@ -10,7 +10,7 @@ const mockMatchMedia = jest.fn((query) => ({
   dispatchEvent: jest.fn(),
 }));
 
-window.matchMedia = mockMatchMedia;
+globalThis.matchMedia = mockMatchMedia;
 
 // Mock react-router-dom
 const mockNavigate = jest.fn();
