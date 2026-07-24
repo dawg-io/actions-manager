@@ -33,7 +33,18 @@ import {
   type DriftDeliveryMode,
   type AdoptResolutionMode,
 } from "../api/drift";
+import ConfirmDialog from "./ConfirmDialog";
 import { getDocsUrl } from "../help/helpLinks";
+
+/**
+ * Prefer the backend's safe FastAPI error detail over the raw axios message
+ * (which is just "Request failed with status code 500"). Same pattern used
+ * across the app (ProjectMgmt, CustomFiles, workflowOperations).
+ */
+const driftErrorMessage = (err: unknown, fallback: string): string => {
+  const r = err as { response?: { data?: { detail?: string } }; message?: string };
+  return r?.response?.data?.detail || r?.message || fallback;
+};
 
 interface DriftDetectionProps {
   user: string;
@@ -60,11 +71,15 @@ interface DriftDetectionProps {
 const SideBySideDiff: React.FC<{
   left: string;
   right: string;
+  repo: string;
+  branch: string;
   onAdoptGithub: () => void;
   onRestorePR: () => void;
   onRestoreDirect: () => void;
-  disabled: boolean;
-}> = ({ left, right, onAdoptGithub, onRestorePR, onRestoreDirect, disabled }) => {
+  /** Which restore action is currently running for this row, if any. */
+  busyAction: DriftDeliveryMode | null;
+}> = ({ left, right, repo, branch, onAdoptGithub, onRestorePR, onRestoreDirect, busyAction }) => {
+  const disabled = busyAction !== null;
   const leftLines = (left || "").split("\n");
   const rightLines = (right || "").split("\n");
   const max = Math.max(leftLines.length, rightLines.length);
@@ -81,10 +96,10 @@ const SideBySideDiff: React.FC<{
     >
       {/* Column Headers */}
       <div className="bg-slate-50 dark:bg-slate-800 px-2 py-1 text-sm font-semibold border-b border-r border-slate-200 dark:border-slate-700">
-        ActionsManager (Local)
+        ActionsManager managed version
       </div>
       <div className="bg-slate-50 dark:bg-slate-800 px-2 py-1 text-sm font-semibold border-b border-slate-200 dark:border-slate-700">
-        GitHub (Remote)
+        Current GitHub version
       </div>
 
       {/* Diff Content */}
@@ -120,27 +135,49 @@ const SideBySideDiff: React.FC<{
       </div>
 
       {/* Action Buttons aligned with columns */}
-      <div className="border-t border-r border-slate-200 dark:border-slate-700 px-2 py-3 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col gap-2">
-        <Button
-          size="sm"
-          variant="default"
-          disabled={disabled}
-          onClick={onRestorePR}
-          className="w-full justify-start"
-        >
-          {disabled ? "Restoring..." : "Restore ActionsManager (PR)"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled}
-          onClick={onRestoreDirect}
-          className="w-full justify-start"
-        >
-          {disabled ? "Restoring..." : "Restore ActionsManager (Direct)"}
-        </Button>
+      <div className="border-t border-r border-slate-200 dark:border-slate-700 px-2 py-3 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col gap-4">
+        <div>
+          <Button
+            size="sm"
+            variant="default"
+            disabled={disabled}
+            onClick={onRestorePR}
+            className="w-full justify-start"
+            data-testid="restore-pr-button"
+          >
+            {busyAction === "pr" ? "Creating pull request…" : "Create Fix Pull Request"}
+          </Button>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 whitespace-normal">
+            Opens a pull request only in <strong>{repo}</strong> that restores this
+            workflow to the ActionsManager-managed version. No other repositories are
+            changed.{" "}
+            <span className="px-1.5 py-0.5 text-[0.65rem] rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 align-middle">
+              Recommended
+            </span>
+          </p>
+        </div>
+        <div>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={disabled}
+            onClick={onRestoreDirect}
+            className="w-full justify-start"
+            data-testid="restore-direct-button"
+          >
+            {busyAction === "direct" ? "Restoring directly…" : "Restore Directly"}
+          </Button>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 whitespace-normal">
+            Immediately overwrites the workflow on <strong>{branch}</strong> in{" "}
+            <strong>{repo}</strong> with the ActionsManager-managed version. No pull
+            request is created.{" "}
+            <span className="px-1.5 py-0.5 text-[0.65rem] rounded-full bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 align-middle">
+              Immediate GitHub change
+            </span>
+          </p>
+        </div>
       </div>
-      <div className="border-t border-slate-200 dark:border-slate-700 px-2 py-3 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col gap-2">
+      <div className="border-t border-slate-200 dark:border-slate-700 px-2 py-3 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col gap-1">
         <Button
           size="sm"
           variant="secondary"
@@ -149,8 +186,13 @@ const SideBySideDiff: React.FC<{
           className="w-full justify-start"
           data-testid="adopt-github-version-button"
         >
-          {disabled ? "Adopting GitHub Version..." : "Adopt GitHub Version"}
+          Adopt GitHub Version
         </Button>
+        <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 whitespace-normal">
+          Import the GitHub version of <strong>{repo}</strong> into ActionsManager —
+          choose to keep it local-only (no GitHub change), sync it to the other
+          repositories, or set a per-repo override.
+        </p>
       </div>
     </div>
   );
@@ -216,8 +258,7 @@ const AdoptGithubVersionModal: React.FC<{
       onResolved(response.message || "GitHub version adopted.");
       onClose();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to adopt GitHub version";
-      setError(msg);
+      setError(driftErrorMessage(err, "Failed to adopt GitHub version"));
     } finally {
       setSubmitting(false);
     }
@@ -233,12 +274,12 @@ const AdoptGithubVersionModal: React.FC<{
               <>
                 This workflow is shared across multiple repositories in this project.
                 The GitHub version from <strong>{detail.repo}</strong> is different from
-                the Actions Manager version. Choose how this change should be handled.
+                the ActionsManager version. Choose how this change should be handled.
               </>
             ) : (
               <>
                 The GitHub version of <strong>{detail.workflow_filename}</strong> in
-                {" "}<strong>{detail.repo}</strong> differs from the Actions Manager
+                {" "}<strong>{detail.repo}</strong> differs from the ActionsManager
                 version. Choose how this change should be handled.
               </>
             )}
@@ -276,6 +317,8 @@ const AdoptGithubVersionModal: React.FC<{
                   Use the GitHub version from {detail.repo} as the new project workflow,
                   then sync that version to {affected.length} other
                   {" "}repository{affected.length === 1 ? "" : "ies"} in this project.
+                  {" "}<strong>Writes to GitHub</strong> in those repositories (via pull
+                  request or direct commit, below).
                 </p>
                 {mode === "adopt_project_and_sync" && (
                   <div className="mt-2 flex items-center gap-3 text-sm">
@@ -323,8 +366,10 @@ const AdoptGithubVersionModal: React.FC<{
               <div className="flex-1">
                 <span className="font-medium">Adopt locally only</span>
                 <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                  Update the Actions Manager local workflow using the GitHub version from
+                  Update the ActionsManager draft using the GitHub version from
                   {" "}{detail.repo}, but do not sync the other repositories.
+                  {" "}<strong>No GitHub change</strong> — review and deploy the updated
+                  draft normally afterward.
                 </p>
                 {mode === "adopt_local_only" && affected.length > 0 && (
                   <div className="mt-2 px-2 py-1 text-xs rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
@@ -360,9 +405,9 @@ const AdoptGithubVersionModal: React.FC<{
                   </span>
                 </div>
                 <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                  Keep {detail.repo} using its GitHub version as a repo-specific
-                  workflow override. The shared project workflow is not changed and
-                  the other repositories are not modified.
+                  Pin {detail.repo} to its GitHub version as a repo-specific workflow
+                  override. <strong>No GitHub change</strong> — the shared project
+                  workflow and the other repositories are left untouched.
                 </p>
               </div>
             </div>
@@ -407,7 +452,11 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   const [showModal, setShowModal] = useState(false);
   const [openDiffKey, setOpenDiffKey] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  const [resolvingMode, setResolvingMode] = useState<DriftDeliveryMode | null>(null);
   const [adoptDetail, setAdoptDetail] = useState<WorkflowDriftDetail | null>(null);
+  // Direct restore overwrites GitHub with no PR review, so it is gated behind
+  // an explicit confirmation naming the repo + target branch.
+  const [confirmDirect, setConfirmDirect] = useState<WorkflowDriftDetail | null>(null);
 
   const driftKey = useCallback(
     (d: WorkflowDriftDetail) => `${d.workflow_id}::${d.repo}::${d.branch}`,
@@ -441,8 +490,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
       return summary.drifted_workflows;
     } catch (err: unknown) {
       if (requestId !== requestIdRef.current) return driftsRef.current;
-      const msg = err instanceof Error ? err.message : "Failed to check drift";
-      setError(msg);
+      setError(driftErrorMessage(err, "Failed to check drift"));
       // A failed background check must not erase a previously known drift state.
       return driftsRef.current;
     }
@@ -460,6 +508,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
     ) => {
       const key = driftKey(detail);
       setResolving(key);
+      setResolvingMode(deliveryMode ?? null);
       setError(null);
       setSuccess(null);
       try {
@@ -493,8 +542,11 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
           setError(response.message || "Drift was not resolved. Local and GitHub versions still differ.");
           // Keep the diff open
         } else if (response.state === "pr_pending") {
-          // PR created
-          setSuccess(response.message || "Pull request created successfully");
+          // PR created — the drift clears once the PR is merged, not now.
+          setSuccess(
+            response.message
+              || `Pull request opened in ${detail.repo}. Review and merge it to complete the restore.`,
+          );
           await loadDrift();
           if (openDiffKey === key) setOpenDiffKey(null);
         } else {
@@ -504,11 +556,11 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
           if (openDiffKey === key) setOpenDiffKey(null);
         }
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "Resolution failed";
-        setError(msg);
+        setError(driftErrorMessage(err, "Resolution failed"));
         // Keep diff open on error
       } finally {
         setResolving(null);
+        setResolvingMode(null);
       }
     },
     [driftKey, loadDrift, openDiffKey, user],
@@ -660,6 +712,10 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                         <tr>
                           <td colSpan={6} className="py-2">
                             <div className="space-y-2">
+                              <p className="text-sm text-slate-700 dark:text-slate-300">
+                                Repository: <strong>{d.repo}</strong>
+                                {" · "}Target branch: <strong>{d.branch}</strong>
+                              </p>
                               {d.message && (
                                 <p className="text-xs text-slate-500 dark:text-slate-400">
                                   {d.message}
@@ -668,14 +724,14 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                               <SideBySideDiff
                                 left={d.actionsmanager_yaml ?? ""}
                                 right={d.github_yaml ?? ""}
+                                repo={d.repo}
+                                branch={d.branch}
                                 onAdoptGithub={() => setAdoptDetail(d)}
                                 onRestorePR={() =>
                                   handleResolve(d, "restore_actionsmanager", "pr")
                                 }
-                                onRestoreDirect={() =>
-                                  handleResolve(d, "restore_actionsmanager", "direct")
-                                }
-                                disabled={busy}
+                                onRestoreDirect={() => setConfirmDirect(d)}
+                                busyAction={busy ? resolvingMode : null}
                               />
                             </div>
                           </td>
@@ -702,6 +758,27 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
         detail={adoptDetail}
         user={user}
         onResolved={handleAdoptResolved}
+      />
+
+      <ConfirmDialog
+        open={confirmDirect !== null}
+        title="Overwrite GitHub directly?"
+        description={
+          confirmDirect
+            ? `This immediately overwrites ${confirmDirect.workflow_filename} on branch `
+              + `${confirmDirect.branch} in ${confirmDirect.repo} with the `
+              + `ActionsManager-managed version. The current GitHub version is replaced `
+              + `now, with no pull request to review. This cannot be undone from here.`
+            : ""
+        }
+        confirmLabel="Overwrite directly"
+        destructive
+        onCancel={() => setConfirmDirect(null)}
+        onConfirm={() => {
+          const d = confirmDirect;
+          setConfirmDirect(null);
+          if (d) handleResolve(d, "restore_actionsmanager", "direct");
+        }}
       />
     </>
   );

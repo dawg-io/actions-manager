@@ -28,7 +28,7 @@ from main import app  # noqa: E402
 from workflows import get_db as real_get_db  # noqa: E402
 from models import (  # noqa: E402
     Base, Account, Project, Repo, ProjectRepo, Workflow, ProjectWorkflow,
-    RepoWorkflowOverride,
+    RepoWorkflowOverride, ProjectPullRequest,
 )
 from auth import user_tokens  # noqa: E402
 
@@ -291,6 +291,55 @@ def test_adopt_project_and_sync_pr_mode(_g, mock_create, db_state):
     sent_payload = mock_create.call_args[0][0]
     assert sent_payload.selected_repos == ["whatsupdawg/test2"]
     assert sent_payload.selected_workflows == ["ci"]
+
+
+@patch('workflows._process_reusable_workflows_update', return_value={})
+@patch('workflows._process_regular_workflows_update')
+@patch('workflows.get_workflow_from_github', return_value={
+    "content": "name: AM_P001_ci\non: pull_request",
+    "sha": "sha-new",
+})
+def test_adopt_project_and_sync_pr_mode_runs_real_pipeline(_g, mock_regular, _mock_reusable, db_state):
+    """Regression: adopt_project_and_sync (PR) must not 500. Unlike the mocked
+    test above, this exercises the REAL create_pull_requests so the internal
+    call-site argument passing (background_tasks/db) is verified end to end,
+    and persists a PR only for the affected repo.
+    """
+    mock_regular.return_value = {
+        "whatsupdawg/test2 on main": {
+            "status": "pr_created",
+            "pr_number": 7,
+            "pr_url": "https://github.com/whatsupdawg/test2/pull/7",
+            "branch_name": "actions-manager/p001/whatsupdawg-test2/abc-main",
+            "workflows_committed": ["AM_P001_ci.yml"],
+        }
+    }
+
+    resp = client.post(
+        "/api/drift/adopt-github-version",
+        json={
+            "github_user": "alice",
+            "project_id": db_state["project_id"],
+            "repo_id": db_state["repo1_id"],
+            "workflow_id": db_state["workflow_id"],
+            "resolution_mode": "adopt_project_and_sync",
+            "delivery_mode": "pr",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["new_drift_status"] == "pr_pending"
+    assert mock_regular.call_args.kwargs["repo_names"] == ["whatsupdawg/test2"]
+
+    db = TestingSessionLocal()
+    try:
+        prs = db.query(ProjectPullRequest).filter_by(
+            project_id=db_state["project_id"]
+        ).all()
+        assert len(prs) == 1
+        assert prs[0].repo_name == "whatsupdawg/test2"
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
