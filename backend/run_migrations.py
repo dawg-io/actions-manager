@@ -86,6 +86,10 @@ def main():
         "migrate_add_pr_campaigns.py",                 # Adds project_pr_campaigns table and campaign_id column on project_pull_requests
         "migrate_add_custom_files.py",                 # Adds custom_files table for project-level managed text files
         "migrate_add_pr_file_names.py",                # Adds file_names column to project_pull_requests for per-PR custom file + CODEOWNERS tracking
+        "migrate_add_actions_projects.py",             # Adds actions_projects table for custom GitHub Actions (issue #1687)
+        "migrate_seed_default_actions_projects.py",    # Seeds the shared Actions Projects catalog with 7 common actions
+        "migrate_add_action_branding.py",              # Adds branding_icon/branding_color columns to actions_projects
+        "migrate_add_action_groups.py",                # Adds action_groups and action_group_memberships tables
     ]
     
     # Check which migrations exist

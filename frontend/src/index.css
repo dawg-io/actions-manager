@@ -209,26 +209,3 @@
   }
 }
 
-/* Custom grid template for project list table - ensures column alignment */
-/* Override any flex layout from projectMgmt.css */
-/* Columns: Project | Type | Scope | State | Activity | Updated | Workflows | Actions */
-/* Use minmax() to keep headers/badges from wrapping while still allowing the
-   table to flex up to the container width. The parent container provides
-   overflow-x-auto so narrow viewports get a horizontal scrollbar instead of
-   collapsing into awkward wraps. */
-@media (min-width: 640px) {
-  .project-list-grid {
-    display: grid !important;
-    grid-template-columns:
-      minmax(220px, 2fr) /* Project */
-      minmax(180px, 1.2fr) /* Type */
-      minmax(160px, 1fr) /* Scope */
-      minmax(110px, 0.7fr) /* State */
-      minmax(160px, 1fr) /* Activity */
-      minmax(110px, 0.7fr) /* Updated */
-      minmax(120px, 0.7fr) /* Workflows */
-      48px /* Actions - fixed width */ !important;
-    align-items: center;
-    gap: 0.75rem;
-  }
-}

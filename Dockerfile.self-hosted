@@ -2,7 +2,11 @@
 # Combines frontend and backend into a single container for simplified deployment
 
 # Stage 1: Build Frontend
-FROM node:20-slim AS frontend-builder
+# Shared, weekly-patched base image (base-images/frontend/Dockerfile +
+# .github/workflows/base-images.yml) instead of building the OS layer fresh
+# from node:24-slim on every CI run - see that Dockerfile for what it
+# contains.
+FROM ghcr.io/dawg-io/actions-manager/base-frontend:latest AS frontend-builder
 
 # Set Node.js memory limit to prevent OOM errors during build
 # Adjust NODE_OPTIONS if you have more/less memory available
@@ -22,6 +26,11 @@ COPY frontend/ ./
 # Remove any local .env files that might interfere with build
 RUN rm -f .env .env.local .env.development .env.dev .env.production .env.production.local
 
+# Release version, read from repo root (see backend/projects.py's equivalent
+# read) - unlike the VITE_* vars below this doesn't need runtime placeholder
+# substitution, since the version is fixed for good once the image is built.
+COPY VERSION ./VERSION
+
 # Build production frontend with memory-efficient settings
 # Disable source maps and use single process to reduce memory usage
 #
@@ -38,10 +47,15 @@ ENV VITE_WEBSOCKET_URL=__RUNTIME_CONFIG_WEBSOCKET_URL__
 # Add build arg to force cache bust when needed
 ARG BUILD_DATE=unknown
 RUN echo "Build date: ${BUILD_DATE}" && \
+    export VITE_APP_VERSION="$(cat VERSION)" && \
     NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # Stage 2: Backend with Frontend
-FROM python:3.12-slim
+# Shared, weekly-patched base image (base-images/backend/Dockerfile +
+# .github/workflows/base-images.yml) instead of building the OS layer fresh
+# from python:3.12-slim on every CI run - see that Dockerfile for what it
+# contains.
+FROM ghcr.io/dawg-io/actions-manager/base-backend:latest
 
 # Install nginx for serving static files, and gosu to drop root privileges
 # at runtime after fixing volume ownership (see start.sh below).
@@ -88,6 +102,10 @@ COPY --from=frontend-builder /app/frontend/build /app/frontend/build
 
 # Ship the license terms with the image.
 COPY LICENSE COMMERCIAL-LICENSE.md /app/
+
+# Release version, read at runtime by backend/projects.py (one directory up
+# from /app/backend, matching how it resolves the repo root in local dev).
+COPY VERSION /app/VERSION
 
 # Set ownership for application directories to appuser
 # This covers everything baked into the image (backend code, frontend build).

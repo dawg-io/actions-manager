@@ -121,7 +121,9 @@ export interface UnifiedWorkflowsProps {
   setLinkedWorkflows?: (updater: (prev: RwxWorkflow[]) => RwxWorkflow[]) => void;
   canLinkReusableWorkflows?: boolean;
   onLinkReusableWorkflow?: () => void;
-  
+  // Opens the existing-workflow import panel — surfaced in the editor's empty state
+  onImportExisting?: () => void;
+
   // Callback to refresh project list
   refreshProjectsList?: () => Promise<void>;
   // Callback to notify parent when project PR state changes
@@ -140,4 +142,9 @@ export interface UnifiedWorkflowsProps {
   codeownersAggregateStatus?: string;
   /** Called after a CODEOWNERS draft is saved locally so the parent can refresh status. */
   onCodeownersSaved?: () => void;
+
+  /** Shared, workspace-wide catalog of imported Actions Projects, surfaced in the GUI step editor. */
+  importedActions?: import('../api/actionsProjects').ActionsProject[];
+  /** Shared, workspace-wide Action Groups, used to filter the GUI step editor's action picker. */
+  actionGroups?: import('../api/actionGroups').ActionGroup[];
 }

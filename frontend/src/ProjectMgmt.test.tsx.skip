@@ -13,8 +13,8 @@ const mockLoadProject = jest.fn();
 const mockGetSecrets = jest.fn();
 const mockGetEnvVars = jest.fn();
 
-vi.mock('react-router-dom', () => ({
-  ...jest.requireActual<any>('react-router-dom'),
+vi.mock('react-router', () => ({
+  ...jest.requireActual<any>('react-router'),
   useNavigate: () => mockNavigate,
   useParams: () => mockUseParams(),
 }));

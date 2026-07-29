@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { FileText, FilePlus2, Upload } from 'lucide-react';
+import { Button } from './ui/button';
 import YAMLEditor from './YAMLEditor';
 import type { WorkflowDiagnostic } from './YAMLEditor';
 import ValidationPanel from './ValidationPanel';
@@ -11,6 +13,8 @@ import WorkflowStatusBadge, { WorkflowStatus } from './WorkflowStatusBadge';
 import ConfirmDialog from './ConfirmDialog';
 import { WorkflowGUI, guiToYaml } from '../utils/workflowGuiConversion';
 import { UnifiedWorkflowItem, ProjectPRState } from '../types/workflow';
+import { ActionsProject } from '../api/actionsProjects';
+import { ActionGroup } from '../api/actionGroups';
 import {
   normalizeWorkflowStem,
   validateWorkflowName,
@@ -118,6 +122,8 @@ interface UnifiedWorkflowEditorProps {
   projectName: string;
   /** Repositories linked to this project (format: "owner/repo"). Used for "Open in GitHub" links. */
   selectedRepos?: string[];
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
   setEditMode: (mode: 'yaml' | 'gui') => void;
   setRegularGuiWorkflow: (workflow: WorkflowGUI) => void;
   setGuiWorkflow: (workflow: WorkflowGUI) => void;
@@ -131,6 +137,10 @@ interface UnifiedWorkflowEditorProps {
   deleteWorkflow: (index: number, type: 'regular' | 'reusable') => void;
   /** Unlink a linked reusable workflow from this project (removes association only). */
   unlinkWorkflow?: (workflowId: number) => Promise<void>;
+  /** Opens the workflow-creation dialog — surfaced in the empty state when nothing is selected. */
+  addWorkflowFn?: () => void;
+  /** Opens the existing-workflow import panel — surfaced in the empty state when nothing is selected. */
+  onImportExisting?: () => void;
 }
 
 interface WorkflowEditorHeaderProps {
@@ -167,6 +177,8 @@ interface WorkflowEditorContentProps {
   handleWorkflowChange: (field: string, value: string) => void;
   setRegularGuiWorkflow: (workflow: WorkflowGUI) => void;
   setGuiWorkflow: (workflow: WorkflowGUI) => void;
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
 }
 
 const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
@@ -635,7 +647,9 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
   guiWorkflow,
   handleWorkflowChange,
   setRegularGuiWorkflow,
-  setGuiWorkflow
+  setGuiWorkflow,
+  importedActions,
+  actionGroups
 }) => {
   const [yamlDiagnostics, setYamlDiagnostics] = useState<WorkflowDiagnostic[]>([]);
   const isRegular = selectedWorkflow.type === 'regular';
@@ -696,12 +710,16 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
       key={selectedWorkflow.id}
       workflow={regularGuiWorkflow}
       onChange={handleGUIChange}
+      importedActions={importedActions}
+      actionGroups={actionGroups}
     />
   ) : (
     <ReusableGUIWorkflowEditor
       key={selectedWorkflow.id}
       workflow={guiWorkflow}
       onChange={handleGUIChange}
+      importedActions={importedActions}
+      actionGroups={actionGroups}
     />
   );
 };
@@ -718,6 +736,8 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   user,
   projectName,
   selectedRepos = [],
+  importedActions,
+  actionGroups,
   setEditMode,
   setRegularGuiWorkflow,
   setGuiWorkflow,
@@ -727,7 +747,9 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   commitAndUpdatePR,
   commitAndUpdatePRLinked,
   deleteWorkflow,
-  unlinkWorkflow
+  unlinkWorkflow,
+  addWorkflowFn,
+  onImportExisting
 }) => {
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -788,10 +810,27 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
 
   if (!selectedWorkflow) {
     return (
-      <div className="no-workflow-selected">
-        <div className="no-workflow-content">
-          <h3>Select a workflow to edit</h3>
-          <p>Choose a workflow from the list on the left to start editing, or create a new one using the buttons above.</p>
+      <div className="unified-workflows-editor unified-workflows-empty-state">
+        <div className="empty-state-card">
+          <FileText className="empty-state-icon" aria-hidden="true" />
+          <h3>Select a project file</h3>
+          <p>Choose a workflow or file from the panel on the left to begin editing.</p>
+          {(addWorkflowFn || onImportExisting) && (
+            <div className="empty-state-actions">
+              {!isReadOnly && addWorkflowFn && (
+                <Button onClick={addWorkflowFn}>
+                  <FilePlus2 className="h-4 w-4" aria-hidden="true" />
+                  Add Workflow
+                </Button>
+              )}
+              {onImportExisting && (
+                <Button variant="outline" onClick={onImportExisting}>
+                  <Upload className="h-4 w-4" aria-hidden="true" />
+                  Import Existing
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -839,6 +878,8 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
             handleWorkflowChange={handleWorkflowChange}
             setRegularGuiWorkflow={setRegularGuiWorkflow}
             setGuiWorkflow={setGuiWorkflow}
+            importedActions={importedActions}
+            actionGroups={actionGroups}
           />
           {showLockOverlay && (
             <div className="workflow-lock-overlay" data-testid="workflow-lock-overlay">

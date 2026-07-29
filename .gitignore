@@ -69,6 +69,10 @@ frontend/playwright-report/
 frontend/test-results/
 frontend/playwright/.cache/
 
+# docs:screenshots video output — generated locally/in CI, copied to
+# runner-local storage rather than committed (unlike the PNG screenshots)
+docs/assets/videos/
+
 # Testing
 .tox/
 .pytest_cache/

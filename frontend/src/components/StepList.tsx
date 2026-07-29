@@ -1,15 +1,19 @@
 import React from 'react';
 import StepCard from './StepCard';
 import { WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
+import { ActionsProject } from '../api/actionsProjects';
+import { ActionGroup } from '../api/actionGroups';
 
 interface StepListProps {
   steps: WorkflowStep[];
   onChange: (steps: WorkflowStep[]) => void;
   validationErrors: ValidationError[];
   jobIndex: number;
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
 }
 
-const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, jobIndex }) => {
+const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, jobIndex, importedActions, actionGroups }) => {
   const updateStep = (index: number, updatedStep: WorkflowStep) => {
     const newSteps = [...steps];
     newSteps[index] = updatedStep;
@@ -66,6 +70,8 @@ const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, 
             onMoveDown={index < steps.length - 1 ? () => moveStep(index, index + 1) : undefined}
             onDuplicate={() => duplicateStep(index)}
             validationErrors={getStepErrors(index)}
+            importedActions={importedActions}
+            actionGroups={actionGroups}
           />
         ))
       )}

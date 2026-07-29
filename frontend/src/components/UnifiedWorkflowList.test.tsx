@@ -450,4 +450,36 @@ describe('UnifiedWorkflowList', () => {
       });
     });
   });
+
+  describe('Add File button', () => {
+    it('renders and calls addWorkflowFn directly when clicked', async () => {
+      const user = userEvent.setup();
+      const addWorkflowFn = jest.fn();
+
+      render(<UnifiedWorkflowList {...baseProps} addWorkflowFn={addWorkflowFn} unifiedWorkflows={[]} />);
+
+      const button = screen.getByRole('button', { name: '+ Add File' });
+      await user.click(button);
+      expect(addWorkflowFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not render when addWorkflowFn is not provided, even if other file actions are available', () => {
+      render(
+        <UnifiedWorkflowList
+          {...baseProps}
+          unifiedWorkflows={[]}
+          codeownersRepos={['owner/repo']}
+          onSelectCodeowners={jest.fn()}
+        />
+      );
+
+      expect(screen.queryByRole('button', { name: '+ Add File' })).not.toBeInTheDocument();
+    });
+
+    it('does not render when the list is collapsed', () => {
+      render(<UnifiedWorkflowList {...baseProps} isCollapsed addWorkflowFn={jest.fn()} unifiedWorkflows={[]} />);
+
+      expect(screen.queryByRole('button', { name: '+ Add File' })).not.toBeInTheDocument();
+    });
+  });
 });

@@ -266,7 +266,9 @@ test.describe("RWX linked workflow visibility in standard project", () => {
     await page.goto(`/project/${TEST_USER}/workflow-page-links`);
 
     await page.getByRole("button", { name: "+ Add File" }).click();
-    await expect(page.getByRole("button", { name: "Workflow", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button").filter({ has: page.getByRole("heading", { name: "Workflow", exact: true }) }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Link Reusable Workflow" })).toBeVisible();
     await page.getByRole("button", { name: /Link Reusable Workflow/i }).click();
 

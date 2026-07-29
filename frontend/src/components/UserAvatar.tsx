@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useTheme } from './ThemeContext';
 import { ChevronDown, Sun, Moon, LogOut } from 'lucide-react';
 import { getGitHubTokenStatus, removeGitHubToken, saveGitHubToken, testGitHubToken } from '../api/user';

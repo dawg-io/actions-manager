@@ -45,6 +45,7 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
   setLinkedWorkflows,
   canLinkReusableWorkflows = false,
   onLinkReusableWorkflow,
+  onImportExisting,
   refreshProjectsList,
   onProjectStateChange,
   driftedWorkflowNames,
@@ -55,6 +56,8 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
   codeownersRefreshCounter,
   codeownersAggregateStatus,
   onCodeownersSaved,
+  importedActions = [],
+  actionGroups = [],
 }) => {
   // Project Files: custom file and codeowners selection
   const [selectedCustomFileId, setSelectedCustomFileId] = useState<number | null>(null);
@@ -242,12 +245,10 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
         setIsCollapsed={state.setIsCollapsed}
         handleSelectWorkflow={handleSelectWorkflow}
         addWorkflowFn={operations.openWorkflowCreationDialog}
-        linkReusableWorkflowFn={canLinkReusableWorkflows ? onLinkReusableWorkflow : undefined}
         driftedWorkflowNames={driftedWorkflowNames}
         customFiles={customFiles}
         selectedCustomFileId={selectedCustomFileId}
         onSelectCustomFile={handleSelectCustomFile}
-        onAddCustomFile={() => handleSelectCustomFile(ADD_CUSTOM_FILE_SENTINEL)}
         codeownersRepos={selectedRepos}
         selectedCodeownersRepo={selectedCodeownersRepo}
         onSelectCodeowners={handleSelectCodeowners}
@@ -293,6 +294,8 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
           user={user}
           projectName={projectName}
           selectedRepos={selectedRepos}
+          importedActions={importedActions}
+          actionGroups={actionGroups}
           setEditMode={state.setEditMode}
           setRegularGuiWorkflow={state.setRegularGuiWorkflow}
           setGuiWorkflow={state.setGuiWorkflow}
@@ -303,6 +306,8 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
           commitAndUpdatePRLinked={operations.handleCommitAndUpdatePRLinked}
           deleteWorkflow={operations.handleDeleteWorkflow}
           unlinkWorkflow={operations.handleUnlinkWorkflow}
+          addWorkflowFn={operations.openWorkflowCreationDialog}
+          onImportExisting={onImportExisting}
         />
       )}
       
@@ -317,6 +322,10 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
         reusableWorkflowsEnabled={reusableWorkflowsEnabled}
         showLinkReusableWorkflow={canLinkReusableWorkflows}
         existingWorkflowNames={[...workflows.map(workflow => workflow.name), ...rxworkflows.map(workflow => workflow.name)]}
+        selectedRepos={selectedRepos}
+        onAddCustomFile={() => handleSelectCustomFile(ADD_CUSTOM_FILE_SENTINEL)}
+        codeownersRepos={selectedRepos}
+        onSelectCodeowners={handleSelectCodeowners}
         setShowWorkflowCreationDialog={state.setShowWorkflowCreationDialog}
         selectWorkflowType={operations.selectWorkflowType}
         onLinkReusableWorkflow={onLinkReusableWorkflow}

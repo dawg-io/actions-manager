@@ -8,6 +8,8 @@ import {
   validateWorkflow, 
   ValidationError
 } from '../utils/workflowGuiConversion';
+import { ActionsProject } from '../api/actionsProjects';
+import { ActionGroup } from '../api/actionGroups';
 // eslint-disable-next-line no-restricted-imports -- Legacy: TODO migrate CSS file to Tailwind CSS classes
 import '../styles/GUIWorkflowEditor.css';
 
@@ -15,12 +17,16 @@ interface GUIWorkflowEditorProps {
   workflow: WorkflowGUI;
   onChange: (workflow: WorkflowGUI) => void;
   onValidationChange?: (errors: ValidationError[]) => void;
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
 }
 
-const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({ 
-  workflow, 
-  onChange, 
-  onValidationChange 
+const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
+  workflow,
+  onChange,
+  onValidationChange,
+  importedActions,
+  actionGroups
 }) => {
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
 
@@ -225,6 +231,8 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
           jobs={workflow.jobs}
           onChange={handleJobsChange}
           validationErrors={validationErrors}
+          importedActions={importedActions}
+          actionGroups={actionGroups}
         />
       </div>
 

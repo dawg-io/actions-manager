@@ -1,14 +1,18 @@
 import React, { useCallback } from 'react';
 import JobCard from './JobCard';
 import { WorkflowJob, ValidationError } from '../utils/workflowGuiConversion';
+import { ActionsProject } from '../api/actionsProjects';
+import { ActionGroup } from '../api/actionGroups';
 
 interface JobListProps {
   jobs: WorkflowJob[];
   onChange: (jobs: WorkflowJob[]) => void;
   validationErrors: ValidationError[];
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
 }
 
-const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors }) => {
+const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors, importedActions, actionGroups }) => {
   const updateJob = useCallback((index: number, updatedJob: WorkflowJob) => {
     const newJobs = [...jobs];
     newJobs[index] = updatedJob;
@@ -70,6 +74,8 @@ const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors }) =
             onDuplicate={() => duplicateJob(index)}
             validationErrors={getJobErrors(index)}
             availableJobIds={jobs.map(j => j.id).filter((_, i) => i !== index)}
+            importedActions={importedActions}
+            actionGroups={actionGroups}
           />
         ))
       )}

@@ -1,8 +1,11 @@
 /* eslint-disable no-restricted-syntax -- Legacy: TODO migrate inline styles to Tailwind CSS classes */
 import React, { useState, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, useParams, Navigate, Link} from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, useParams, Navigate, Link} from "react-router";
 import ProjectMgmt from "./ProjectMgmt";
 import NewProject from "./NewProject";
+import ActionsProjectsList from "./ActionsProjectsList";
+import AddActionsProject from "./AddActionsProject";
+import ActionsProjectDetail from "./ActionsProjectDetail";
 import DarkModeToggle from "./components/DarkModeToggle";
 import BrandLogo from "./components/BrandLogo";
 import WorkspaceMembers from "./components/WorkspaceMembers";
@@ -217,19 +220,31 @@ function App(): React.ReactElement {
               <Routes>
                 <Route
                   path="/project/:user/:projectName"
-                  element={user ? <ProjectMgmtWrapper userDetails={userDetails} onLogout={handleLogout} /> : <Navigate to="/" replace />}
+                  element={<ProjectMgmtWrapper userDetails={userDetails} onLogout={handleLogout} />}
                 />
                 <Route
                   path="/project/:user/new"
-                  element={user ? <NewProjectWrapper /> : <Navigate to="/" replace />}
+                  element={<NewProjectWrapper />}
                 />
                 <Route
                   path="/project/:user"
-                  element={user ? <ProjectMgmtWrapper userDetails={userDetails} onLogout={handleLogout} /> : <Navigate to="/" replace />}
+                  element={<ProjectMgmtWrapper userDetails={userDetails} onLogout={handleLogout} />}
                 />
                 <Route
                   path="/workspace/members"
-                  element={user ? <WorkspaceMembersWrapper currentUser={user || ""} currentUserRole={userDetails?.workspace_role} onLogout={handleLogout} /> : <Navigate to="/" replace />}
+                  element={<WorkspaceMembersWrapper currentUser={user || ""} currentUserRole={userDetails?.workspace_role} onLogout={handleLogout} />}
+                />
+                <Route
+                  path="/project/:user/actions-projects/new"
+                  element={<AddActionsProjectWrapper />}
+                />
+                <Route
+                  path="/project/:user/actions-projects/:actionsProjectId"
+                  element={<ActionsProjectDetailWrapper />}
+                />
+                <Route
+                  path="/project/:user/actions-projects"
+                  element={<ActionsProjectsListWrapper />}
                 />
                 <Route path="*" element={<Navigate to={`/project/${user}`} replace />} />
               </Routes>
@@ -350,6 +365,57 @@ function ProjectMgmtWrapper({ userDetails, onLogout }: ProjectMgmtWrapperProps):
 function NewProjectWrapper(): React.ReactElement {
   const { user } = useParams<{ user: string }>();
   return <NewProject user={user || ""} />;
+}
+
+// Shared header for the standalone Actions Projects pages (list/add/detail).
+function ActionsProjectsPageShell({
+  user,
+  children,
+}: {
+  readonly user: string;
+  readonly children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="w-full min-h-screen bg-background dark:bg-background-dark">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border dark:border-border-dark">
+        <BrandLogo variant="full" size="sm" />
+        <Link
+          to={`/project/${user}`}
+          className="text-sm text-text-secondary dark:text-secondary-dark hover:text-text-primary dark:hover:text-text-primary-dark transition-colors"
+        >
+          ← Back to Projects
+        </Link>
+      </div>
+      <div className="p-6">{children}</div>
+    </div>
+  );
+}
+
+function ActionsProjectsListWrapper(): React.ReactElement {
+  const { user } = useParams<{ user: string }>();
+  return (
+    <ActionsProjectsPageShell user={user || ""}>
+      <ActionsProjectsList user={user || ""} />
+    </ActionsProjectsPageShell>
+  );
+}
+
+function AddActionsProjectWrapper(): React.ReactElement {
+  const { user } = useParams<{ user: string }>();
+  return (
+    <ActionsProjectsPageShell user={user || ""}>
+      <AddActionsProject user={user || ""} />
+    </ActionsProjectsPageShell>
+  );
+}
+
+function ActionsProjectDetailWrapper(): React.ReactElement {
+  const { user, actionsProjectId } = useParams<{ user: string; actionsProjectId: string }>();
+  return (
+    <ActionsProjectsPageShell user={user || ""}>
+      <ActionsProjectDetail user={user || ""} actionsProjectId={Number(actionsProjectId)} />
+    </ActionsProjectsPageShell>
+  );
 }
 
 // Wrapper for workspace members page with header/navigation

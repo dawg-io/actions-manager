@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import StepList from './StepList';
 import { WorkflowJob, WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
+import { ActionsProject } from '../api/actionsProjects';
+import { ActionGroup } from '../api/actionGroups';
 
 interface JobCardProps {
   job: WorkflowJob;
@@ -12,6 +14,8 @@ interface JobCardProps {
   onDuplicate: () => void;
   validationErrors: ValidationError[];
   availableJobIds: string[];
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
 }
 
 const RUNNER_OPTIONS = [
@@ -34,7 +38,9 @@ const JobCard: React.FC<JobCardProps> = memo(({
   onMoveDown,
   onDuplicate,
   validationErrors,
-  availableJobIds
+  availableJobIds,
+  importedActions,
+  actionGroups
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -372,6 +378,8 @@ const JobCard: React.FC<JobCardProps> = memo(({
               onChange={handleStepsChange}
               validationErrors={validationErrors}
               jobIndex={jobIndex}
+              importedActions={importedActions}
+              actionGroups={actionGroups}
             />
             <button
               type="button"

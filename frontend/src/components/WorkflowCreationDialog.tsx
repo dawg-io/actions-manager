@@ -21,6 +21,10 @@ interface WorkflowCreationDialogProps {
   reusableWorkflowsEnabled: boolean;
   showLinkReusableWorkflow?: boolean;
   existingWorkflowNames?: string[];
+  selectedRepos: string[];
+  onAddCustomFile?: () => void;
+  codeownersRepos?: string[];
+  onSelectCodeowners?: (repo: string) => void;
   setShowWorkflowCreationDialog: (show: boolean) => void;
   selectWorkflowType: (type: 'regular' | 'reusable') => void;
   onLinkReusableWorkflow?: () => void;
@@ -43,6 +47,10 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
   reusableWorkflowsEnabled,
   showLinkReusableWorkflow = false,
   existingWorkflowNames = [],
+  selectedRepos,
+  onAddCustomFile,
+  codeownersRepos,
+  onSelectCodeowners,
   setShowWorkflowCreationDialog,
   selectWorkflowType,
   onLinkReusableWorkflow,
@@ -83,6 +91,18 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
     onLinkReusableWorkflow();
   };
 
+  const handleAddCustomFile = () => {
+    if (!onAddCustomFile) return;
+    setShowWorkflowCreationDialog(false);
+    onAddCustomFile();
+  };
+
+  const handleSelectCodeownersCard = () => {
+    if (!onSelectCodeowners) return;
+    setShowWorkflowCreationDialog(false);
+    onSelectCodeowners(codeownersRepos?.[0] ?? selectedRepos[0]);
+  };
+
   const renderWorkflowNameField = () => (
     <div className="space-y-2">
       <label htmlFor="workflow-name" className="block text-sm font-medium text-slate-900 dark:text-slate-100">
@@ -117,16 +137,16 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
     <Dialog open={showWorkflowCreationDialog} onOpenChange={setShowWorkflowCreationDialog}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create New Workflow</DialogTitle>
+          <DialogTitle>Add Project File</DialogTitle>
           <DialogDescription className="sr-only">
-            Create a new workflow by selecting type and creation method including blank, templates, or detection
+            Add a project file by selecting a file type, then a creation method including blank, templates, or detection
           </DialogDescription>
         </DialogHeader>
-        
+
         {!workflowCreationType ? (
           <div className="space-y-4">
             <p className="text-slate-600 dark:text-slate-400">
-              What type of workflow would you like to create?
+              What would you like to add?
             </p>
             
             <div className="grid gap-4">
@@ -138,7 +158,7 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
                   <div className="text-3xl">📝</div>
                   <div className="flex-1">
                     <h4 className="font-semibold text-lg text-slate-900 mb-1 dark:text-slate-100">
-                      Regular Workflow
+                      Workflow
                     </h4>
                     <p className="text-sm text-slate-600 dark:text-slate-400">
                       Standard CI/CD workflows that run directly in repositories
@@ -187,6 +207,44 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
                       </h4>
                       <p className="text-sm text-slate-600 dark:text-slate-400">
                         Connect an existing reusable workflow from an RWX project to this caller project
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              )}
+
+              {onAddCustomFile && (
+                <button
+                  className="border-2 border-slate-200 rounded-lg p-4 hover:border-blue-500 transition-all text-left dark:border-slate-700 dark:hover:border-blue-400"
+                  onClick={handleAddCustomFile}
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="text-3xl">📄</div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-lg text-slate-900 mb-1 dark:text-slate-100">
+                        Custom File
+                      </h4>
+                      <p className="text-sm text-slate-600 dark:text-slate-400">
+                        Add any other file to this project's repository
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              )}
+
+              {codeownersRepos && codeownersRepos.length > 0 && onSelectCodeowners && (
+                <button
+                  className="border-2 border-slate-200 rounded-lg p-4 hover:border-blue-500 transition-all text-left dark:border-slate-700 dark:hover:border-blue-400"
+                  onClick={handleSelectCodeownersCard}
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="text-3xl">👥</div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-lg text-slate-900 mb-1 dark:text-slate-100">
+                        CODEOWNERS
+                      </h4>
+                      <p className="text-sm text-slate-600 dark:text-slate-400">
+                        Manage code ownership rules for this repository
                       </p>
                     </div>
                   </div>
@@ -276,7 +334,7 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
         ) : (
           <div className="space-y-4">
             <h4 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              {workflowCreationType === 'regular' ? '📝 Regular Workflow Options' : '🔄 Reusable Workflow Options'}
+              {workflowCreationType === 'regular' ? '📝 Workflow Options' : '🔄 Reusable Workflow Options'}
             </h4>
             {renderWorkflowNameField()}
             

@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.exc import OperationalError
-import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files
+import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups
 from database import engine, Base, SessionLocal
 from models import Account, WorkspaceMember
 import config
@@ -229,6 +229,8 @@ app.include_router(project_memberships.router, prefix="/api")
 app.include_router(codeowners.router)
 app.include_router(workflow_import.router)
 app.include_router(custom_files.router)
+app.include_router(actions_projects.router)
+app.include_router(action_groups.router)
 
 # Conditionally include marketplace webhooks router only in cloud mode
 if config.INSTALLATION_MODE == "cloud":

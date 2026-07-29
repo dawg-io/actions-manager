@@ -155,6 +155,23 @@ def _validate_secure_connection(request: Request) -> None:
     )
 
 
+def _get_client_ip(request: Request) -> str:
+    """Best-effort client IP for logging and per-IP throttling.
+
+    Trusts X-Forwarded-For - this app sits behind nginx, and uvicorn is
+    started with --forwarded-allow-ips limited to the local proxy (see
+    Dockerfile.self-hosted), so the header is set by a trusted hop, not the
+    raw client. nginx's proxy_set_header X-Forwarded-For
+    $proxy_add_x_forwarded_for APPENDS to whatever the client already sent,
+    so the trusted value is the LAST entry, not the first - the first is
+    whatever the client put there and is trivially spoofable.
+    """
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    if "," in client_ip:  # X-Forwarded-For can contain multiple IPs
+        client_ip = client_ip.split(",")[-1].strip()
+    return client_ip
+
+
 _PAT_KDF_ITERATIONS = 600_000
 
 
@@ -389,6 +406,79 @@ class OAuthStateStore:
 
 # ✅ Store OAuth state parameters for CSRF protection
 oauth_states = OAuthStateStore()
+
+
+class _AuthRateLimiter:
+    """
+    Sliding-window request throttle for unauthenticated/lightly-authenticated
+    auth endpoints, keyed by (bucket, client IP).
+
+    This is separate from rate_limiter.py's per-account GitHub API budget:
+    that one only applies once an Account row exists and tracks calls made
+    *to* GitHub, whereas this one guards ActionsManager's own auth endpoints
+    (OAuth callback, PAT token validation/save) against being hammered
+    directly - there is no account yet on /auth/token's first call, and PAT
+    test/save should not let a session be used to brute-force token checks.
+
+    In-memory and per-process: correct for this app's single-uvicorn-worker
+    deployment (see start.sh / Dockerfile.self-hosted). Would need a shared
+    store (e.g. Redis) if the backend ever ran multiple worker processes.
+    """
+
+    def __init__(self, max_requests: int, window_seconds: float) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._hits: dict[tuple[str, str], list[float]] = {}
+
+    def check(self, bucket: str, client_ip: str) -> bool:
+        """Record one request attempt for (bucket, client_ip).
+
+        Returns False if this caller is already at/over the limit for this
+        bucket within the current window and should be rejected - the
+        attempt itself is not counted in that case.
+        """
+        now = time.monotonic()
+        window_start = now - self.window_seconds
+        key = (bucket, client_ip)
+
+        self._cleanup_expired(window_start)
+
+        hits = [t for t in self._hits.get(key, []) if t > window_start]
+        if len(hits) >= self.max_requests:
+            self._hits[key] = hits
+            return False
+        hits.append(now)
+        self._hits[key] = hits
+        return True
+
+    def _cleanup_expired(self, window_start: float) -> None:
+        """Drop keys with no hits left in the window, so the dict doesn't
+        grow unbounded across distinct IPs over the process lifetime."""
+        empty_keys = [
+            key for key, hits in self._hits.items()
+            if not any(t > window_start for t in hits)
+        ]
+        for key in empty_keys:
+            del self._hits[key]
+
+
+# ✅ Per-IP throttle for unauthenticated auth endpoints - configurable so
+# self-hosted operators can loosen/tighten it without a code change.
+AUTH_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("AUTH_RATE_LIMIT_MAX_REQUESTS", "20"))
+AUTH_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60"))
+auth_rate_limiter = _AuthRateLimiter(AUTH_RATE_LIMIT_MAX_REQUESTS, AUTH_RATE_LIMIT_WINDOW_SECONDS)
+
+
+def _enforce_auth_rate_limit(bucket: str, request: Request) -> None:
+    """Raise 429 if this client IP has exceeded the throttle for `bucket`."""
+    client_ip = _get_client_ip(request)
+    if not auth_rate_limiter.check(bucket, client_ip):
+        debug_log(f"⚠️ Rate limit exceeded for auth bucket '{bucket}' from {client_ip}")
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please wait a moment and try again.",
+        )
+
 
 # ✅ Utility function to get the correct API endpoints based on account type
 def get_github_api_endpoints(username, db_session=None):
@@ -973,21 +1063,20 @@ def github_auth():
         f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&redirect_uri={redirect_uri}&scope=repo,workflow,read:org,user:email&state={state}"
     )
 
-@router.get("/auth/callback")
+@router.get("/auth/callback", responses={429: {"description": "Too many requests"}})
 def github_callback(code: str, state: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Handles GitHub OAuth callback with CSRF protection via state validation."""
-    
+    _enforce_auth_rate_limit("auth_callback", request)
+
     # Security: Validate state parameter before processing
     if not state or not oauth_states.validate_and_consume(state):
         debug_log("❌ OAuth callback rejected: invalid or expired state parameter")
         return {"error": "Invalid or expired authentication request. Please try logging in again."}
-    
+
     try:
         # Get client IP address
-        client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-        if "," in client_ip:  # X-Forwarded-For can contain multiple IPs
-            client_ip = client_ip.split(",")[0].strip()
-        
+        client_ip = _get_client_ip(request)
+
         # Step 1: Exchange code for access token
         access_token = _exchange_code_for_token(code)
         
@@ -1037,21 +1126,20 @@ def github_callback(code: str, state: str, request: Request, db: Annotated[Sessi
         return {"error": "Authentication failed"}
 
 
-@router.post("/auth/token")
+@router.post("/auth/token", responses={429: {"description": "Too many requests"}})
 def github_token_login(payload: GitHubTokenRequest, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]):
     """Authenticate directly with a GitHub token and persist it as the preferred credential."""
+    _enforce_auth_rate_limit("auth_token", request)
     # Security: Validate secure connection for PAT login
     _validate_secure_connection(request)
-    
+
     token = _validate_github_token_format(payload.token)
     validation_result = _validate_github_token(token)
     public_validation_result = _public_validation_result(validation_result)
     if validation_result.get("status") == PermissionStatus.TOKEN_INVALID:
         raise HTTPException(status_code=401, detail="GitHub token is invalid or expired.")
 
-    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-    if "," in client_ip:
-        client_ip = client_ip.split(",")[0].strip()
+    client_ip = _get_client_ip(request)
 
     username, email, avatar_url, github_account_type = _fetch_user_info(token)
     billing_data = _fetch_marketplace_data(username, github_account_type, token)
@@ -1141,9 +1229,10 @@ def get_saved_github_token_status(username: str, request: Request, db: Annotated
     return _user_pat_status_payload(user)
 
 
-@router.post("/api/user/{username}/github-token/test")
+@router.post("/api/user/{username}/github-token/test", responses={429: {"description": "Too many requests"}})
 def test_github_token(username: str, payload: GitHubTokenRequest, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Validate a one-time GitHub token without persisting it."""
+    _enforce_auth_rate_limit("pat_test", request)
     _ensure_request_user(request, username, db)
     # Security: Validate secure connection for PAT operations
     _validate_secure_connection(request)
@@ -1156,9 +1245,10 @@ def test_github_token(username: str, payload: GitHubTokenRequest, request: Reque
     return _public_validation_result(validation_result)
 
 
-@router.put("/api/user/{username}/github-token")
+@router.put("/api/user/{username}/github-token", responses={429: {"description": "Too many requests"}})
 def save_github_token(username: str, payload: GitHubTokenRequest, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Validate and persist a GitHub PAT/OAuth token for server-side resolution."""
+    _enforce_auth_rate_limit("pat_save", request)
     _ensure_request_user(request, username, db)
     # Security: Validate secure connection for PAT operations
     _validate_secure_connection(request)

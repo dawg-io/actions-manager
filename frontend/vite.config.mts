@@ -29,7 +29,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/jest-compat.ts', './src/setupTests.ts'],
     css: true,
-    exclude: ['e2e/**', '**/node_modules/**'],
+    exclude: ['e2e/**', 'docs-screenshots/**', '**/node_modules/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'clover', 'json'],

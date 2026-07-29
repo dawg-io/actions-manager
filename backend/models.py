@@ -98,6 +98,7 @@ class Account(Base):
 
     projects = relationship("Project", back_populates="user")
     workspace_membership = relationship("WorkspaceMember", back_populates="user", uselist=False)
+    actions_projects = relationship("ActionsProject", back_populates="user")
 
 
 class WorkspaceMember(Base):
@@ -222,6 +223,53 @@ class Project(Base):
     last_modified_by = Column(String(255), nullable=True)  # GitHub username of last editor
 
     user = relationship("Account", back_populates="projects")
+
+
+class ActionsProject(Base):
+    """A single custom GitHub Action imported from a repo's actions.yaml.
+
+    Unlike Project (standard/rwx), this has no branch/PR/drift state — it's
+    just a saved reference to an action plus its editable default inputs.
+    """
+    __tablename__ = "actions_projects"
+
+    actions_project_id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey(_FK_ACCOUNTS_USER_ID, ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    source_url = Column(String(500), nullable=False)  # Original pasted GitHub URL
+    owner = Column(String(255), nullable=False)
+    repo = Column(String(255), nullable=False)
+    ref = Column(String(255), nullable=False)  # branch, tag, or commit SHA
+    yaml_path = Column(String(500), nullable=False, default="actions.yaml")
+    inputs_json = Column(Text, nullable=False, default="[]")  # JSON list of {name, description, required, default}
+    branding_icon = Column(String(50), nullable=True)  # Feather icon name from action.yml branding
+    branding_color = Column(String(20), nullable=True)  # GitHub's fixed branding color enum
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    last_modified_by = Column(String(255), nullable=True)  # GitHub username of last editor
+
+    user = relationship("Account", back_populates="actions_projects")
+
+
+class ActionGroup(Base):
+    """A user-created, shared, workspace-wide label for organizing ActionsProjects."""
+    __tablename__ = "action_groups"
+
+    action_group_id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    last_modified_by = Column(String(255), nullable=True)  # GitHub username of last editor
+
+
+class ActionGroupMembership(Base):
+    """Many-to-many relationship table between ActionGroups and ActionsProjects"""
+    __tablename__ = "action_group_memberships"
+
+    action_group_id = Column(Integer, ForeignKey("action_groups.action_group_id", ondelete="CASCADE"), primary_key=True)
+    actions_project_id = Column(Integer, ForeignKey("actions_projects.actions_project_id", ondelete="CASCADE"), primary_key=True)
 
 
 class ProjectWorkflow(Base):

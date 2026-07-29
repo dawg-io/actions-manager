@@ -7,7 +7,7 @@ const mockNavigate = jest.fn();
 const mockUseParams = jest.fn();
 
 vi.mock(
-  "react-router-dom",
+  "react-router",
   () => ({
     useNavigate: () => mockNavigate,
     useParams: () => mockUseParams(),

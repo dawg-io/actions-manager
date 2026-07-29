@@ -15,6 +15,7 @@ describe('WorkflowCreationDialog', () => {
     detectedBuildTypesState: [],
     isGeneratingTemplates: false,
     reusableWorkflowsEnabled: true,
+    selectedRepos: ['owner/repo'],
     setShowWorkflowCreationDialog: jest.fn(),
     selectWorkflowType: jest.fn(),
     createBlankWorkflow: jest.fn(),
@@ -33,17 +34,61 @@ describe('WorkflowCreationDialog', () => {
 
   test('should not render when showWorkflowCreationDialog is false', () => {
     render(<WorkflowCreationDialog {...defaultProps} showWorkflowCreationDialog={false} />);
-    expect(screen.queryByText('Create New Workflow')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add Project File')).not.toBeInTheDocument();
   });
 
   test('should render workflow type selection when workflowCreationType is null', () => {
     render(<WorkflowCreationDialog {...defaultProps} />);
-    
-    expect(screen.getByText('Create New Workflow')).toBeInTheDocument();
-    expect(screen.getByText('What type of workflow would you like to create?')).toBeInTheDocument();
-    expect(screen.getByText('Regular Workflow')).toBeInTheDocument();
+
+    expect(screen.getByText('Add Project File')).toBeInTheDocument();
+    expect(screen.getByText('What would you like to add?')).toBeInTheDocument();
+    expect(screen.getByText('Workflow')).toBeInTheDocument();
     expect(screen.getByText('Reusable Workflow')).toBeInTheDocument();
     expect(screen.queryByText('Link Reusable Workflow')).not.toBeInTheDocument();
+    expect(screen.queryByText('Custom File')).not.toBeInTheDocument();
+    expect(screen.queryByText('CODEOWNERS')).not.toBeInTheDocument();
+  });
+
+  test('should render custom file and codeowners options when provided', async () => {
+    const onAddCustomFile = jest.fn();
+    const onSelectCodeowners = jest.fn();
+    render(
+      <WorkflowCreationDialog
+        {...defaultProps}
+        onAddCustomFile={onAddCustomFile}
+        codeownersRepos={['owner/repo']}
+        onSelectCodeowners={onSelectCodeowners}
+      />
+    );
+
+    expect(screen.getByText('Custom File')).toBeInTheDocument();
+    expect(screen.getByText('CODEOWNERS')).toBeInTheDocument();
+
+    await user.click(screen.getByText('Custom File').closest('button') as HTMLElement);
+    expect(defaultProps.setShowWorkflowCreationDialog).toHaveBeenCalledWith(false);
+    expect(onAddCustomFile).toHaveBeenCalledTimes(1);
+  });
+
+  test('clicking CODEOWNERS closes dialog and selects the first codeowners repo', async () => {
+    const onSelectCodeowners = jest.fn();
+    render(
+      <WorkflowCreationDialog
+        {...defaultProps}
+        codeownersRepos={['owner/repo-a', 'owner/repo-b']}
+        onSelectCodeowners={onSelectCodeowners}
+      />
+    );
+
+    await user.click(screen.getByText('CODEOWNERS').closest('button') as HTMLElement);
+    expect(defaultProps.setShowWorkflowCreationDialog).toHaveBeenCalledWith(false);
+    expect(onSelectCodeowners).toHaveBeenCalledWith('owner/repo-a');
+  });
+
+  test('should not render custom file or codeowners options when not provided', () => {
+    render(<WorkflowCreationDialog {...defaultProps} />);
+
+    expect(screen.queryByText('Custom File')).not.toBeInTheDocument();
+    expect(screen.queryByText('CODEOWNERS')).not.toBeInTheDocument();
   });
 
   test('should render link reusable workflow option for caller projects when enabled', () => {
@@ -127,15 +172,15 @@ describe('WorkflowCreationDialog', () => {
   test('should always enable regular workflow button regardless of reusableWorkflowsEnabled', async () => {
     const { rerender } = render(<WorkflowCreationDialog {...defaultProps} reusableWorkflowsEnabled={false} />);
     
-    let regularWorkflowButton = screen.getByRole('button', { name: /Regular Workflow/i });
+    let regularWorkflowButton = screen.getByText('Workflow').closest('button') as HTMLElement;
     expect(regularWorkflowButton).toBeEnabled();
-    
+
     await user.click(regularWorkflowButton);
     expect(defaultProps.selectWorkflowType).toHaveBeenCalledWith('regular');
-    
+
     // Test with reusableWorkflowsEnabled true as well
     rerender(<WorkflowCreationDialog {...defaultProps} reusableWorkflowsEnabled={true} />);
-    regularWorkflowButton = screen.getByRole('button', { name: /Regular Workflow/i });
+    regularWorkflowButton = screen.getByText('Workflow').closest('button') as HTMLElement;
     expect(regularWorkflowButton).toBeEnabled();
   });
 
@@ -154,11 +199,11 @@ describe('WorkflowCreationDialog', () => {
   test('should have proper ARIA attributes for accessibility', () => {
     render(<WorkflowCreationDialog {...defaultProps} />);
     
-    const dialog = screen.getByRole('dialog', { name: /Create New Workflow/i });
+    const dialog = screen.getByRole('dialog', { name: /Add Project File/i });
     expect(dialog).toBeInTheDocument();
-    
+
     // Check for proper heading
-    const title = screen.getByRole('heading', { name: /Create New Workflow/i });
+    const title = screen.getByRole('heading', { name: /Add Project File/i });
     expect(title).toBeInTheDocument();
   });
 

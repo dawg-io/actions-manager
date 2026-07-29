@@ -59,7 +59,7 @@ describe('Sidebar', () => {
   test('collapse toggle button reflects state (via title) and calls handler', async () => {
     const onToggleCollapse = jest.fn();
 
-    const { rerender } = render(
+    const { rerender, container } = render(
       <Sidebar isCollapsed={false} onToggleCollapse={onToggleCollapse} />
     );
 
@@ -67,13 +67,19 @@ describe('Sidebar', () => {
     const collapseBtnExpanded = screen.getByTitle('Collapse sidebar');
     expect(collapseBtnExpanded).toBeInTheDocument();
 
+    // Lives in the sidebar header, next to the logo — not the old floating
+    // middle-edge control.
+    expect(container.querySelector('.sidebar-header .sidebar-collapse-button')).toBe(collapseBtnExpanded);
+    expect(container.querySelector('.sidebar-toggle')).not.toBeInTheDocument();
+
     await user.click(collapseBtnExpanded);
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
-    // Collapsed state -> title says "Expand sidebar"
+    // Collapsed state -> title says "Expand sidebar", toggle remains visible
     rerender(<Sidebar isCollapsed onToggleCollapse={onToggleCollapse} />);
     const expandBtnCollapsed = screen.getByTitle('Expand sidebar');
     expect(expandBtnCollapsed).toBeInTheDocument();
+    expect(container.querySelector('.sidebar-header .sidebar-collapse-button')).toBe(expandBtnCollapsed);
   });
 
   test('in collapsed mode, top-level section buttons expose labels via title and hide text labels', () => {

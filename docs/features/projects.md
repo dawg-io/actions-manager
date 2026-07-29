@@ -26,8 +26,6 @@ A **project** in ActionsManager is a named collection of repositories that share
 
 Instead of managing workflows repository by repository, you group related repositories into a project and apply changes to all of them in a single operation.
 
-![Saved Projects dashboard showing project cards with type, scope, state, and activity](../assets/screenshots/projects/project-view.png)
-
 ## Project Types
 
 ActionsManager uses two project types that reflect the two sides of GitHub Actions reusability:
