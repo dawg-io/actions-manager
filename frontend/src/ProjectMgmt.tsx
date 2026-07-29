@@ -2,7 +2,7 @@
 import UserAvatar from "./components/UserAvatar";
 import PlanUsagePill from "./components/PlanUsagePill";
 import BrandLogo from "./components/BrandLogo";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router";
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectName, exportProjectBackup } from "./api/projects";
 import { deleteProjectEnhanced } from "./api/projectDeletion";
@@ -15,6 +15,8 @@ import Secrets from "./components/Secrets";
 import UnifiedWorkflows from "./components/UnifiedWorkflows";
 import RulesetManager from "./components/RulesetManager";
 import type { CustomFile } from "./api/customFiles";
+import { listActionsProjects, ActionsProject } from "./api/actionsProjects";
+import { listActionGroups, ActionGroup } from "./api/actionGroups";
 import ProjectList from "./components/ProjectList";
 import RepositoriesAndBranches from "./components/RepositoriesAndBranches";
 import DeployEnvironments from "./components/DeployEnvironments";
@@ -173,6 +175,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   const [workflows, setWorkflows] = useState<ProjectWorkflow[]>([]);
   const [rxworkflows, setRXWorkflows] = useState<ProjectRXWorkflow[]>([]);
   const [customFiles, setCustomFiles] = useState<CustomFile[]>([]);
+  const [importedActions, setImportedActions] = useState<ActionsProject[]>([]);
+  const [actionGroups, setActionGroups] = useState<ActionGroup[]>([]);
   const [envVars, setEnvVars] = useState<ProjectEnvVar[]>([]);
   const [manualEnvVars, setManualEnvVars] = useState<ProjectEnvVar[]>([]);
   const [regexPattern, setRegexPattern] = useState<string>("");
@@ -784,6 +788,20 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           setAccountType((updatedProjects[0] as any).account_type);
         }
       });
+    }
+  }, [user]);
+
+  // Imported Actions Projects (shared, workspace-wide catalog surfaced in the
+  // GUI workflow editor's step picker). Failure is non-fatal - this only
+  // enhances a form, it shouldn't block the editor from loading.
+  useEffect(() => {
+    if (user) {
+      listActionsProjects(user)
+        .then(setImportedActions)
+        .catch((err) => console.warn("Failed to load imported Actions Projects:", err));
+      listActionGroups(user)
+        .then(setActionGroups)
+        .catch((err) => console.warn("Failed to load Action Groups:", err));
     }
   }, [user]);
 
@@ -1399,6 +1417,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
             setLinkedWorkflows={projectType === 'standard' ? setLinkedWorkflows : undefined}
             canLinkReusableWorkflows={projectType === 'standard' && !isProjectReadOnly}
             onLinkReusableWorkflow={projectType === 'standard' && !isProjectReadOnly ? handleOpenLinkModal : undefined}
+            onImportExisting={!isProjectReadOnly && selectedRepos.length > 0 ? () => setShowWorkflowImport(true) : undefined}
             refreshProjectsList={refreshProjectsList}
             onProjectStateChange={handleProjectStateChange}
             driftedWorkflowNames={driftedWorkflowNames}
@@ -1417,6 +1436,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
             codeownersRefreshCounter={codeownersRefreshCounter}
             codeownersAggregateStatus={codeownersAggregateStatus ?? undefined}
             onCodeownersSaved={() => setCodeownersRefreshCounter(prev => prev + 1)}
+            importedActions={importedActions}
+            actionGroups={actionGroups}
           />
         </div>
       </div>

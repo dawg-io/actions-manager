@@ -1,5 +1,6 @@
 /* eslint-disable no-restricted-syntax -- Legacy: TODO migrate inline styles to Tailwind CSS classes */
-import React, { useState, useRef, useEffect } from 'react';
+import React from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { UnifiedWorkflowItem } from '../types/workflow';
 import { normalizeWorkflowFilename } from '../utils/workflowFilename';
 import WorkflowStatusBadge from './WorkflowStatusBadge';
@@ -73,15 +74,14 @@ interface UnifiedWorkflowListProps {
   repoExists: boolean;
   setIsCollapsed: (collapsed: boolean) => void;
   handleSelectWorkflow: (workflowId: string) => void;
+  /** Opens the Add Project File dialog (Workflow / Reusable Workflow / Link Reusable Workflow / Custom File / CODEOWNERS). */
   addWorkflowFn?: () => void;
-  linkReusableWorkflowFn?: () => void;
   /** Set of workflow names currently drifted on GitHub (renders an amber badge). */
   driftedWorkflowNames?: Set<string>;
   // Project Files: Custom Files
   customFiles?: CustomFile[];
   selectedCustomFileId?: number | null;
   onSelectCustomFile?: (id: number) => void;
-  onAddCustomFile?: () => void;
   // Project Files: CODEOWNERS
   codeownersRepos?: string[];
   selectedCodeownersRepo?: string | null;
@@ -160,34 +160,15 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
   setIsCollapsed,
   handleSelectWorkflow,
   addWorkflowFn,
-  linkReusableWorkflowFn,
   driftedWorkflowNames,
   customFiles,
   selectedCustomFileId,
   onSelectCustomFile,
-  onAddCustomFile,
   codeownersRepos,
   selectedCodeownersRepo,
   onSelectCodeowners,
   codeownersAggregateStatus,
 }) => {
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const addMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!addMenuOpen) return;
-    const close = (e: MouseEvent) => {
-      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
-        setAddMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [addMenuOpen]);
-
-  const hasAnyAddAction = addWorkflowFn || linkReusableWorkflowFn || onAddCustomFile ||
-    (codeownersRepos && codeownersRepos.length > 0 && onSelectCodeowners);
-
   const isDrifted = (name?: string) =>
     !!(name && driftedWorkflowNames?.has(name));
 
@@ -239,52 +220,26 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
           {!isCollapsed && <h4>📁 Project Files</h4>}
           {isCollapsed && <h4>📁</h4>}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-          {!isCollapsed && hasAnyAddAction && (
-            <div style={{ position: 'relative' }} ref={addMenuRef}>
-              <button
-                className="btn btn-primary"
-                style={{ fontSize: '0.8rem', padding: '0.3rem 0.7rem', whiteSpace: 'nowrap' }}
-                onClick={() => setAddMenuOpen(o => !o)}
-                aria-haspopup="true"
-                aria-expanded={addMenuOpen}
-              >
-                + Add File
-              </button>
-              {addMenuOpen && (
-                <div className="add-file-menu add-file-menu-below">
-                  {addWorkflowFn && (
-                    <button className="add-file-menu-item" onClick={() => { addWorkflowFn(); setAddMenuOpen(false); }}>
-                      <span aria-hidden="true">📝</span> Workflow
-                    </button>
-                  )}
-                  {linkReusableWorkflowFn && (
-                    <button className="add-file-menu-item" onClick={() => { linkReusableWorkflowFn(); setAddMenuOpen(false); }}>
-                      <span aria-hidden="true">🔗</span> Link Reusable Workflow
-                    </button>
-                  )}
-                  {onAddCustomFile && (
-                    <button className="add-file-menu-item" onClick={() => { onAddCustomFile(); setAddMenuOpen(false); }}>
-                      <span aria-hidden="true">📄</span> Custom File
-                    </button>
-                  )}
-                  {codeownersRepos && codeownersRepos.length > 0 && onSelectCodeowners && (
-                    <button className="add-file-menu-item" onClick={() => { onSelectCodeowners(codeownersRepos?.[0] ?? selectedRepos[0]); setAddMenuOpen(false); }}>
-                      <span aria-hidden="true">👥</span> CODEOWNERS
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+        <div className="workflows-list-header-actions">
+          {!isCollapsed && addWorkflowFn && (
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: '0.8rem', padding: '0.3rem 0.7rem', whiteSpace: 'nowrap' }}
+              onClick={addWorkflowFn}
+            >
+              + Add File
+            </button>
           )}
           <button
             className="workflows-list-toggle"
             onClick={() => setIsCollapsed(!isCollapsed)}
             title={isCollapsed ? 'Expand workflows list' : 'Collapse workflows list'}
           >
-            <span className="workflows-list-toggle-arrow">
-              {isCollapsed ? '►' : '◄'}
-            </span>
+            {isCollapsed ? (
+              <ChevronRight className="workflows-list-toggle-icon" />
+            ) : (
+              <ChevronLeft className="workflows-list-toggle-icon" />
+            )}
           </button>
         </div>
       </div>

@@ -93,6 +93,7 @@ export interface ProjectStub {
   created_at?: string;
   last_modified_by?: string;
   linked_reusable_workflows?: any[];
+  project_color?: string;
 }
 
 export function makeProject(overrides: Partial<ProjectStub> = {}): ProjectStub {
@@ -247,16 +248,16 @@ function buildCampaignsResponse(state: MockState) {
   const status = campaignStatus(open, merged, closed);
   const campaigns = total === 0 ? [] : [{
     campaign_id: "campaign-e2e",
-    campaign_name: "Update ci.yml",
+    campaign_name: prs[0]?.title ?? "Update ci.yml",
     campaign_status: status,
     project_name: project?.project_name ?? "demo-project",
     project_code: project?.project_code ?? "DEMO",
-    created_by: TEST_USER,
+    created_by: prs[0]?.author ?? TEST_USER,
     created_at: prs[0]?.created_at ?? "2025-01-02T00:00:00Z",
     updated_at: prs[0]?.updated_at ?? "2025-01-02T00:00:00Z",
     completed_at: status === "open" ? null : "2025-01-02T00:00:00Z",
     target_branches: Array.from(new Set(prs.map((pr) => pr.target_branch))),
-    workflow_names: [PHASE2_WORKFLOWS.CI],
+    workflow_names: [prs[0]?.workflow_names ?? PHASE2_WORKFLOWS.CI],
     repositories: Array.from(new Set(prs.map((pr) => pr.repo_name))),
     open_count: open,
     merged_count: merged,

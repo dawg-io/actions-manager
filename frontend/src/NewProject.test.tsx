@@ -41,7 +41,7 @@ async function continueFromStep2(u: ReturnType<typeof userEvent.setup>) {
 const mockNavigate = jest.fn();
 
 vi.mock(
-  'react-router-dom',
+  'react-router',
   () => ({
     useNavigate: () => mockNavigate,
   }),

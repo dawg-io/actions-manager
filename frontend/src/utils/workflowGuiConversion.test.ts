@@ -74,6 +74,54 @@ jobs:
       expect(result.events[0].inputs?.environment.required).toBe(true);
     });
 
+    test('should handle workflow_dispatch event with inputs', () => {
+      const yaml = `name: Manual Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploying"`;
+
+      const result = yamlToGui(yaml);
+
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0].type).toBe('workflow_dispatch');
+      expect(result.events[0].inputs).toBeDefined();
+      expect(result.events[0].inputs?.environment).toBeDefined();
+      expect(result.events[0].inputs?.environment.required).toBe(true);
+      expect(result.events[0].inputs?.environment.type).toBe('choice');
+      expect(result.events[0].inputs?.environment.options).toEqual(['staging', 'production']);
+    });
+
+    test('should handle push event with tags', () => {
+      const yaml = `name: Release
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5`;
+
+      const result = yamlToGui(yaml);
+
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0].type).toBe('push');
+      expect(result.events[0].tags).toEqual(['v*']);
+    });
+
     test('should handle schedule event', () => {
       const yaml = `name: Scheduled
 on:
@@ -288,6 +336,60 @@ jobs:
       expect(result).toContain('required: true');
     });
 
+    test('should convert workflow_dispatch event with inputs to YAML', () => {
+      const gui: WorkflowGUI = {
+        name: 'Manual Deploy',
+        events: [
+          {
+            type: 'workflow_dispatch',
+            inputs: {
+              environment: {
+                description: 'Environment',
+                required: true,
+                type: 'string',
+                default: 'staging'
+              }
+            }
+          }
+        ],
+        jobs: [
+          {
+            id: 'deploy',
+            runsOn: 'ubuntu-latest',
+            steps: [{ id: 'deploy', run: 'echo deploying' }]
+          }
+        ]
+      };
+
+      const result = guiToYaml(gui);
+
+      expect(result).toContain('workflow_dispatch:');
+      expect(result).toContain('inputs:');
+      expect(result).toContain('environment:');
+      expect(result).toContain('required: true');
+    });
+
+    test('should convert push event with tags to YAML', () => {
+      const gui: WorkflowGUI = {
+        name: 'Release',
+        events: [{ type: 'push', tags: ['v*'] }],
+        jobs: [
+          {
+            id: 'release',
+            runsOn: 'ubuntu-latest',
+            steps: [{ id: 'checkout', uses: 'actions/checkout@v5' }]
+          }
+        ]
+      };
+
+      const result = guiToYaml(gui);
+
+      expect(result).toContain('push:');
+      expect(result).toContain('tags:');
+      expect(result).toContain('v*');
+      expect(result).not.toContain('tag_push');
+    });
+
     test('should preserve environment variables in YAML', () => {
       const gui: WorkflowGUI = {
         name: 'With Env',
@@ -446,6 +548,68 @@ jobs:
       expect(convertedYaml).toContain('workflow_call:');
       expect(convertedYaml).toContain('inputs:');
       expect(convertedYaml).toContain('environment:');
+    });
+
+    test('should not drop workflow_dispatch inputs through YAML -> GUI -> YAML conversion', () => {
+      // Regression test: workflow_dispatch.inputs was previously silently
+      // dropped by parseEvents/serializeEvents, which only handled
+      // workflow_call.inputs - a manually-triggered workflow's inputs would
+      // vanish the moment a user switched from YAML mode to GUI mode and back.
+      const originalYaml = `name: Manual Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo deploying`;
+
+      const gui = yamlToGui(originalYaml);
+      const convertedYaml = guiToYaml(gui);
+      const guiAgain = yamlToGui(convertedYaml);
+
+      expect(convertedYaml).toContain('workflow_dispatch:');
+      expect(convertedYaml).toContain('inputs:');
+      expect(convertedYaml).toContain('environment:');
+      expect(guiAgain.events[0].inputs?.environment).toBeDefined();
+      expect(guiAgain.events[0].inputs?.environment.required).toBe(true);
+      expect(guiAgain.events[0].inputs?.environment.options).toEqual(['staging', 'production']);
+    });
+
+    test('should not corrupt tag-triggered push workflows through conversion', () => {
+      // Regression test: the editor previously exposed a "Tag Push" trigger
+      // that serialized to an invalid `tag_push:` YAML key (not a real
+      // GitHub Actions event - GitHub silently ignores it, so the workflow
+      // never actually triggers). Tag-triggered pushes are really the `push`
+      // event filtered by `tags:`.
+      const originalYaml = `name: Release
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5`;
+
+      const gui = yamlToGui(originalYaml);
+      const convertedYaml = guiToYaml(gui);
+      const guiAgain = yamlToGui(convertedYaml);
+
+      expect(convertedYaml).not.toContain('tag_push');
+      expect(convertedYaml).toContain('push:');
+      expect(convertedYaml).toContain('tags:');
+      expect(guiAgain.events[0].type).toBe('push');
+      expect(guiAgain.events[0].tags).toEqual(['v*']);
     });
   });
 

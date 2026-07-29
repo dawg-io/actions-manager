@@ -141,11 +141,41 @@ describe('UnifiedWorkflowEditor', () => {
     jest.clearAllMocks();
   });
 
-  test('renders no-workflow-selected message when no workflow is selected', () => {
+  test('renders empty-state card when no workflow is selected', () => {
     render(<UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} />);
-    
-    expect(screen.getByText('Select a workflow to edit')).toBeInTheDocument();
-    expect(screen.getByText(/Choose a workflow from the list/)).toBeInTheDocument();
+
+    expect(screen.getByText('Select a project file')).toBeInTheDocument();
+    expect(screen.getByText(/Choose a workflow or file from the panel on the left/)).toBeInTheDocument();
+  });
+
+  test('empty state Add Workflow button invokes addWorkflowFn and is hidden when read-only', async () => {
+    const addWorkflowFn = jest.fn();
+    const { rerender } = render(
+      <UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} addWorkflowFn={addWorkflowFn} />
+    );
+
+    const addButton = screen.getByRole('button', { name: /Add Workflow/i });
+    await user.click(addButton);
+    expect(addWorkflowFn).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} addWorkflowFn={addWorkflowFn} isReadOnly />
+    );
+    expect(screen.queryByRole('button', { name: /Add Workflow/i })).not.toBeInTheDocument();
+  });
+
+  test('empty state Import Existing button invokes onImportExisting and is absent when not provided', async () => {
+    const onImportExisting = jest.fn();
+    const { rerender } = render(
+      <UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} onImportExisting={onImportExisting} />
+    );
+
+    const importButton = screen.getByRole('button', { name: /Import Existing/i });
+    await user.click(importButton);
+    expect(onImportExisting).toHaveBeenCalledTimes(1);
+
+    rerender(<UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} />);
+    expect(screen.queryByRole('button', { name: /Import Existing/i })).not.toBeInTheDocument();
   });
 
   test('renders regular workflow editor in YAML mode', () => {

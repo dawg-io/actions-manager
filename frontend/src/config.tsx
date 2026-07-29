@@ -3,6 +3,7 @@ interface Config {
   FRONTEND_URL: string | undefined;
   BACKEND_URL: string | undefined;
   WEBSOCKET_URL: string | undefined;
+  APP_VERSION: string | undefined;
 }
 
 // Derive the runtime origin from the browser's current location.
@@ -46,6 +47,7 @@ const config: Config = {
     import.meta.env.VITE_WEBSOCKET_URL ||
     _wsFromAppUrl ||
     (_wsProtocol && _host ? `${_wsProtocol}//${_host}/ws` : undefined),
+  APP_VERSION: import.meta.env.VITE_APP_VERSION,
 };
 
 export default config;

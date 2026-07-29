@@ -8,7 +8,7 @@ import ProjectList from './ProjectList';
 const mockNavigate = jest.fn();
 
 vi.mock(
-  'react-router-dom',
+  'react-router',
   () => ({
     useNavigate: () => mockNavigate,
   }),
@@ -61,19 +61,14 @@ describe('ProjectList', () => {
     expect(screen.queryByTestId('project-open-Alpha')).not.toBeInTheDocument();
   });
 
-  test('renders projects in outlined list items with balanced column lanes', () => {
+  test('renders projects as a responsive two-column card grid', () => {
     renderProjectList();
-    const columnHeader = screen.getByText('Project').closest('.project-list-grid');
-    expect(columnHeader).not.toBeNull();
-    expect(within(columnHeader as HTMLElement).getByText('Type')).toBeInTheDocument();
-    expect(within(columnHeader as HTMLElement).getByText('Scope')).toBeInTheDocument();
-    expect(within(columnHeader as HTMLElement).getByText('State')).toBeInTheDocument();
-    expect(within(columnHeader as HTMLElement).getByText('Activity')).toBeInTheDocument();
-    expect(within(columnHeader as HTMLElement).getByText('Updated')).toBeInTheDocument();
-    expect(within(columnHeader as HTMLElement).getByText('Workflows')).toBeInTheDocument();
-    expect(within(columnHeader as HTMLElement).getByText('Actions')).toBeInTheDocument();
-    expect(document.querySelectorAll('.project-list-grid').length).toBeGreaterThan(0);
-    expect(screen.getByTestId('project-row-Alpha')).toHaveClass('rounded-lg');
+
+    const grid = screen.getByTestId('project-row-Alpha').parentElement;
+    expect(grid).toHaveClass('grid');
+    expect(grid).toHaveClass('sm:grid-cols-2');
+    expect(screen.getByTestId('project-row-Alpha')).toBeInTheDocument();
+    expect(screen.getByTestId('project-row-Beta')).toBeInTheDocument();
   });
 
   test('no user -> does not navigate when clicking a project', async () => {
@@ -89,15 +84,16 @@ describe('ProjectList', () => {
   });
 
   describe('Project Color Accent', () => {
-    test('applies the project_color as a left border accent', () => {
+    test('applies the project_color as a tinted icon background and icon color', () => {
       renderProjectList({
         projects: [
           { id: 1, project_name: 'Purple', project_code: 'P1', updated_at: '2024-01-01T00:00:00Z', project_color: 'purple' as any },
         ],
       });
 
-      const row = screen.getByTestId('project-row-Purple');
-      expect(row.className).toContain('border-l-purple-500');
+      const iconContainer = screen.getByTestId('project-icon-1');
+      expect(iconContainer.className).toContain('bg-purple-500/10');
+      expect(iconContainer.querySelector('svg')?.getAttribute('class')).toContain('text-purple-500');
     });
 
     test('falls back to blue when project_color is missing or unknown', () => {
@@ -108,14 +104,12 @@ describe('ProjectList', () => {
         ],
       });
 
-      const missingRow = screen.getByTestId('project-row-Missing');
-      const unknownRow = screen.getByTestId('project-row-Unknown');
-      expect(missingRow.className).toContain('border-l-blue-500');
-      expect(unknownRow.className).toContain('border-l-blue-500');
+      expect(screen.getByTestId('project-icon-1').className).toContain('bg-blue-500/10');
+      expect(screen.getByTestId('project-icon-2').className).toContain('bg-blue-500/10');
     });
   });
 
-  describe('Project Status Summary Cards', () => {
+  describe('Project Status Filter Pills', () => {
     test('shows counts derived from loaded project states', () => {
       renderProjectList({
         projects: [
@@ -135,13 +129,11 @@ describe('ProjectList', () => {
         ],
       });
 
-      const summary = within(screen.getByRole('region', { name: /Project status summary/i }));
-
-      expect(within(summary.getByTestId('project-summary-card-total-projects')).getByText('5')).toBeInTheDocument();
-      expect(within(summary.getByTestId('project-summary-card-synced')).getByText('1')).toBeInTheDocument();
-      expect(within(summary.getByTestId('project-summary-card-draft-local-changes')).getByText('2')).toBeInTheDocument();
-      expect(within(summary.getByTestId('project-summary-card-under-review')).getByText('1')).toBeInTheDocument();
-      expect(within(summary.getByTestId('project-summary-card-needs-attention')).getByText('1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-all')).getByText('5')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-synced')).getByText('1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-draft')).getByText('2')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-review')).getByText('1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-needs_attention')).getByText('1')).toBeInTheDocument();
     });
 
     test('counts one drifted project even when multiple workflows are drifted', () => {
@@ -163,21 +155,20 @@ describe('ProjectList', () => {
         ],
       });
 
-      const summary = within(screen.getByRole('region', { name: /Project status summary/i }));
-      expect(within(summary.getByTestId('project-summary-card-needs-attention')).getByText('1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-needs_attention')).getByText('1')).toBeInTheDocument();
     });
 
     test('shows zero counts when there are no projects', () => {
       renderProjectList({ projects: [] });
 
-      expect(within(screen.getByTestId('project-summary-card-total-projects')).getByText('0')).toBeInTheDocument();
-      expect(within(screen.getByTestId('project-summary-card-synced')).getByText('0')).toBeInTheDocument();
-      expect(within(screen.getByTestId('project-summary-card-draft-local-changes')).getByText('0')).toBeInTheDocument();
-      expect(within(screen.getByTestId('project-summary-card-under-review')).getByText('0')).toBeInTheDocument();
-      expect(within(screen.getByTestId('project-summary-card-needs-attention')).getByText('0')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-all')).getByText('0')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-synced')).getByText('0')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-draft')).getByText('0')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-review')).getByText('0')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-needs_attention')).getByText('0')).toBeInTheDocument();
     });
 
-    test('keeps synced summary aligned with synced row state when drift is unknown', () => {
+    test('keeps synced pill count aligned with synced row state when drift is unknown', () => {
       renderProjectList({
         projects: [
           {
@@ -191,9 +182,54 @@ describe('ProjectList', () => {
         ],
       });
 
-      const summary = within(screen.getByRole('region', { name: /Project status summary/i }));
-      expect(within(summary.getByTestId('project-summary-card-synced')).getByText('1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-synced')).getByText('1')).toBeInTheDocument();
       expect(within(screen.getByTestId('project-status-1')).getByText('Synced')).toBeInTheDocument();
+    });
+  });
+
+  describe('Status Filter Pills and Select Stay In Sync', () => {
+    test('clicking a pill updates the status select value and filters cards', async () => {
+      renderProjectList({
+        projects: [
+          { id: 1, project_name: 'Drafty', project_code: 'D1', updated_at: '2024-01-01T00:00:00Z', pr_state: 'draft' },
+          { id: 2, project_name: 'Syncedy', project_code: 'S1', updated_at: '2024-01-01T00:00:00Z', pr_state: 'synced' },
+        ],
+      });
+
+      await user.click(screen.getByTestId('project-status-pill-synced'));
+
+      expect(screen.getByTestId('project-status-filter')).toHaveValue('synced');
+      expect(screen.getByTestId('project-status-pill-synced')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 1 of 2');
+      expect(screen.getByTestId('project-row-Syncedy')).toBeInTheDocument();
+      expect(screen.queryByTestId('project-row-Drafty')).not.toBeInTheDocument();
+    });
+
+    test('selecting a status option updates the matching pill', async () => {
+      renderProjectList({
+        projects: [
+          { id: 1, project_name: 'Drafty', project_code: 'D1', updated_at: '2024-01-01T00:00:00Z', pr_state: 'draft' },
+        ],
+      });
+
+      await user.selectOptions(screen.getByTestId('project-status-filter'), 'draft');
+      expect(screen.getByTestId('project-status-pill-draft')).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    test('clicking the active pill again clears the status filter back to All', async () => {
+      renderProjectList({
+        projects: [
+          { id: 1, project_name: 'Drafty', project_code: 'D1', updated_at: '2024-01-01T00:00:00Z', pr_state: 'draft' },
+          { id: 2, project_name: 'Syncedy', project_code: 'S1', updated_at: '2024-01-01T00:00:00Z', pr_state: 'synced' },
+        ],
+      });
+
+      await user.click(screen.getByTestId('project-status-pill-draft'));
+      expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 1 of 2');
+
+      await user.click(screen.getByTestId('project-status-pill-draft'));
+      expect(screen.getByTestId('project-status-filter')).toHaveValue('all');
+      expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 2 of 2');
     });
   });
 
@@ -294,8 +330,7 @@ describe('ProjectList', () => {
       });
 
       expect(within(screen.getByTestId('project-status-1')).getByText('Needs Sync')).toBeInTheDocument();
-      const summary = within(screen.getByRole('region', { name: /Project status summary/i }));
-      expect(within(summary.getByTestId('project-summary-card-needs-attention')).getByText('1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('project-status-pill-needs_attention')).getByText('1')).toBeInTheDocument();
     });
   });
 
@@ -410,13 +445,15 @@ describe('ProjectList', () => {
       expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 1 of 3');
       expect(screen.getByTestId('project-row-RwxPrivateNoPrefix')).toBeInTheDocument();
 
+      await user.click(screen.getByTestId('more-filters-trigger'));
       await user.selectOptions(screen.getByTestId('project-visibility-filter'), 'private');
       expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 1 of 3');
 
       await user.selectOptions(screen.getByTestId('project-naming-mode-filter'), 'no_prefix');
       expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 1 of 3');
+      await user.keyboard('{Escape}');
 
-      await user.selectOptions(screen.getByTestId('project-status-filter'), 'open');
+      await user.selectOptions(screen.getByTestId('project-status-filter'), 'review');
       expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('Showing 1 of 3');
       expect(screen.getByTestId('project-row-RwxPrivateNoPrefix')).toBeInTheDocument();
     });
@@ -505,6 +542,17 @@ describe('ProjectList', () => {
       );
       openSpy.mockRestore();
     });
+
+    test('clicking the action-menu trigger does not navigate the card', async () => {
+      renderProjectList({
+        projects: [
+          { id: 1, project_name: 'Drafty', project_code: 'D1', updated_at: '2024-01-01T00:00:00Z', pr_state: 'draft' },
+        ],
+      });
+
+      await user.click(screen.getByTestId('project-more-Drafty'));
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
   });
 
   test('does not render a "Create RWX Repository" button (removed per UX improvement)', () => {
@@ -513,15 +561,38 @@ describe('ProjectList', () => {
     expect(screen.queryByRole('button', { name: /Create RWX Repository/i })).not.toBeInTheDocument();
   });
 
-  test('renders New Project in the Saved Projects header, outside the filter toolbar', async () => {
+  test('renders New Project and Managed Actions alongside the status pills, not the title row or toolbar', async () => {
     const onCreateProject = jest.fn();
     renderProjectList({ onCreateProject });
 
     const newProjectButton = screen.getByTestId('new-project-button');
+    const managedActionsButton = screen.getByTestId('actions-projects-nav-button');
     expect(newProjectButton).toBeInTheDocument();
+    expect(managedActionsButton).toBeInTheDocument();
+
+    expect(screen.getByRole('heading', { name: 'Projects' }).closest('div')).not.toContainElement(newProjectButton);
+    expect(screen.getByRole('heading', { name: 'Projects' }).closest('div')).not.toContainElement(managedActionsButton);
     expect(within(screen.getByTestId('projects-toolbar')).queryByTestId('new-project-button')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('projects-toolbar')).queryByTestId('actions-projects-nav-button')).not.toBeInTheDocument();
+
+    const statusPills = screen.getByRole('region', { name: /Project status summary/i });
+    expect(statusPills.parentElement).toContainElement(newProjectButton);
+    expect(statusPills.parentElement).toContainElement(managedActionsButton);
 
     await user.click(newProjectButton);
     expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
+
+  test('New Project respects the disabled state', () => {
+    renderProjectList({ onCreateProject: jest.fn(), isCreateProjectDisabled: true });
+
+    expect(screen.getByTestId('new-project-button')).toBeDisabled();
+  });
+
+  test('Managed Actions navigates from its new location', async () => {
+    renderProjectList();
+
+    await user.click(screen.getByTestId('actions-projects-nav-button'));
+    expect(mockNavigate).toHaveBeenCalledWith('/project/alice/actions-projects');
   });
 });

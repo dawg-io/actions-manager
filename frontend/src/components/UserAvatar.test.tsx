@@ -12,10 +12,10 @@ const mockMatchMedia = jest.fn((query) => ({
 
 globalThis.matchMedia = mockMatchMedia;
 
-// Mock react-router-dom
+// Mock react-router
 const mockNavigate = jest.fn();
 vi.mock(
-  'react-router-dom',
+  'react-router',
   () => ({
     useNavigate: () => mockNavigate,
   }),

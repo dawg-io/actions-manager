@@ -1,5 +1,9 @@
 # Base stage: Setup dependencies
-FROM python:3.12-slim AS base
+# Shared, weekly-patched base image (base-images/backend/Dockerfile +
+# .github/workflows/base-images.yml) instead of building the OS layer fresh
+# from python:3.12-slim on every CI run - see that Dockerfile for what it
+# contains.
+FROM ghcr.io/dawg-io/actions-manager/base-backend:latest AS base
 
 # Set the working directory
 WORKDIR /app

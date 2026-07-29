@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-syntax -- Legacy: TODO migrate inline styles to Tailwind CSS classes */
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { fetchRepos, fetchRwxRepos } from "./api/repos";
 import { saveProject, fetchProjects } from "./api/projects";
 import { getUserDetails } from "./api/user";

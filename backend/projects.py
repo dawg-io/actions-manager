@@ -1,5 +1,6 @@
 import hashlib
 import json
+import pathlib
 import random
 import re
 import string
@@ -56,7 +57,21 @@ _ERR_INTERNAL_VALIDATION = "Internal server error during project validation"
 _ERR_INSUFFICIENT_PROJECT_ROLE = "Insufficient project permissions. Required: project_editor"
 BACKUP_SCHEMA_VERSION = "1.1"
 APP_NAME = "ActionsManager.xyz"
-APP_VERSION = "1.0.0"
+
+
+def _read_app_version() -> str:
+    """Read the release version from VERSION at the repo root (../VERSION
+    from this file). Only promote-to-public.yml ever writes a real value
+    there, and only on release/<version> branches - everywhere else (local
+    dev, dev/CI Docker images without repo-root in their build context)
+    this stays a placeholder or falls back to "dev"."""
+    try:
+        return (pathlib.Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+    except OSError:
+        return "dev"
+
+
+APP_VERSION = _read_app_version()
 
 # Allowed values for Project.repository_visibility_scope. A "mixed" option is
 # intentionally NOT included — projects must be either public-only or

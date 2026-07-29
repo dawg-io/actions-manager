@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Download,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   FileText,
   LucideIcon,
@@ -130,24 +131,26 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div className={`sidebar ${isCollapsed ? 'collapsed' : 'expanded'}${isMobileOpen ? ' mobile-open' : ''}`}>
-      {/* Toggle Button */}
-      <button 
-        className="sidebar-toggle"
-        onClick={toggleSidebar}
-        title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        <span className="sidebar-toggle-arrow">
-          {isCollapsed ? '►' : '◄'}
-        </span>
-      </button>
-      
       <div className="sidebar-header">
-        <div className="sidebar-title">
-          {isCollapsed ? (
-            <BrandLogo variant="icon" size="md" />
-          ) : (
-            <BrandLogo variant="full" size="md" />
-          )}
+        <div className="sidebar-title-row">
+          <div className="sidebar-title">
+            {isCollapsed ? (
+              <BrandLogo variant="icon" size="sm" />
+            ) : (
+              <BrandLogo variant="full" size="md" />
+            )}
+          </div>
+          <button
+            className="sidebar-collapse-button"
+            onClick={toggleSidebar}
+            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {isCollapsed ? (
+              <ChevronRight className="sidebar-collapse-icon" />
+            ) : (
+              <ChevronLeft className="sidebar-collapse-icon" />
+            )}
+          </button>
         </div>
         {(projectName || projectCode) && !isCollapsed && (
           <div className="sidebar-project">
@@ -174,24 +177,16 @@ const Sidebar: React.FC<SidebarProps> = ({
               )
             )}
             {projectCode && <span className="sidebar-project-key">Project Key: {projectCode}</span>}
-            <div className="sidebar-project-badge">
+            <div className="sidebar-project-badges">
               <ProjectTypeBadge projectType={projectType} size="sm" />
-            </div>
-            {repositoryVisibilityScope && (
-              <div className="sidebar-project-badge">
+              {repositoryVisibilityScope && (
                 <RepositoryVisibilityBadge visibilityScope={repositoryVisibilityScope} size="sm" data-testid="sidebar-project-visibility-badge" />
-              </div>
-            )}
-            {usePrefix !== undefined && (
-              <div className="sidebar-project-badge">
+              )}
+              {usePrefix !== undefined && (
                 <PrefixModeBadge usePrefix={usePrefix} size="sm" />
-              </div>
-            )}
-            {isReadOnly && (
-              <div className="sidebar-project-badge">
-                <ReadOnlyBadge size="sm" />
-              </div>
-            )}
+              )}
+              {isReadOnly && <ReadOnlyBadge size="sm" />}
+            </div>
           </div>
         )}
         {projectCode && isCollapsed && (

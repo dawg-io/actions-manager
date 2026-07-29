@@ -22,7 +22,7 @@ const mockUseParams = jest.fn();
 let capturedOnProjectNameSave: ((name: string) => void) | null = null;
 
 vi.mock(
-  "react-router-dom",
+  "react-router",
   () => ({
     useNavigate: () => mockNavigate,
     useParams: () => mockUseParams(),

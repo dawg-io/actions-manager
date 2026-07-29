@@ -363,7 +363,7 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     return (
       <AccordionItem key={campaign.campaign_id} value={campaign.campaign_id} className="pr-campaign-card">
         <AccordionTrigger className="pr-campaign-card-header">
-          <div>
+          <div className="pr-campaign-header-title">
             <div className="pr-campaign-eyebrow">Campaign: {campaign.campaign_name}</div>
             <h3>{campaign.campaign_name}</h3>
             <p>

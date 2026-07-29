@@ -1,5 +1,7 @@
-# Use official Node.js image
-FROM node:20
+# Shared, weekly-patched base image (base-images/frontend/Dockerfile +
+# .github/workflows/base-images.yml) instead of building the OS layer fresh
+# from node:24 on every CI run - see that Dockerfile for what it contains.
+FROM ghcr.io/dawg-io/actions-manager/base-frontend:latest
 
 # Set working directory
 WORKDIR /app

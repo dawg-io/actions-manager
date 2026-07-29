@@ -18,9 +18,12 @@ export interface WorkflowCallInput {
 }
 
 export interface WorkflowEvent {
-  type: 'push' | 'pull_request' | 'workflow_dispatch' | 'schedule' | 'release' | 'tag_push' | 'workflow_call';
+  type: 'push' | 'pull_request' | 'workflow_dispatch' | 'schedule' | 'release' | 'workflow_call';
   branches?: string[];
   paths?: string[];
+  /** Tag patterns for `push.tags` - GitHub Actions has no separate "tag push"
+   * event; tag-triggered pushes are the `push` event filtered by tags. */
+  tags?: string[];
   cron?: string;
   types?: string[];
   inputs?: { [key: string]: WorkflowCallInput };
@@ -220,9 +223,14 @@ function parseEvents(onField: any): WorkflowEvent[] {
           : [eventConfig.branches];
       }
       if (eventConfig.paths) {
-        event.paths = Array.isArray(eventConfig.paths) 
-          ? eventConfig.paths 
+        event.paths = Array.isArray(eventConfig.paths)
+          ? eventConfig.paths
           : [eventConfig.paths];
+      }
+      if (eventConfig.tags) {
+        event.tags = Array.isArray(eventConfig.tags)
+          ? eventConfig.tags
+          : [eventConfig.tags];
       }
       if (eventConfig.schedule && Array.isArray(eventConfig.schedule)) {
         event.cron = eventConfig.schedule[0]?.cron;
@@ -232,8 +240,11 @@ function parseEvents(onField: any): WorkflowEvent[] {
           ? eventConfig.types 
           : [eventConfig.types];
       }
-      // Handle workflow_call inputs
-      if (eventType === 'workflow_call' && eventConfig.inputs) {
+      // Handle workflow_call / workflow_dispatch inputs (same YAML shape for
+      // both - a manual-trigger workflow's `workflow_dispatch.inputs` was
+      // previously silently dropped here since only workflow_call was
+      // handled, losing data on every YAML -> GUI -> YAML round trip).
+      if ((eventType === 'workflow_call' || eventType === 'workflow_dispatch') && eventConfig.inputs) {
         event.inputs = {};
         Object.keys(eventConfig.inputs).forEach(inputName => {
           const inputConfig = eventConfig.inputs[inputName];
@@ -266,14 +277,14 @@ function serializeEvents(events: WorkflowEvent[]): any {
 
   if (events.length === 1) {
     const event = events[0];
-    if (!event.branches && !event.paths && !event.cron && !event.types && !event.inputs) {
+    if (!event.branches && !event.paths && !event.tags && !event.cron && !event.types && !event.inputs) {
       return event.type;
     }
   }
 
   const result: any = {};
   events.forEach(event => {
-    if (!event.branches && !event.paths && !event.cron && !event.types && !event.inputs) {
+    if (!event.branches && !event.paths && !event.tags && !event.cron && !event.types && !event.inputs) {
       result[event.type] = null;
     } else {
       const config: any = {};
@@ -283,14 +294,18 @@ function serializeEvents(events: WorkflowEvent[]): any {
       if (event.paths && event.paths.length > 0) {
         config.paths = event.paths;
       }
+      if (event.tags && event.tags.length > 0) {
+        config.tags = event.tags;
+      }
       if (event.types && event.types.length > 0) {
         config.types = event.types;
       }
       if (event.cron) {
         config.schedule = [{ cron: event.cron }];
       }
-      // Handle workflow_call inputs
-      if (event.type === 'workflow_call' && event.inputs) {
+      // Handle workflow_call / workflow_dispatch inputs (see matching note
+      // in parseEvents above).
+      if ((event.type === 'workflow_call' || event.type === 'workflow_dispatch') && event.inputs) {
         config.inputs = {};
         Object.keys(event.inputs).forEach(inputName => {
           const input = event.inputs![inputName];

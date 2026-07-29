@@ -47,6 +47,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: string;
     dot: string;
     icon: string;
+    iconBg: string;
     swatch: string;
     focusRing: string;
     selectedRing: string;
@@ -56,6 +57,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-blue-500 dark:border-l-blue-400',
     dot: 'bg-blue-500 dark:bg-blue-400',
     icon: 'text-blue-500 dark:text-blue-400',
+    iconBg: 'bg-blue-500/10 dark:bg-blue-400/10',
     swatch: 'bg-blue-500 dark:bg-blue-400',
     focusRing: 'peer-focus-visible:ring-blue-400/40',
     selectedRing: 'ring-blue-400/35',
@@ -64,6 +66,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-purple-500 dark:border-l-purple-400',
     dot: 'bg-purple-500 dark:bg-purple-400',
     icon: 'text-purple-500 dark:text-purple-400',
+    iconBg: 'bg-purple-500/10 dark:bg-purple-400/10',
     swatch: 'bg-purple-500 dark:bg-purple-400',
     focusRing: 'peer-focus-visible:ring-purple-400/40',
     selectedRing: 'ring-purple-400/35',
@@ -72,6 +75,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-emerald-500 dark:border-l-emerald-400',
     dot: 'bg-emerald-500 dark:bg-emerald-400',
     icon: 'text-emerald-500 dark:text-emerald-400',
+    iconBg: 'bg-emerald-500/10 dark:bg-emerald-400/10',
     swatch: 'bg-emerald-500 dark:bg-emerald-400',
     focusRing: 'peer-focus-visible:ring-emerald-400/40',
     selectedRing: 'ring-emerald-400/35',
@@ -80,6 +84,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-amber-500 dark:border-l-amber-400',
     dot: 'bg-amber-500 dark:bg-amber-400',
     icon: 'text-amber-500 dark:text-amber-400',
+    iconBg: 'bg-amber-500/10 dark:bg-amber-400/10',
     swatch: 'bg-amber-500 dark:bg-amber-400',
     focusRing: 'peer-focus-visible:ring-amber-400/40',
     selectedRing: 'ring-amber-400/35',
@@ -88,6 +93,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-rose-500 dark:border-l-rose-400',
     dot: 'bg-rose-500 dark:bg-rose-400',
     icon: 'text-rose-500 dark:text-rose-400',
+    iconBg: 'bg-rose-500/10 dark:bg-rose-400/10',
     swatch: 'bg-rose-500 dark:bg-rose-400',
     focusRing: 'peer-focus-visible:ring-rose-400/40',
     selectedRing: 'ring-rose-400/35',
@@ -96,6 +102,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-cyan-500 dark:border-l-cyan-400',
     dot: 'bg-cyan-500 dark:bg-cyan-400',
     icon: 'text-cyan-500 dark:text-cyan-400',
+    iconBg: 'bg-cyan-500/10 dark:bg-cyan-400/10',
     swatch: 'bg-cyan-500 dark:bg-cyan-400',
     focusRing: 'peer-focus-visible:ring-cyan-400/40',
     selectedRing: 'ring-cyan-400/35',
@@ -104,6 +111,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-slate-500 dark:border-l-slate-400',
     dot: 'bg-slate-500 dark:bg-slate-400',
     icon: 'text-slate-500 dark:text-slate-400',
+    iconBg: 'bg-slate-500/10 dark:bg-slate-400/10',
     swatch: 'bg-slate-500 dark:bg-slate-400',
     focusRing: 'peer-focus-visible:ring-slate-400/40',
     selectedRing: 'ring-slate-400/35',
@@ -112,6 +120,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-orange-500 dark:border-l-orange-400',
     dot: 'bg-orange-500 dark:bg-orange-400',
     icon: 'text-orange-500 dark:text-orange-400',
+    iconBg: 'bg-orange-500/10 dark:bg-orange-400/10',
     swatch: 'bg-orange-500 dark:bg-orange-400',
     focusRing: 'peer-focus-visible:ring-orange-400/40',
     selectedRing: 'ring-orange-400/35',
@@ -120,6 +129,7 @@ export const PROJECT_COLOR_STYLES: Record<
     borderLeft: 'border-l-sky-500 dark:border-l-sky-400',
     dot: 'bg-sky-500 dark:bg-sky-400',
     icon: 'text-sky-500 dark:text-sky-400',
+    iconBg: 'bg-sky-500/10 dark:bg-sky-400/10',
     swatch: 'bg-sky-500 dark:bg-sky-400',
     focusRing: 'peer-focus-visible:ring-sky-400/40',
     selectedRing: 'ring-sky-400/35',

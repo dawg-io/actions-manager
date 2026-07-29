@@ -193,6 +193,11 @@ Automatically detects and suggests workflows for:
 - GitHub OAuth and Personal Access Token authentication (see [GitHub Authentication Options](#github-authentication-options))
 - Secure token management and API access
 
+### 📦 Managed Actions
+- Shared, workspace-wide catalog of imported third-party GitHub Actions with parsed, editable inputs
+- Import from a repo URL, a direct `action.yml` file URL, or a GitHub Marketplace listing
+- Surfaces in the GUI workflow editor's step picker to pre-fill `with:` inputs — see [Managed Actions](docs/features/managed-actions.md)
+
 ### 🧪 Self-Hosted Beta Scope
 - Free during the beta period; no paid plans are currently available
 - Self-hosted only for the first public beta

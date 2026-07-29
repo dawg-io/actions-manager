@@ -647,37 +647,26 @@
   margin-bottom: 0.5rem;
 }
 
-.common-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  align-items: center;
-  margin-top: 0.5rem;
-}
-
-.common-actions-label {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-right: 0.5rem;
-}
-
-.common-action-button {
-  background: var(--primary-color);
-  color: white;
-  border: none;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
-  cursor: pointer;
-  font-size: 0.75rem;
-  transition: background-color 0.2s ease;
-}
-
-.common-action-button:hover {
-  background: var(--primary-hover);
-}
-
 .with-section {
   margin-top: 0.5rem;
+}
+
+.typed-with-list {
+  gap: 0.75rem;
+}
+
+.typed-with-item {
+  margin-bottom: 0;
+}
+
+.field-hint {
+  font-weight: normal;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.extra-params-label {
+  margin-top: 0.75rem;
 }
 
 .with-list {
