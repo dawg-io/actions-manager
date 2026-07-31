@@ -60,8 +60,8 @@ def track_github_api_call(username: str, db: Session):
             
             db.commit()
             logger.debug(f"Tracked API call for {username}: {user.github_api_calls} total, {user.github_api_calls_today} today")
-    except Exception as e:
-        logger.error(f"Failed to track API call for {username}: {e}")
+    except Exception:
+        logger.exception(f"Failed to track API call for {username}")
         db.rollback()
 
 

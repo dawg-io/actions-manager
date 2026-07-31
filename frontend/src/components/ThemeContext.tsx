@@ -45,7 +45,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     const root = document.documentElement;
     root.classList.remove('dark-theme', 'light-theme');
     root.classList.add(theme);
-    root.setAttribute('data-theme', dataTheme);
+    root.dataset.theme = dataTheme;
 
     // Mirror the class on <body> so that CSS variable declarations scoped to
     // `.dark-theme { --color-background: ... }` resolve on the element that
@@ -54,7 +54,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     // dark override inside Tailwind's @layer base cascade.
     document.body.classList.remove('dark-theme', 'light-theme');
     document.body.classList.add(theme);
-    document.body.setAttribute('data-theme', dataTheme);
+    document.body.dataset.theme = dataTheme;
 
     // Save theme preference to localStorage
     localStorage.setItem('theme', dataTheme);

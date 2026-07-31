@@ -324,6 +324,55 @@ export const handleSaveProject = async (
     }
 };
 
+// Helper function for handleSaveProjectWithModal: performs the optional
+// GitHub-sync step and reports progress, isolated so the caller's own
+// cognitive complexity doesn't also account for this branching.
+const applyGithubUpdateIfRequested = async (
+    results: string[],
+    params: SaveProjectWithModalParams
+): Promise<void> => {
+    const { onProgress = null, updateGitHub } = params;
+
+    if (!updateGitHub) {
+        if (onProgress) onProgress(100, "Save completed successfully!");
+        return;
+    }
+
+    if (onProgress) onProgress(50, "Updating GitHub repositories...");
+
+    const githubResult = await handleUpdateGitHub({
+        user: params.user,
+        selectedRepos: params.selectedRepos,
+        workflows: params.workflows,
+        rxworkflows: params.rxworkflows,
+        envVars: params.envVars,
+        manualEnvVars: params.manualEnvVars,
+        regexPattern: params.branchRegex,
+        branchOption: params.branchOption,
+        branchMaxAgeDays: params.branchMaxAgeDays,
+        secrets: params.secrets,
+        manualSecrets: params.manualSecrets,
+        projectName: params.projectName,
+        setIsCreatingProject: null,
+        setProjects: null,
+        projectId: params.projectId,
+        selectedItems: params.selectedItems,
+        deploymentEnvironments: params.deploymentEnvironments,
+        reusableWorkflowsEnabled: params.reusableWorkflowsEnabled,
+        onProgress,
+        repositoryVisibilityScope: params.repositoryVisibilityScope,
+        skipProjectSave: true // project already saved above
+    });
+
+    if (githubResult.success && githubResult?.results) {
+        results.push(...githubResult.results);
+    } else if (!githubResult.success) {
+        results.push("❌ GitHub update failed");
+    }
+
+    if (onProgress) onProgress(100, "Save completed successfully!");
+};
+
 // ✅ ================================= ✅ handleSaveProjectWithModal ✅ ================================= ✅
 export const handleSaveProjectWithModal = async (
     params: SaveProjectWithModalParams
@@ -336,11 +385,6 @@ export const handleSaveProjectWithModal = async (
             selectedRepos,
             workflows,
             rxworkflows,
-            envVars,
-            manualEnvVars,
-            secrets,
-            manualSecrets,
-            deploymentEnvironments,
             branchRegex,
             branchOption,
             branchMaxAgeDays,
@@ -388,47 +432,11 @@ export const handleSaveProjectWithModal = async (
         }
 
         const results = ["✅ Project saved to database successfully"];
-        
+
         if (onProgress) onProgress(40, "Project saved to database");
 
         // If GitHub update is requested, perform it
-        if (updateGitHub) {
-            if (onProgress) onProgress(50, "Updating GitHub repositories...");
-            
-            const githubResult = await handleUpdateGitHub({
-                user,
-                selectedRepos,
-                workflows,
-                rxworkflows,
-                envVars,
-                manualEnvVars,
-                regexPattern: branchRegex,
-                branchOption,
-                branchMaxAgeDays,
-                secrets,
-                manualSecrets,
-                projectName,
-                setIsCreatingProject: null,
-                setProjects: null,
-                projectId,
-                selectedItems,
-                deploymentEnvironments,
-                reusableWorkflowsEnabled,
-                onProgress,
-                repositoryVisibilityScope,
-                skipProjectSave: true // project already saved above
-            });
-
-            if (githubResult.success && githubResult?.results) {
-                results.push(...githubResult.results);
-            } else if (!githubResult.success) {
-                results.push("❌ GitHub update failed");
-            }
-            
-            if (onProgress) onProgress(100, "Save completed successfully!");
-        } else {
-            if (onProgress) onProgress(100, "Save completed successfully!");
-        }
+        await applyGithubUpdateIfRequested(results, params);
 
         return {
             success: true,

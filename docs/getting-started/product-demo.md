@@ -24,7 +24,7 @@ See a complete multi-repository GitHub Actions workflow rollout, start to finish
 
 <div class="video-embed">
   <iframe
-    src="https://www.youtube-nocookie.com/embed/jbG-T6M-tko"
+    src="https://www.youtube-nocookie.com/embed/WkDYK7pCBjI"
     title="ActionsManager product demo: multi-repository workflow rollout"
     frameborder="0"
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -32,11 +32,11 @@ See a complete multi-repository GitHub Actions workflow rollout, start to finish
   </iframe>
 </div>
 
-[Watch on YouTube ↗](https://youtu.be/jbG-T6M-tko){: .fs-4 }
+[Watch on YouTube ↗](https://youtu.be/WkDYK7pCBjI){: .fs-4 }
 
 Can't load the embedded player above? Watch it directly on YouTube instead:
 
-[![ActionsManager product demo thumbnail - click to watch on YouTube](https://img.youtube.com/vi/jbG-T6M-tko/maxresdefault.jpg)](https://youtu.be/jbG-T6M-tko)
+[![ActionsManager product demo thumbnail - click to watch on YouTube](https://img.youtube.com/vi/WkDYK7pCBjI/maxresdefault.jpg)](https://youtu.be/WkDYK7pCBjI)
 
 ## What's in the video
 

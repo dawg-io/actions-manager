@@ -276,6 +276,118 @@ test.describe("Drift resolution – Adopt GitHub version", () => {
   });
 });
 
+test.describe("Drift resolution – workflow status badge stays in sync without reload", () => {
+  // Regression for: after "Create Fix Pull Request", the workflow status
+  // badge kept showing "Synced" until the page was reloaded, even though
+  // the backend had already moved workflow_status to "under_review". Root
+  // cause: DriftDetection only refreshed its own drift list afterward -
+  // ProjectMgmt.tsx's workflows/rxworkflows state (which the badge reads
+  // from) was never patched. Fixed via the onWorkflowStatusesChanged
+  // callback. These tests must NOT call page.goto/reload between the
+  // resolve action and the assertion - that's the whole point.
+  test.beforeEach(async ({ page }) => {
+    await seedAuthenticatedSession(page);
+  });
+
+  test("status badge updates to Under Review immediately after creating a fix PR", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-pr-badge",
+      project_code: "DPRB",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [
+        makeWorkflow({ name: PHASE2_WORKFLOWS.CI, workflowStatus: "synced_with_github" }),
+      ],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_id: 1,
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await mockResolveDrift(page, { responseState: "pr_pending" });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-pr-badge`);
+
+    // Starting state: Synced - makes the transition below meaningful.
+    await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Synced/i, {
+      timeout: 15_000,
+    });
+
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("review-drift-button").click();
+    await expect(page.getByTestId("drift-modal")).toBeVisible();
+    await page.getByRole("button", { name: /View Diff/i }).first().click();
+    await page.getByTestId("restore-pr-button").click();
+
+    await expect(page.getByTestId("drift-modal")).toContainText(/pull request/i, { timeout: 10_000 });
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByTestId("drift-modal")).toHaveCount(0);
+
+    // No page.goto/reload between the action above and this assertion.
+    await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Under Review/i, {
+      timeout: 10_000,
+    });
+  });
+
+  test("status badge updates to Synced immediately after Restore Directly", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-direct-badge",
+      project_code: "DDRB",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [
+        makeWorkflow({ name: PHASE2_WORKFLOWS.CI, workflowStatus: "under_review" }),
+      ],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_id: 1,
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await mockResolveDrift(page, { responseState: "synced" });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-direct-badge`);
+
+    await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Under Review/i, {
+      timeout: 15_000,
+    });
+
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("review-drift-button").click();
+    await expect(page.getByTestId("drift-modal")).toBeVisible();
+    await page.getByRole("button", { name: /View Diff/i }).first().click();
+    await page.getByTestId("restore-direct-button").click();
+    await page.getByRole("button", { name: "Overwrite directly" }).click();
+
+    await expect(page.getByTestId("drift-modal")).toContainText(/resolved|restored|success/i, {
+      timeout: 10_000,
+    });
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByTestId("drift-modal")).toHaveCount(0);
+
+    // No page.goto/reload between the action above and this assertion.
+    await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Synced/i, {
+      timeout: 10_000,
+    });
+  });
+});
+
 test.describe("Drift regression – new workflows not treated as drift", () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthenticatedSession(page);

@@ -23,6 +23,8 @@ export interface PlainFileEditorProps {
   readOnly?: boolean;
   height?: string;
   theme?: 'dark' | 'light';
+  /** Accessible name for the editor's content element (it has no native label target). */
+  ariaLabel?: string;
 }
 
 function getLanguageExtension(lang?: PlainFileEditorLanguage): Extension[] {
@@ -42,6 +44,7 @@ const PlainFileEditor: React.FC<PlainFileEditorProps> = ({
   readOnly = false,
   height = '300px',
   theme = 'dark',
+  ariaLabel,
 }) => {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -93,6 +96,10 @@ const PlainFileEditor: React.FC<PlainFileEditorProps> = ({
       EditorState.tabSize.of(2),
     ];
 
+    if (ariaLabel) {
+      extensions.push(EditorView.contentAttributes.of({ 'aria-label': ariaLabel }));
+    }
+
     if (theme === 'dark') extensions.push(oneDark);
 
     const state = EditorState.create({ doc: value, extensions });
@@ -104,7 +111,7 @@ const PlainFileEditor: React.FC<PlainFileEditorProps> = ({
       viewRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height, readOnly, theme]); // Intentionally excluding value/onChange/language — see value-sync effect below
+  }, [height, readOnly, theme, ariaLabel]); // Intentionally excluding value/onChange/language — see value-sync effect below
 
   useEffect(() => {
     if (!viewRef.current || value === viewRef.current.state.doc.toString()) return;

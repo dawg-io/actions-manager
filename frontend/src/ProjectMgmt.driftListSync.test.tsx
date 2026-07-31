@@ -1,0 +1,354 @@
+/**
+ * Regression tests for drift status not syncing to the project list.
+ *
+ * Root cause: GET /api/projects/{id}/drift (fired by <DriftDetection> when a
+ * project's detail page loads) does a live GitHub check and persists the
+ * result server-side (see get_project_drift / _cache_project_drift_summary
+ * in backend/workflows.py), but the frontend's onDriftLoaded callback
+ * (handleDriftLoaded in ProjectMgmt.tsx) only updated local driftDetails
+ * state used for a save-guard - it never refreshed the `projects` list state
+ * that <ProjectList> renders. The list state was otherwise only fetched once
+ * per mount/login, so a project's drift badge stayed stale in the list until
+ * the next full reload, even though the just-viewed detail page already
+ * showed it correctly.
+ *
+ * Fix: handleDriftLoaded now also calls the existing refreshProjectsList()
+ * (the same function already used after other status-changing actions like
+ * delete/PR-campaign updates), so the list picks up the freshly-persisted
+ * drift_status without requiring navigation away/back or a reload.
+ */
+import React from "react";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import "@testing-library/jest-dom";
+
+const mockNavigate = jest.fn();
+const mockUseParams = jest.fn();
+
+// Capture DriftDetection's onDriftLoaded so tests can simulate a drift check completing
+let capturedOnDriftLoaded: ((details: unknown[]) => void) | null = null;
+
+vi.mock(
+  "react-router",
+  () => ({
+    useNavigate: () => mockNavigate,
+    useParams: () => mockUseParams(),
+    useLocation: () => ({
+      pathname: "/project/alice/proj-a",
+      search: "",
+      hash: "",
+      state: null,
+      key: "test",
+    }),
+  }),
+  { virtual: true }
+);
+
+vi.mock("./api/projects", () => ({
+  __esModule: true,
+  fetchProjects: jest.fn(),
+  loadProject: jest.fn(),
+  updateProjectName: jest.fn(),
+  updateProjectColor: jest.fn(),
+  exportProjectBackup: jest.fn(),
+  linkReusableWorkflow: jest.fn(),
+  unlinkReusableWorkflow: jest.fn(),
+}));
+
+vi.mock("./api/projectDeletion", () => ({
+  deleteProjectEnhanced: jest.fn(),
+}));
+
+vi.mock("./api/handlers", () => ({
+  handleSaveProjectWithModal: jest.fn(),
+}));
+
+vi.mock("./api/secrets", () => ({
+  getSecrets: jest.fn(),
+}));
+
+vi.mock("./api/envVars", () => ({
+  getEnvVars: jest.fn(),
+}));
+
+vi.mock("./api/pullRequests", () => ({
+  getProjectPRStatus: jest.fn(),
+}));
+
+vi.mock("./api/codeowners", () => ({
+  getProjectCodeownersStatuses: jest.fn().mockResolvedValue({ statuses: [] }),
+}));
+
+vi.mock("./components/Sidebar", () => ({
+  default: function Sidebar() {
+    return <div data-testid="sidebar" />;
+  },
+}));
+
+vi.mock("./components/ProjectList", () => ({
+  default: function ProjectList(props: any) {
+    return (
+      <div data-testid="project-list">
+        {(props.projects ?? []).map((p: any) => (
+          <span
+            key={p.id ?? p.project_id}
+            data-testid="project-drift-in-list"
+          >
+            {p.drift_status ?? "unknown"}
+          </span>
+        ))}
+      </div>
+    );
+  },
+}));
+
+vi.mock("./components/RepositoriesAndBranches", () => ({
+  default: function RepositoriesAndBranches() {
+    return <div data-testid="repositories-and-branches" />;
+  },
+}));
+
+vi.mock("./components/DeployEnvironments", () => ({
+  default: function DeployEnvironments() {
+    return <div data-testid="deploy-environments" />;
+  },
+}));
+
+vi.mock("./components/EnvVars", () => ({
+  default: function EnvVars() {
+    return <div data-testid="env-vars" />;
+  },
+}));
+
+vi.mock("./components/Secrets", () => ({
+  default: function Secrets() {
+    return <div data-testid="secrets" />;
+  },
+}));
+
+vi.mock("./components/UnifiedWorkflows", () => ({
+  default: function UnifiedWorkflows() {
+    return <div data-testid="unified-workflows" />;
+  },
+}));
+
+vi.mock("./components/RulesetManager", () => ({
+  default: function RulesetManager() {
+    return <div data-testid="rulesets" />;
+  },
+}));
+
+vi.mock("./components/CodeownersManager", () => ({
+  default: function CodeownersManager() {
+    return <div data-testid="codeowners" />;
+  },
+}));
+
+vi.mock("./components/UserAvatar", () => ({
+  default: function UserAvatar() {
+    return <div data-testid="user-avatar" />;
+  },
+}));
+
+vi.mock("./components/PlanUsagePill", () => ({
+  default: function PlanUsagePill() {
+    return null;
+  },
+}));
+
+vi.mock("./components/BrandLogo", () => ({
+  default: function BrandLogo() {
+    return null;
+  },
+}));
+
+vi.mock("./components/SaveResultsModal", () => ({
+  default: function SaveResultsModal() {
+    return null;
+  },
+}));
+
+vi.mock("./components/DeleteProjectModal", () => ({
+  default: function DeleteProjectModal() {
+    return null;
+  },
+}));
+
+vi.mock("./components/DangerZone", () => ({
+  default: function DangerZone() {
+    return null;
+  },
+}));
+
+vi.mock("./components/ProjectMembers", () => ({
+  default: function ProjectMembers() {
+    return null;
+  },
+}));
+
+// Capture onDriftLoaded instead of rendering nothing, so tests can simulate
+// a drift check completing the way the real DriftDetection component does.
+vi.mock("./components/DriftDetection", () => ({
+  default: function DriftDetection(props: any) {
+    capturedOnDriftLoaded = props.onDriftLoaded;
+    return null;
+  },
+}));
+
+vi.mock("./components/PRStatusPanel", () => ({
+  default: function PRStatusPanel() {
+    return null;
+  },
+}));
+
+vi.mock("./components/PRHistoryPanel", () => ({
+  default: function PRHistoryPanel() {
+    return null;
+  },
+}));
+
+vi.mock("./components/CreatePRModal", () => ({
+  default: function CreatePRModal() {
+    return null;
+  },
+}));
+
+vi.mock("./components/LinkedWorkflowsModal", () => ({
+  default: function LinkedWorkflowsModal() {
+    return null;
+  },
+}));
+
+vi.mock("./components/ProjectColorSelector", () => ({
+  default: function ProjectColorSelector() {
+    return null;
+  },
+}));
+
+import ProjectMgmt from "./ProjectMgmt";
+import { fetchProjects, loadProject } from "./api/projects";
+import { getSecrets } from "./api/secrets";
+import { getEnvVars } from "./api/envVars";
+import { getProjectPRStatus } from "./api/pullRequests";
+
+const userDetails = {
+  avatar_url: "https://example.com/avatar.png",
+  github_user: "alice",
+  account_type: "free",
+  github_account_type: "User" as const,
+};
+
+const baseProject = {
+  project_id: 42,
+  project_name: "proj-a",
+  project_code: "PROJA",
+  updated_at: "2024-01-01T00:00:00Z",
+  pr_state: "new" as const,
+  project_type: "standard" as const,
+};
+
+const fakeDriftDetail = {
+  workflow_id: 1,
+  workflow_name: "CI",
+  workflow_filename: "ci.yml",
+  repo: "acme/proj-a",
+  branch: "main",
+  has_drift: true,
+  actionsmanager_yaml: "name: CI\n",
+  github_yaml: "name: CI (changed)\n",
+  actionsmanager_sha: "aaa",
+  github_sha: "bbb",
+  last_checked: "2024-01-02T00:00:00Z",
+  message: "drifted",
+};
+
+function renderWithProject() {
+  return render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+}
+
+describe("ProjectMgmt – drift status syncs to project list (stale-list regression)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedOnDriftLoaded = null;
+
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+
+    (fetchProjects as jest.Mock)
+      .mockResolvedValueOnce([{ ...baseProject, drift_status: "clean" }])
+      .mockResolvedValue([{ ...baseProject, drift_status: "drifted", drift_count: 1 }]);
+
+    (loadProject as jest.Mock).mockResolvedValue({
+      project_name: "proj-a",
+      project_id: 42,
+      project_code: "PROJA",
+      selected_repos: ["acme/proj-a"],
+      workflows: [],
+      rxworkflows: [],
+      branch_regex: "",
+      branch_option: "default",
+      branch_max_age_days: 30,
+      reusable_workflows_enabled: false,
+      use_prefix: false,
+      project_type: "standard",
+      pr_state: "new",
+    });
+    (getSecrets as jest.Mock).mockResolvedValue([]);
+    (getEnvVars as jest.Mock).mockResolvedValue([]);
+    (getProjectPRStatus as jest.Mock).mockResolvedValue({
+      project_state: "new",
+      open_prs: 0,
+      merged_prs: 0,
+      total_prs: 0,
+    });
+  });
+
+  test("list reflects drift status after the detail page's drift check loads, without a reload", async () => {
+    // Start on the project list (no project selected in the URL) - mirrors
+    // the reported flow: list -> open a project -> back to list.
+    mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
+
+    const { rerender } = renderWithProject();
+
+    // Wait for the initial list fetch to land - starts out clean.
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("project-drift-in-list")).toHaveTextContent("clean")
+    );
+
+    // Navigate into the project's detail page - mounts <DriftDetection>.
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+    rerender(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+
+    await waitFor(() => expect(capturedOnDriftLoaded).not.toBeNull());
+
+    // Simulate DriftDetection completing a real drift check on the detail page.
+    act(() => {
+      capturedOnDriftLoaded!([fakeDriftDetail]);
+    });
+
+    // Regression: navigating back to the list must show the new status
+    // immediately - this only works if handleDriftLoaded also triggered a
+    // projects-list refresh while we were on the detail page.
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalledTimes(2));
+
+    mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
+    rerender(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("project-drift-in-list")).toHaveTextContent("drifted")
+    );
+  });
+
+  test("the empty-check callback (no repos selected yet) still safely refreshes the list", async () => {
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+    renderWithProject();
+
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(capturedOnDriftLoaded).not.toBeNull());
+
+    act(() => {
+      capturedOnDriftLoaded!([]);
+    });
+
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalledTimes(2));
+  });
+});

@@ -8,11 +8,11 @@ Self-hosted operators are responsible for securing their deployment, protecting 
 
 ## 🎥 See ActionsManager in Action
 
-[![Watch the ActionsManager demo on YouTube](https://img.youtube.com/vi/jbG-T6M-tko/maxresdefault.jpg)](https://youtu.be/jbG-T6M-tko)
+[![Watch the ActionsManager demo on YouTube](https://img.youtube.com/vi/WkDYK7pCBjI/maxresdefault.jpg)](https://youtu.be/WkDYK7pCBjI)
 
 Watch a complete multi-repository workflow rollout end to end. **What it covers:** PAT authentication, creating the `MavenBuilds` project, adding three repositories, build-type detection, pull request creation, pull request management, and pull request merging.
 
-**→ [Watch the full demo](https://youtu.be/jbG-T6M-tko)** &nbsp;·&nbsp; **→ [Read the demo walkthrough](https://actionsmanager.io/getting-started/product-demo)**
+**→ [Watch the full demo](https://youtu.be/WkDYK7pCBjI)** &nbsp;·&nbsp; **→ [Read the demo walkthrough](https://actionsmanager.io/getting-started/product-demo)**
 
 ## 🚀 Quick Start: Self-Hosted Beta
 

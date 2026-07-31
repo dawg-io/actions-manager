@@ -450,10 +450,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
 
     try {
       const { blob, filename } = await exportProjectBackup(projectId);
-      const safeProjectName = (projectName || "project")
-        .trim()
-        .replace(/[^a-zA-Z0-9._-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "project";
+      const cleanedProjectName = (projectName || "project").trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
+      let dashStart = 0;
+      while (cleanedProjectName[dashStart] === "-") dashStart++;
+      let dashEnd = cleanedProjectName.length;
+      while (dashEnd > dashStart && cleanedProjectName[dashEnd - 1] === "-") dashEnd--;
+      const safeProjectName = cleanedProjectName.slice(dashStart, dashEnd) || "project";
       const fallbackFileName = `actionsmanager-project-${safeProjectName}-${new Date().toISOString().replace(/[:]/g, "-")}.json`;
 
       const url = globalThis.URL.createObjectURL(blob);
@@ -937,6 +939,29 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
 
   const handleDriftLoaded = useCallback((details: WorkflowDriftDetail[]) => {
     setDriftDetails(details);
+    // The drift check that produced `details` already persisted a fresh
+    // drift_status on the project row server-side (see get_project_drift /
+    // _cache_project_drift_summary in backend/workflows.py) - refresh the
+    // list so it doesn't keep showing the pre-check status until next login.
+    refreshProjectsList();
+  }, [refreshProjectsList]);
+
+  // Mirrors handlePRCreationSuccess's local-patch pattern below: a drift
+  // resolve action (adopt GitHub version, restore directly, or create a fix
+  // PR) changes workflow_status server-side, but DriftDetection only
+  // refreshes its own drift list - it doesn't own workflows/rxworkflows, so
+  // it reports the change back here instead of us waiting for a reload.
+  const handleDriftWorkflowStatusesChanged = useCallback((workflowNames: string[], status: string) => {
+    const nameSet = new Set(workflowNames);
+    setWorkflows((prev: ProjectWorkflow[]) => prev.map(w =>
+      nameSet.has(w.name) ? { ...w, workflowStatus: status } : w
+    ));
+    setRXWorkflows((prev: ProjectRXWorkflow[]) => prev.map(w =>
+      nameSet.has(w.name) ? { ...w, workflowStatus: status } : w
+    ));
+    setLinkedWorkflows((prev: RwxWorkflow[]) => prev.map(w =>
+      nameSet.has(w.workflow_name) ? { ...w, workflowStatus: status } : w
+    ));
   }, []);
 
   // Shows a ConfirmDialog when there is drift; otherwise runs fn immediately.
@@ -1171,19 +1196,22 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     setAddSecretFn(() => addFn);
   }, []);
 
+  const recordLinkedWorkflow = (workflow: RwxWorkflow): void => {
+    setLinkedWorkflows(prev => {
+      const alreadyLinked = prev.some(w => w.workflow_id === workflow.workflow_id);
+      if (alreadyLinked) return prev;
+      return [...prev, workflow];
+    });
+    console.log(`✅ Workflow '${workflow.workflow_name}' linked to project '${projectName}'`);
+  };
+
   // Handler for linking reusable workflows from the modal (supports bulk selection)
   const handleLinkWorkflow = async (workflows: RwxWorkflow[]): Promise<void> => {
     if (!user || !projectName) return;
     const results = await Promise.allSettled(
       workflows.map((workflow) =>
-        linkReusableWorkflow(user, projectName, workflow.workflow_id, workflow.rwx_project_id).then(() => {
-          setLinkedWorkflows(prev => {
-            const alreadyLinked = prev.some(w => w.workflow_id === workflow.workflow_id);
-            if (alreadyLinked) return prev;
-            return [...prev, workflow];
-          });
-          console.log(`✅ Workflow '${workflow.workflow_name}' linked to project '${projectName}'`);
-        })
+        linkReusableWorkflow(user, projectName, workflow.workflow_id, workflow.rwx_project_id)
+          .then(() => recordLinkedWorkflow(workflow))
       )
     );
     const failed = results.filter((r) => r.status === 'rejected');
@@ -2311,6 +2339,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               selectedRepos={selectedRepos}
               onDriftLoaded={handleDriftLoaded}
               refreshSignal={driftRefreshSignal}
+              onWorkflowStatusesChanged={handleDriftWorkflowStatusesChanged}
             />
             
             {/* Progress bar for save operations */}

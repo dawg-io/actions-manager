@@ -18,11 +18,16 @@ export interface ReusableWorkflowNamesOptions {
 }
 
 const extractBranches = (content: string): string[] => {
-  const branchMatches =
-    /branches:\s*\[(.*?)\]/.exec(content) ||
-    /branches:\s*\n([\s\S]*?)(?=(?:\n\s*[a-z]|\n[a-z]|$))/.exec(content);
-  if (!branchMatches) return [];
-  const section = branchMatches[1];
+  const bracketMatch = /branches:\s*\[(.*?)\]/.exec(content);
+  let section = bracketMatch?.[1];
+  if (section === undefined) {
+    const headerMatch = /branches:\s*\n/.exec(content);
+    if (!headerMatch) return [];
+    const rest = content.slice(headerMatch.index + headerMatch[0].length);
+    const lines = rest.split('\n');
+    const endIdx = lines.findIndex((line) => /^\s*[a-z]/.test(line));
+    section = endIdx === -1 ? rest : lines.slice(0, endIdx).join('\n');
+  }
   const branches: string[] = [];
   if (section.includes('main')) branches.push('main');
   if (section.includes('develop')) branches.push('develop');

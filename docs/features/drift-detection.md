@@ -64,9 +64,13 @@ Every drift is a difference between two versions of the same workflow:
 
 Resolving a drift means deciding which of these two should win, and how the change is applied.
 
+Here's an example: a `lint` step was added straight to the workflow file in GitHub, bypassing ActionsManager. The added line is highlighted on the GitHub side:
+
+![Side-by-side diff showing an npm run lint step added directly in GitHub, highlighted against the ActionsManager managed version](../assets/screenshots/drift-detection/drift-diff-view.png)
+
 ## Resolving Drift
 
-Open **Review Drift → View Diff** for a drifted workflow to see the side-by-side diff and the resolution actions. Each action names the repository and target branch it affects. There are three actions.
+Open **Review Drift** to see every drifted workflow across the project. Select a single workflow's **View Diff** to see the side-by-side diff and the resolution actions, or select multiple drifted workflows using the checkboxes to resolve them together. Each action names the repository and target branch it affects — or, for a bulk action, every repository and branch among the selected workflows. There are three actions.
 
 ### Create Fix Pull Request
 
@@ -101,6 +105,18 @@ Imports the current GitHub version into ActionsManager instead of restoring the 
 | Create repo-specific override | **No** | Pins this repository to its own GitHub version as a per-repo override. The shared project workflow and the other repositories are left unchanged. |
 
 **Effect on other repositories:** because a project workflow is shared across its repositories, changing the managed version affects them all. "Adopt for project and sync" brings the others into line immediately. "Adopt locally only" changes the managed draft without touching GitHub, so the other repositories may now show drift against the new managed version until they are delivered to. "Create repo-specific override" isolates this one repository and leaves everything else as it was.
+
+### Resolving Several Workflows at Once
+
+Workflows that drifted with the **identical** GitHub-side change are grouped automatically — a "N identical — select all" link appears next to any workflow that shares a group, so a change that landed the same way across several repositories can be selected in one click instead of one at a time.
+
+![Drift review list with checkboxes and a "2 identical — select all" grouping link](../assets/screenshots/drift-detection/drift-bulk-select.png)
+
+Select any combination of drifted workflows — individually via their checkboxes, or a whole identical group at once — to reveal a bulk action toolbar with the same three resolution actions, applied to every selected workflow.
+
+![Bulk action toolbar showing 2 of 2 selected and the three bulk resolution actions](../assets/screenshots/drift-detection/drift-bulk-toolbar.png)
+
+Restoring directly still asks for confirmation before overwriting GitHub, naming how many workflows are affected.
 
 ## Which option should I use?
 

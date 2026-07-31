@@ -178,10 +178,11 @@ const RepositoriesAndBranches: React.FC<RepositoriesAndBranchesProps> = ({
             <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-md border border-slate-200 dark:border-slate-700">
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <label htmlFor="repo-branch-pattern" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     Branch name or pattern
                   </label>
                   <input
+                    id="repo-branch-pattern"
                     type="text"
                     placeholder="e.g., main, release-.*, feature/auth"
                     value={regexPattern}
@@ -268,9 +269,10 @@ const RepositoriesAndBranches: React.FC<RepositoriesAndBranchesProps> = ({
         <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
           Optional. Used to test workflow changes before creating PR Campaigns.
         </p>
-        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+        {/* Descriptive text, not a form label — the select below carries its own aria-label. */}
+        <p className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
           Select a safe repository where ActionsManager can open a test PR and run the generated workflow before rollout.
-        </label>
+        </p>
         <select
           value={validationRepo || ""}
           onChange={(event) => setValidationRepo?.(event.target.value || null)}

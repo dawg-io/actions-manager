@@ -21,6 +21,7 @@ from database import Base
 _FK_ACCOUNTS_USER_ID = "accounts.user_id"
 _FK_REPOS_REPO_ID = "repos.repo_id"
 _FK_WORKFLOWS_WORKFLOW_ID = "workflows.workflow_id"
+_FK_PROJECTS_PROJECT_ID = "projects.project_id"
 
 
 def generate_random_id():
@@ -276,7 +277,7 @@ class ProjectWorkflow(Base):
     """Many-to-many relationship table between Projects and Workflows"""
     __tablename__ = "project_workflows"
 
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), primary_key=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), primary_key=True)
     workflow_id = Column(Integer, ForeignKey(_FK_WORKFLOWS_WORKFLOW_ID, ondelete="CASCADE"), primary_key=True)
 
 
@@ -291,7 +292,7 @@ class ProjectRepo(Base):
     """
     __tablename__ = "project_repos"
 
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), primary_key=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), primary_key=True)
     repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="CASCADE"), primary_key=True)
 
     # Per-repository branch configuration overrides. All nullable so
@@ -321,7 +322,7 @@ class ProjectRuleset(Base):
     """Many-to-many relationship table between Projects and Rulesets"""
     __tablename__ = "project_rulesets"
 
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), primary_key=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), primary_key=True)
     ruleset_id = Column(Integer, ForeignKey("rulesets.ruleset_id", ondelete="CASCADE"), primary_key=True)
 
 
@@ -335,7 +336,7 @@ class ProjectPRCampaign(Base):
     __tablename__ = "project_pr_campaigns"
 
     campaign_id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     created_by = Column(String(255), nullable=True)  # GitHub login of the user who opened the campaign
     created_at = Column(DateTime, default=func.now())
 
@@ -345,7 +346,7 @@ class ProjectPullRequest(Base):
     __tablename__ = "project_pull_requests"
 
     pr_id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     # Campaign this PR row belongs to. Nullable so legacy rows created before
     # campaign tracking remain valid (they are grouped heuristically instead).
     campaign_id = Column(Integer, ForeignKey("project_pr_campaigns.campaign_id", ondelete="SET NULL"), nullable=True, index=True)
@@ -402,7 +403,7 @@ class ProjectSecret(Base):
     __tablename__ = "project_secrets"
 
     secret_id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     secret_name = Column(String(255), nullable=False)  # Secret name without prefix (e.g., "DATABASE_PASSWORD")
     created_at = Column(DateTime, default=func.now())
 
@@ -419,7 +420,7 @@ class ProjectEnvVar(Base):
     __tablename__ = "project_env_vars"
 
     env_var_id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     env_var_name = Column(String(255), nullable=False)  # Env var name without prefix (e.g., "DEBUG_MODE")
     created_at = Column(DateTime, default=func.now())
 
@@ -445,7 +446,7 @@ class ProjectMembership(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey(_FK_ACCOUNTS_USER_ID, ondelete="CASCADE"), nullable=False, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     project_role = Column(String(30), nullable=False, default="project_viewer")  # project_editor, project_viewer
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -477,7 +478,7 @@ class Codeowners(Base):
     __tablename__ = "codeowners"
 
     id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="CASCADE"), nullable=False, index=True)
     content = Column(Text, nullable=False, default="")
     file_path = Column(String(64), nullable=False, default=".github/CODEOWNERS")  # .github/CODEOWNERS or CODEOWNERS
@@ -513,7 +514,7 @@ class CustomFile(Base):
     __tablename__ = "custom_files"
 
     id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False)
     display_name = Column(String(255), nullable=True)
     file_path = Column(String(500), nullable=False)
     file_content = Column(Text, nullable=False, default="")
@@ -555,7 +556,7 @@ class RepoWorkflowOverride(Base):
     __tablename__ = "repo_workflow_overrides"
 
     id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="CASCADE"), nullable=False, index=True)
     workflow_id = Column(Integer, ForeignKey(_FK_WORKFLOWS_WORKFLOW_ID, ondelete="CASCADE"), nullable=False, index=True)
     workflow_name = Column(String(255), nullable=False)  # Snapshot of the workflow_name at override creation
@@ -580,8 +581,8 @@ class LinkedReusableWorkflow(Base):
     __tablename__ = "linked_reusable_workflows"
 
     id = Column(Integer, primary_key=True, index=True)
-    standard_project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, index=True)
-    rwx_project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    standard_project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
+    rwx_project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False)
     workflow_id = Column(Integer, ForeignKey(_FK_WORKFLOWS_WORKFLOW_ID, ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, default=func.now())
 

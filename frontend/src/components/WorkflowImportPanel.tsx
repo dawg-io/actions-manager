@@ -218,7 +218,11 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
     discovery.results.some((repoResult) => repoResult.warning === ALREADY_MANAGED_EMPTY_STATE);
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick} data-testid="workflow-import-modal">
+    <div
+      className="modal-overlay"
+      onClick={handleOverlayClick}
+      data-testid="workflow-import-modal"
+    >
       <div className="modal-content workflow-import-modal">
         {/* Modal Header */}
         <div className="modal-header">

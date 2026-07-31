@@ -60,9 +60,11 @@ const OpenInGitHubModal: React.FC<OpenInGitHubModalProps> = ({
   return (
     <>
       {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity"
+      <button
+        type="button"
+        className="fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity cursor-default"
         onClick={onClose}
+        aria-label="Dismiss dialog"
       />
 
       {/* Modal */}

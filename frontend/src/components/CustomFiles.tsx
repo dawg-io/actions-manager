@@ -108,13 +108,15 @@ export const FileForm = React.forwardRef<HTMLFormElement, FileFormProps>(
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-        <label style={{ fontSize: "0.8rem", fontWeight: 500 }}>File Content</label>
+        {/* Descriptive text, not a form label — PlainFileEditor is not a native control, labeled via aria-label instead. */}
+        <div style={{ fontSize: "0.8rem", fontWeight: 500 }}>File Content</div>
         <PlainFileEditor
           value={fileContent}
           onChange={setFileContent}
           language={detectLanguage(filePath)}
           height="350px"
           theme="dark"
+          ariaLabel="File Content"
         />
       </div>
 

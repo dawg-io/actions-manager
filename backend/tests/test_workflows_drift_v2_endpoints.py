@@ -277,6 +277,17 @@ def test_workflow_drift_unknown_workflow(db_state):
 })
 def test_resolve_drift_use_github_overwrites_local(_g, db_state):
     """``use_github`` should replace local YAML + refresh stored hash."""
+    # Start from the realistic pre-fix state (a normal edit/save cycle
+    # leaves workflow_status at "committed_locally") so the assertion below
+    # actually proves resolution advances it, not that it was already there.
+    db = TestingSessionLocal()
+    try:
+        wf = db.query(Workflow).filter_by(workflow_id=db_state["workflow_id"]).first()
+        wf.workflow_status = "committed_locally"
+        db.commit()
+    finally:
+        db.close()
+
     # The endpoint re-runs drift detection after applying the change to confirm
     # resolution. Stub it out to return a synced detail so the success branch
     # is exercised here (the underlying drift collector hits multiple GitHub
@@ -318,6 +329,9 @@ def test_resolve_drift_use_github_overwrites_local(_g, db_state):
         wf = db.query(Workflow).filter_by(workflow_id=db_state["workflow_id"]).first()
         assert wf.workflow_git_hash == "sha-new"
         assert "pull_request" in wf.workflow_yaml
+        # Regression: drift resolution must advance workflow_status forward,
+        # not leave it at whatever it was pre-resolution (e.g. committed_locally).
+        assert wf.workflow_status == "synced_with_github"
     finally:
         db.close()
 
@@ -340,6 +354,16 @@ def test_resolve_drift_use_github_missing_on_github_returns_404(_g, db_state):
 @patch('workflows.github_put')
 def test_resolve_drift_restore_actionsmanager_direct_pushes_yaml(mock_put, _check, db_state):
     """``restore_actionsmanager`` + ``direct`` should PUT contents API and persist new SHA."""
+    # Start from the realistic pre-fix state, same reasoning as the
+    # use_github test above.
+    db = TestingSessionLocal()
+    try:
+        wf = db.query(Workflow).filter_by(workflow_id=db_state["workflow_id"]).first()
+        wf.workflow_status = "committed_locally"
+        db.commit()
+    finally:
+        db.close()
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"content": {"sha": "fresh-sha"}}
@@ -365,6 +389,11 @@ def test_resolve_drift_restore_actionsmanager_direct_pushes_yaml(mock_put, _chec
     try:
         wf = db.query(Workflow).filter_by(workflow_id=db_state["workflow_id"]).first()
         assert wf.workflow_git_hash == "fresh-sha"
+        # Regression: a direct push means the repo now matches our managed
+        # version - workflow_status and project.pr_state must reflect that.
+        assert wf.workflow_status == "synced_with_github"
+        project = db.query(Project).filter_by(project_id=db_state["project_id"]).first()
+        assert project.pr_state == "synced"
     finally:
         db.close()
 

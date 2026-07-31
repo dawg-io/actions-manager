@@ -4,6 +4,7 @@ import {
   installApiMocks,
   makeProject,
   makeWorkflow,
+  mockDriftResponse,
   seedAuthenticatedSession,
 } from "../e2e/fixtures/mocks";
 import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
@@ -120,5 +121,102 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({ path: "../docs/assets/screenshots/pr-campaigns/pr-campaign.png" });
+  });
+
+  test("drift detection — bulk resolve", async ({ page }) => {
+    const project = makeProject({
+      project_name: "Payments Platform",
+      project_code: "PAY",
+      github_user: DOCS_USER,
+      last_modified_by: DOCS_USER,
+      updated_at: "2026-07-24T00:00:00Z",
+      pr_state: "draft",
+      selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+      workflows: [makeWorkflow({ name: "build-and-test.yml", lastModifiedBy: DOCS_USER })],
+    });
+    // Realistic managed vs. GitHub content so the diff view screenshot shows
+    // an actual, readable drift - someone added a lint step directly in
+    // GitHub, bypassing ActionsManager.
+    const managedYaml = [
+      "name: Build and Test",
+      "on:",
+      "  push:",
+      "    branches: [main]",
+      "jobs:",
+      "  build:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - uses: actions/checkout@v4",
+      "      - run: npm ci",
+      "      - run: npm test",
+      "",
+    ].join("\n");
+    const githubYaml = [
+      "name: Build and Test",
+      "on:",
+      "  push:",
+      "    branches: [main]",
+      "jobs:",
+      "  build:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - uses: actions/checkout@v4",
+      "      - run: npm ci",
+      "      - run: npm test",
+      "      - run: npm run lint",
+      "",
+    ].join("\n");
+
+    // Same workflow, same github_sha, drifted identically in both repos -
+    // this is what triggers the "N identical - select all" grouping link.
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: "build-and-test.yml",
+          workflow_filename: "build-and-test.yml",
+          repo: "acme-corp/payments-service",
+          has_drift: true,
+          github_sha: "f4a1c9e",
+          actionsmanager_yaml: managedYaml,
+          github_yaml: githubYaml,
+        },
+        {
+          workflow_name: "build-and-test.yml",
+          workflow_filename: "build-and-test.yml",
+          repo: "acme-corp/payments-worker",
+          has_drift: true,
+          github_sha: "f4a1c9e",
+          actionsmanager_yaml: managedYaml,
+          github_yaml: githubYaml,
+        },
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page.getByTestId("drift-banner").waitFor({ timeout: 15000 });
+    await page.getByTestId("review-drift-button").click();
+    await page.getByTestId("drift-modal").waitFor();
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-bulk-select.png" });
+
+    // Expand one row's diff to show what an actual drift looks like -
+    // managed version on the left, current GitHub version (with the extra
+    // lint step) on the right.
+    await page.getByRole("button", { name: /View Diff/i }).first().click();
+    await page.getByText("npm run lint", { exact: false }).waitFor({ timeout: 5000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-diff-view.png" });
+
+    await page.getByRole("button", { name: /Hide Diff/i }).first().click();
+    await page.waitForTimeout(300);
+
+    await page.getByTestId("select-all-drifts").click();
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-bulk-toolbar.png" });
   });
 });
