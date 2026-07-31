@@ -518,20 +518,16 @@ interface WorkflowItemProps {
 }
 
 const WorkflowItem: React.FC<WorkflowItemProps> = ({ name, selected, disabled, onToggle, extraClass, badge }) => (
-  <div
-    className={`repo-item ${selected ? "selected" : ""} ${extraClass || ""}`}
-    onClick={() => !disabled && onToggle(name)}
-  >
+  <label className={`repo-item ${selected ? "selected" : ""} ${extraClass || ""}`}>
     <input
       type="checkbox"
       checked={selected}
-      onClick={(e) => e.stopPropagation()}
       onChange={() => onToggle(name)}
       disabled={disabled}
     />
     <span className="repo-name">{normalizeWorkflowFilename(name)}</span>
     {badge}
-  </div>
+  </label>
 );
 
 function workflowBadge(status: string | undefined): React.ReactNode {
@@ -992,7 +988,10 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
   };
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div
+      className="modal-overlay"
+      onClick={handleOverlayClick}
+    >
       <div className="modal-content create-pr-modal">
         <div className="modal-header">
           <div className="modal-header-text">

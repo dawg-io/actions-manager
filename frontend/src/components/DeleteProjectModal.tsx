@@ -297,7 +297,7 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
                 </h3>
                 
                 <div className="border-2 border-slate-200 rounded-lg transition-all hover:border-blue-500 dark:border-slate-600 dark:hover:border-blue-400">
-                  <label className="flex items-start p-4 cursor-pointer">
+                  <label className="flex items-start p-4 cursor-pointer" aria-label="Database Only">
                     <input
                       type="radio"
                       name="deletionType"

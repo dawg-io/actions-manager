@@ -224,7 +224,7 @@ describe('WorkflowImportPanel', () => {
     });
 
     const previewButtons = screen.getAllByRole('button', { name: 'Preview' });
-    const testIds = previewButtons.map((button) => button.getAttribute('data-testid'));
+    const testIds = previewButtons.map((button) => button.dataset.testid);
     expect(new Set(testIds).size).toBe(2);
   });
 

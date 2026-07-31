@@ -451,9 +451,10 @@ const CodeownersManager: React.FC<CodeownersManagerProps> = ({
       {/* Editor — locked when under review */}
       {localStatus === 'under_review' ? (
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+          {/* Descriptive text, not a form label — PlainFileEditor is not a native control, labeled via aria-label instead. */}
+          <div className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
             CODEOWNERS content
-          </label>
+          </div>
           <div className="workflow-editor-content workflow-editor-content--lockable relative h-[400px] overflow-hidden rounded-md">
             <div className="workflow-lock-overlay">
               <div className="workflow-lock-btn workflow-lock-btn-static">
@@ -464,14 +465,15 @@ const CodeownersManager: React.FC<CodeownersManagerProps> = ({
                 </span>
               </div>
             </div>
-            <PlainFileEditor value={content} language="plain" readOnly height="400px" theme="dark" />
+            <PlainFileEditor value={content} language="plain" readOnly height="400px" theme="dark" ariaLabel="CODEOWNERS content" />
           </div>
         </div>
       ) : (
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+          {/* Descriptive text, not a form label — PlainFileEditor is not a native control, labeled via aria-label instead. */}
+          <div className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
             CODEOWNERS content
-          </label>
+          </div>
           <PlainFileEditor
             value={content}
             onChange={(v) => { setContent(v); setIsDirty(true); }}
@@ -479,6 +481,7 @@ const CodeownersManager: React.FC<CodeownersManagerProps> = ({
             readOnly={loading || isReadOnly}
             height="400px"
             theme="dark"
+            ariaLabel="CODEOWNERS content"
           />
         </div>
       )}

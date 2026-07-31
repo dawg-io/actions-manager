@@ -34,7 +34,7 @@ ActionsManager is a control plane for GitHub Actions, designed for teams that ma
 
 <div class="video-embed">
   <iframe
-    src="https://www.youtube-nocookie.com/embed/jbG-T6M-tko"
+    src="https://www.youtube-nocookie.com/embed/WkDYK7pCBjI"
     title="ActionsManager product demo: multi-repository workflow rollout"
     frameborder="0"
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -44,7 +44,7 @@ ActionsManager is a control plane for GitHub Actions, designed for teams that ma
 
 See a complete multi-repository workflow rollout — PAT sign-in, project creation, build detection, pull request creation, review, and merge — all from ActionsManager.
 
-[Watch the full demo](https://youtu.be/jbG-T6M-tko){: .btn .btn-primary .mr-2 }
+[Watch the full demo](https://youtu.be/WkDYK7pCBjI){: .btn .btn-primary .mr-2 }
 [Read the demo walkthrough]({% link getting-started/product-demo.md %}){: .btn .mr-2 }
 [Install ActionsManager]({% link getting-started/quick-start.md %}){: .btn }
 

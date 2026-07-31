@@ -520,19 +520,19 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
         <>
           <div className="pr-history-filters">
             <div className="pr-history-filter-group">
-              <label className="pr-history-filter-label">Repository</label>
-              <select className="pr-history-filter-select" value={filters.repo} onChange={(e) => setFilters({ ...filters, repo: e.target.value })}>
+              <label className="pr-history-filter-label" htmlFor="pr-activity-filter-repo">Repository</label>
+              <select id="pr-activity-filter-repo" className="pr-history-filter-select" value={filters.repo} onChange={(e) => setFilters({ ...filters, repo: e.target.value })}>
                 <option value="">All repositories</option>
                 {allRepos.map((repo) => <option key={repo} value={repo}>{repo}</option>)}
               </select>
             </div>
             <div className="pr-history-filter-group">
-              <label className="pr-history-filter-label">Workflow</label>
-              <input className="pr-history-filter-input" value={filters.workflow} onChange={(e) => setFilters({ ...filters, workflow: e.target.value })} placeholder="Filter by workflow" />
+              <label className="pr-history-filter-label" htmlFor="pr-activity-filter-workflow">Workflow</label>
+              <input id="pr-activity-filter-workflow" className="pr-history-filter-input" value={filters.workflow} onChange={(e) => setFilters({ ...filters, workflow: e.target.value })} placeholder="Filter by workflow" />
             </div>
             <div className="pr-history-filter-group">
-              <label className="pr-history-filter-label">PR state</label>
-              <select className="pr-history-filter-select" value={filters.state} onChange={(e) => setFilters({ ...filters, state: e.target.value })}>
+              <label className="pr-history-filter-label" htmlFor="pr-activity-filter-state">PR state</label>
+              <select id="pr-activity-filter-state" className="pr-history-filter-select" value={filters.state} onChange={(e) => setFilters({ ...filters, state: e.target.value })}>
                 <option value="all">All states</option>
                 <option value="open">Open</option>
                 <option value="merged">Merged</option>
@@ -540,19 +540,19 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
               </select>
             </div>
             <div className="pr-history-filter-group">
-              <label className="pr-history-filter-label">Target branch</label>
-              <select className="pr-history-filter-select" value={filters.targetBranch} onChange={(e) => setFilters({ ...filters, targetBranch: e.target.value })}>
+              <label className="pr-history-filter-label" htmlFor="pr-activity-filter-target-branch">Target branch</label>
+              <select id="pr-activity-filter-target-branch" className="pr-history-filter-select" value={filters.targetBranch} onChange={(e) => setFilters({ ...filters, targetBranch: e.target.value })}>
                 <option value="">All branches</option>
                 {allTargetBranches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
               </select>
             </div>
             <div className="pr-history-filter-group">
-              <label className="pr-history-filter-label">Date</label>
-              <input type="date" className="pr-history-filter-input" value={filters.date} onChange={(e) => setFilters({ ...filters, date: e.target.value })} />
+              <label className="pr-history-filter-label" htmlFor="pr-activity-filter-date">Date</label>
+              <input id="pr-activity-filter-date" type="date" className="pr-history-filter-input" value={filters.date} onChange={(e) => setFilters({ ...filters, date: e.target.value })} />
             </div>
             <div className="pr-history-filter-group">
-              <label className="pr-history-filter-label">Actor</label>
-              <input className="pr-history-filter-input" value={filters.actor} onChange={(e) => setFilters({ ...filters, actor: e.target.value })} placeholder="Filter by actor" />
+              <label className="pr-history-filter-label" htmlFor="pr-activity-filter-actor">Actor</label>
+              <input id="pr-activity-filter-actor" className="pr-history-filter-input" value={filters.actor} onChange={(e) => setFilters({ ...filters, actor: e.target.value })} placeholder="Filter by actor" />
             </div>
           </div>
           {renderPaginationControls(activityPaged, "activity")}

@@ -918,8 +918,11 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
       )}
 
       {showUnlockModal && (
-        <div className="workflow-lock-modal-backdrop" onClick={() => setShowUnlockModal(false)}>
-          <div className="workflow-lock-modal" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="workflow-lock-modal-backdrop"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowUnlockModal(false); }}
+        >
+          <div className="workflow-lock-modal">
             <div className="workflow-lock-modal-header">
               <span className="workflow-lock-modal-icon">🔒</span>
               <h3 className="workflow-lock-modal-title">Open Pull Request Detected</h3>

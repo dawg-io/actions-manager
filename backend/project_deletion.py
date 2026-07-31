@@ -19,6 +19,8 @@ from workflows import cleanup_orphaned_workflows
 
 router = APIRouter()
 
+_DEBUG_NO_PREFIX_LOOKUP = "🔍 Debug: Using database lookup for no_prefix project"
+
 GITHUB_API_URL = "https://api.github.com"
 
 
@@ -59,7 +61,7 @@ def _fetch_repository_secrets(repo_name: str, headers: Dict[str, str], project_p
                 
                 # For no_prefix projects, use database to identify project secrets
                 if project and db and not project.use_prefix:
-                    print("🔍 Debug: Using database lookup for no_prefix project")
+                    print(_DEBUG_NO_PREFIX_LOOKUP)
                     db_secrets = db.query(ProjectSecret).filter(
                         ProjectSecret.project_id == project.project_id
                     ).all()
@@ -116,7 +118,7 @@ def _fetch_repository_variables(repo_name: str, headers: Dict[str, str], project
                 
                 # For no_prefix projects, use database to identify project variables
                 if project and db and not project.use_prefix:
-                    print("🔍 Debug: Using database lookup for no_prefix project")
+                    print(_DEBUG_NO_PREFIX_LOOKUP)
                     db_vars = db.query(ProjectEnvVar).filter(
                         ProjectEnvVar.project_id == project.project_id
                     ).all()
@@ -174,7 +176,7 @@ def _fetch_environment_secrets(repo_name: str, env_name: str, headers: Dict[str,
                 
                 # For no_prefix projects, use database to identify project secrets
                 if project and db and not project.use_prefix:
-                    print("🔍 Debug: Using database lookup for no_prefix project")
+                    print(_DEBUG_NO_PREFIX_LOOKUP)
                     db_secrets = db.query(ProjectSecret).filter(
                         ProjectSecret.project_id == project.project_id
                     ).all()
@@ -239,7 +241,7 @@ def _fetch_environment_variables(repo_name: str, env_name: str, headers: Dict[st
                 
                 # For no_prefix projects, use database to identify project variables
                 if project and db and not project.use_prefix:
-                    print("🔍 Debug: Using database lookup for no_prefix project")
+                    print(_DEBUG_NO_PREFIX_LOOKUP)
                     db_vars = db.query(ProjectEnvVar).filter(
                         ProjectEnvVar.project_id == project.project_id
                     ).all()

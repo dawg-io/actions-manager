@@ -141,7 +141,10 @@ const VersionHistoryPanel: React.FC<VersionHistoryPanelProps> = ({
   };
 
   return (
-    <div className="version-history-overlay" onClick={handleOverlayClick}>
+    <div
+      className="version-history-overlay"
+      onClick={handleOverlayClick}
+    >
       <div className="version-history-panel">
         <div className="version-history-header">
           <h2>Version History: {workflowName}</h2>

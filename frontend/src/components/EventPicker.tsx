@@ -96,6 +96,51 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
     return EVENT_TYPES.find(et => et.value === type);
   };
 
+  const toggleEventSubType = (index: number, type: string, checked: boolean) => {
+    const event = events[index];
+    const currentTypes = event.types || [];
+    const newTypes = checked
+      ? [...currentTypes, type]
+      : currentTypes.filter(t => t !== type);
+    updateEvent(index, { ...event, types: newTypes.length > 0 ? newTypes : undefined });
+  };
+
+  const updateBranch = (index: number, branchIndex: number, value: string) => {
+    const event = events[index];
+    const newBranches = [...(event.branches || [])];
+    newBranches[branchIndex] = value;
+    updateEvent(index, { ...event, branches: newBranches });
+  };
+
+  const removeBranch = (index: number, branchIndex: number) => {
+    const event = events[index];
+    const newBranches = event.branches?.filter((_, i) => i !== branchIndex);
+    updateEvent(index, { ...event, branches: newBranches?.length ? newBranches : undefined });
+  };
+
+  const addBranch = (index: number) => {
+    const event = events[index];
+    updateEvent(index, { ...event, branches: [...(event.branches || []), ''] });
+  };
+
+  const updatePath = (index: number, pathIndex: number, value: string) => {
+    const event = events[index];
+    const newPaths = [...(event.paths || [])];
+    newPaths[pathIndex] = value;
+    updateEvent(index, { ...event, paths: newPaths });
+  };
+
+  const removePath = (index: number, pathIndex: number) => {
+    const event = events[index];
+    const newPaths = event.paths?.filter((_, i) => i !== pathIndex);
+    updateEvent(index, { ...event, paths: newPaths?.length ? newPaths : undefined });
+  };
+
+  const addPath = (index: number) => {
+    const event = events[index];
+    updateEvent(index, { ...event, paths: [...(event.paths || []), ''] });
+  };
+
   return (
     <div className="event-picker">
       {/* Event List */}
@@ -144,13 +189,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                             <input
                               type="checkbox"
                               checked={event.types?.includes(type) || false}
-                              onChange={(e) => {
-                                const currentTypes = event.types || [];
-                                const newTypes = e.target.checked
-                                  ? [...currentTypes, type]
-                                  : currentTypes.filter(t => t !== type);
-                                updateEvent(index, { ...event, types: newTypes.length > 0 ? newTypes : undefined });
-                              }}
+                              onChange={(e) => toggleEventSubType(index, type, e.target.checked)}
                             />
                             <span>{type}</span>
                           </label>
@@ -169,13 +208,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                             <input
                               type="checkbox"
                               checked={event.types?.includes(type) || false}
-                              onChange={(e) => {
-                                const currentTypes = event.types || [];
-                                const newTypes = e.target.checked
-                                  ? [...currentTypes, type]
-                                  : currentTypes.filter(t => t !== type);
-                                updateEvent(index, { ...event, types: newTypes.length > 0 ? newTypes : undefined });
-                              }}
+                              onChange={(e) => toggleEventSubType(index, type, e.target.checked)}
                             />
                             <span>{type}</span>
                           </label>
@@ -214,20 +247,13 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                             <input
                               type="text"
                               value={branch}
-                              onChange={(e) => {
-                                const newBranches = [...(event.branches || [])];
-                                newBranches[branchIndex] = e.target.value;
-                                updateEvent(index, { ...event, branches: newBranches });
-                              }}
+                              onChange={(e) => updateBranch(index, branchIndex, e.target.value)}
                               placeholder="branch name or pattern"
                               className="array-input-field"
                             />
                             <button
                               type="button"
-                              onClick={() => {
-                                const newBranches = event.branches?.filter((_, i) => i !== branchIndex);
-                                updateEvent(index, { ...event, branches: newBranches?.length ? newBranches : undefined });
-                              }}
+                              onClick={() => removeBranch(index, branchIndex)}
                               className="array-remove"
                             >
                               ✕
@@ -236,10 +262,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                         ))}
                         <button
                           type="button"
-                          onClick={() => {
-                            const newBranches = [...(event.branches || []), ''];
-                            updateEvent(index, { ...event, branches: newBranches });
-                          }}
+                          onClick={() => addBranch(index)}
                           className="array-add"
                         >
                           ➕ Add Branch
@@ -258,20 +281,13 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                             <input
                               type="text"
                               value={path}
-                              onChange={(e) => {
-                                const newPaths = [...(event.paths || [])];
-                                newPaths[pathIndex] = e.target.value;
-                                updateEvent(index, { ...event, paths: newPaths });
-                              }}
+                              onChange={(e) => updatePath(index, pathIndex, e.target.value)}
                               placeholder="path pattern (e.g., src/**)"
                               className="array-input-field"
                             />
                             <button
                               type="button"
-                              onClick={() => {
-                                const newPaths = event.paths?.filter((_, i) => i !== pathIndex);
-                                updateEvent(index, { ...event, paths: newPaths?.length ? newPaths : undefined });
-                              }}
+                              onClick={() => removePath(index, pathIndex)}
                               className="array-remove"
                             >
                               ✕
@@ -280,10 +296,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                         ))}
                         <button
                           type="button"
-                          onClick={() => {
-                            const newPaths = [...(event.paths || []), ''];
-                            updateEvent(index, { ...event, paths: newPaths });
-                          }}
+                          onClick={() => addPath(index)}
                           className="array-add"
                         >
                           ➕ Add Path

@@ -26,10 +26,24 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
+  // chromium runs on every PR (fast, catches most real bugs). firefox/webkit
+  // exist to cover engine-divergent behavior (WebSocket reconnect, Clipboard
+  // API, CodeMirror/IME) but only run in CI on push to develop - see the
+  // `playwright-cross-browser-tests` job in .github/workflows/docker-image.yml
+  // - selected explicitly via `--project`, so adding them here doesn't slow
+  // down the PR-triggered `playwright-tests` job (issue #1551).
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
     },
   ],
   webServer: {

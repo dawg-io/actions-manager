@@ -125,6 +125,66 @@ export const SAMPLE_WORKFLOW = {
   workflowStatus: "saved",
 };
 
+// ---- Managed Actions (Actions Projects) test data ----------------------------
+
+export interface ActionInputStub {
+  name: string;
+  description: string | null;
+  required: boolean;
+  default: string | null;
+  type: "string" | "number" | "boolean" | "choice";
+  options: string[] | null;
+}
+
+export interface ActionsProjectStub {
+  actions_project_id: number;
+  name: string;
+  description: string | null;
+  source_url: string;
+  owner: string;
+  repo: string;
+  ref: string;
+  yaml_path: string;
+  inputs: ActionInputStub[];
+  branding_icon: string | null;
+  branding_color: string | null;
+}
+
+export function makeActionsProject(overrides: Partial<ActionsProjectStub> = {}): ActionsProjectStub {
+  return {
+    actions_project_id: 1,
+    name: "Checkout",
+    description: "Checkout a repo",
+    source_url: "https://github.com/actions/checkout",
+    owner: "actions",
+    repo: "checkout",
+    ref: "v4",
+    yaml_path: "action.yml",
+    inputs: [
+      { name: "token", description: "GH token", required: false, default: null, type: "string", options: null },
+    ],
+    branding_icon: "zap",
+    branding_color: "blue",
+    ...overrides,
+  };
+}
+
+/** Preview response returned by `GET /api/actions-projects/preview`, keyed off the pasted URL. */
+export const SAMPLE_ACTIONS_PREVIEW = {
+  name: "Checkout",
+  description: "Checkout a repo",
+  owner: "actions",
+  repo: "checkout",
+  ref: "v4",
+  yaml_path: "action.yml",
+  source_url: "https://github.com/actions/checkout",
+  inputs: [
+    { name: "token", description: "GH token", required: false, default: null, type: "string" as const, options: null },
+  ],
+  branding_icon: "zap",
+  branding_color: "blue",
+};
+
 // ---- Mock state container ---------------------------------------------------
 
 /**
@@ -142,6 +202,9 @@ export interface MockState {
     merged_prs: number;
     closed_prs: number;
   };
+  actionsProjects: ActionsProjectStub[];
+  actionGroups: { action_group_id: number; name: string; description: string | null; actions_project_ids: number[] }[];
+  actionsProjectPreview: typeof SAMPLE_ACTIONS_PREVIEW;
   failNextSave?: boolean;
   failProjectsList?: boolean;
 }
@@ -157,6 +220,9 @@ export function createMockState(initial: Partial<MockState> = {}): MockState {
       merged_prs: 0,
       closed_prs: 0,
     },
+    actionsProjects: initial.actionsProjects ?? [],
+    actionGroups: initial.actionGroups ?? [],
+    actionsProjectPreview: initial.actionsProjectPreview ?? SAMPLE_ACTIONS_PREVIEW,
     failNextSave: initial.failNextSave ?? false,
     failProjectsList: initial.failProjectsList ?? false,
   };
@@ -589,6 +655,84 @@ export async function installApiMocks(
   await page.route(
     apiPath((p) => p.startsWith("/api/drift")),
     (route) => jsonResponse(route, { drifted: false, workflows: [] }),
+  );
+
+  // Managed Actions (Actions Projects) — preview a repo's actions.yaml
+  await page.route(
+    apiPath((p) => p === "/api/actions-projects/preview"),
+    (route) => jsonResponse(route, state.actionsProjectPreview),
+  );
+
+  // Managed Actions — list + create. Excludes "/preview" via the id-detail
+  // route below so a plain "/api/actions-projects/{id}" pattern never
+  // shadows the preview endpoint regardless of registration order.
+  await page.route(
+    apiPath((p) => p === "/api/actions-projects/" || p === "/api/actions-projects"),
+    async (route) => {
+      const method = route.request().method();
+      if (method === "OPTIONS") {
+        return jsonResponse(route, {});
+      }
+      if (method === "GET") {
+        return jsonResponse(route, state.actionsProjects);
+      }
+      if (method === "POST") {
+        const payload = JSON.parse(route.request().postData() || "{}");
+        const created = makeActionsProject({
+          actions_project_id: state.actionsProjects.length + 1,
+          name: payload.name,
+          description: payload.description ?? null,
+          source_url: payload.source_url,
+          owner: payload.owner,
+          repo: payload.repo,
+          ref: payload.ref,
+          yaml_path: payload.yaml_path,
+          inputs: payload.inputs ?? [],
+          branding_icon: payload.branding_icon ?? null,
+          branding_color: payload.branding_color ?? null,
+        });
+        state.actionsProjects.push(created);
+        return jsonResponse(route, created, 201);
+      }
+      return route.continue();
+    },
+  );
+
+  // Managed Actions — get / update / delete a single project by id
+  await page.route(
+    apiPath((p) => /^\/api\/actions-projects\/(?!preview$)[^/]+$/.test(p)),
+    async (route) => {
+      const method = route.request().method();
+      if (method === "OPTIONS") {
+        return jsonResponse(route, {});
+      }
+      const url = new URL(route.request().url());
+      const id = Number(url.pathname.split("/").filter(Boolean).at(-1));
+      const project = state.actionsProjects.find((p) => p.actions_project_id === id);
+      if (method === "GET") {
+        if (!project) return jsonResponse(route, { detail: "not found" }, 404);
+        return jsonResponse(route, project);
+      }
+      if (method === "PUT") {
+        if (!project) return jsonResponse(route, { detail: "not found" }, 404);
+        const payload = JSON.parse(route.request().postData() || "{}");
+        project.name = payload.name;
+        project.description = payload.description ?? null;
+        if (Array.isArray(payload.inputs)) project.inputs = payload.inputs;
+        return jsonResponse(route, project);
+      }
+      if (method === "DELETE") {
+        state.actionsProjects = state.actionsProjects.filter((p) => p.actions_project_id !== id);
+        return jsonResponse(route, { ok: true });
+      }
+      return route.continue();
+    },
+  );
+
+  // Managed Actions — action groups (used for the group filter + picker)
+  await page.route(
+    apiPath((p) => p === "/api/action-groups/" || p === "/api/action-groups"),
+    (route) => jsonResponse(route, state.actionGroups),
   );
 
   // Hard fail any GitHub API attempts so we'd notice if a code path slipped through

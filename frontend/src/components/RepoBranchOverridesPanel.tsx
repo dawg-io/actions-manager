@@ -359,7 +359,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
                       Branch Configuration for {repo.repo_name}
                     </div>
                     <div className="space-y-2">
-                      <label className="flex items-start gap-2 text-sm text-slate-800 dark:text-slate-200 cursor-pointer">
+                      <label className="flex items-start gap-2 text-sm text-slate-800 dark:text-slate-200 cursor-pointer" aria-label="Use project default">
                         <input
                           type="radio"
                           name={`mode-${repo.repo_id}`}
@@ -379,7 +379,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
                           </span>
                         </span>
                       </label>
-                      <label className="flex items-start gap-2 text-sm text-slate-800 dark:text-slate-200 cursor-pointer">
+                      <label className="flex items-start gap-2 text-sm text-slate-800 dark:text-slate-200 cursor-pointer" aria-label="Override for this repository">
                         <input
                           type="radio"
                           name={`mode-${repo.repo_id}`}

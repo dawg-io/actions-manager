@@ -13,6 +13,7 @@ router = APIRouter()
 GITHUB_API_URL = "https://api.github.com"
 ACCEPT_HEADER = "application/vnd.github+json"
 X_API_VERSION = "2022-11-28"
+NOT_AUTHENTICATED_DETAIL = "User not authenticated"
 
 async def count_project_secrets(user: str, project_code: str, repo_names: list, use_prefix: bool = True, project_id: int = None, db: Session = None) -> int:
     """Helper function to count secrets for a project across repositories"""
@@ -201,7 +202,7 @@ async def create_secrets(request: Request, db: Annotated[Session, Depends(get_db
         project_name = data.get("project_name", "").strip()
 
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         # Validate account limits for free accounts
         limit_error = await _validate_account_limits(user, project_name, secrets, repo_names, db)
@@ -299,7 +300,7 @@ async def get_secrets(user: str, repo_name: str, project_name: str, db: Annotate
             return {"error": "Missing or invalid project name", "status": 400}
 
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         token = user_tokens[user]
         headers = {
@@ -372,7 +373,7 @@ async def delete_secrets(request: Request, db: Annotated[Session, Depends(get_db
         secret_name = data.get("secret_name", "").strip()
 
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         # ✅ Free accounts can delete secrets (within their limits)
         # Note: We allow deletion for free accounts since they need to manage their limited secrets
@@ -430,7 +431,7 @@ async def sync_secret(request: Request, db: Annotated[Session, Depends(get_db)])
         secret_key = data.get("secret_key", "").strip()
 
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         # Check account type - allow sync for free accounts since they're not creating new secrets
         # Note: We allow sync for free accounts since they're managing existing secrets, not creating new ones
@@ -458,7 +459,7 @@ async def get_secrets_count(user: str, project_name: str, repo_names: str, db: A
         print(f"📌 Getting secrets count for user={user}, project={project_name}, repos={repo_names}")
         
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
         
         # Parse repo names
         repo_list = [repo.strip() for repo in repo_names.split(",") if repo.strip()]

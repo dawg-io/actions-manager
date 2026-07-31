@@ -52,6 +52,7 @@ router = APIRouter()
 
 GITHUB_USER_NOT_FOUND = "GitHub user not found"
 _ERR_PROJECT_NOT_FOUND = "Project not found or access denied"
+_ERR_PROJECT_NOT_FOUND_PLAIN = "Project not found"
 _ERR_NO_ACCESS = "You do not have access to this project"
 _ERR_INTERNAL_VALIDATION = "Internal server error during project validation"
 _ERR_INSUFFICIENT_PROJECT_ROLE = "Insufficient project permissions. Required: project_editor"
@@ -831,7 +832,7 @@ def _require_project_editor(db: Session, caller_member, project_id: int) -> None
     "/projects/{project_id}/",
     responses={
         403: {"description": "Access denied"},
-        404: {"description": "Project not found"},
+        404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         422: {"description": "Invalid project_color for this project type"},
     },
 )
@@ -849,7 +850,7 @@ def update_project(
         existing_project = _find_project_by_id(db, project_id, caller_member, project.github_user)
         if not existing_project:
             print(f"❌ PUT /projects/{project_id}/ - Project not found (caller='{x_github_user}', github_user='{project.github_user}')")
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
         _require_project_editor(db, caller_member, existing_project.project_id)
 
@@ -969,7 +970,7 @@ def update_project(
     "/projects/{project_id}/project-color",
     responses={
         403: {"description": "Access denied"},
-        404: {"description": "Project not found"},
+        404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         422: {"description": "Invalid project_color for this project type"},
     },
 )
@@ -989,7 +990,7 @@ def update_project_color(
                 f"❌ PATCH /projects/{project_id}/project-color - Project not found "
                 f"(caller='{x_github_user}', github_user='{payload.github_user}')"
             )
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
         _require_project_editor(db, caller_member, existing_project.project_id)
 
@@ -1029,7 +1030,7 @@ def update_project_color(
 @router.patch(
     "/projects/{project_id}/project-name",
     responses={
-        404: {"description": "Project not found"},
+        404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         500: {"description": "Internal server error"},
     },
 )
@@ -1052,7 +1053,7 @@ def update_project_name(
                 f"❌ PATCH /projects/{project_id}/project-name - Project not found "
                 f"(caller='{x_github_user}', github_user='{payload.github_user}')"
             )
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
         print(
             f"✅ PATCH /projects/{project_id}/project-name - Renaming project "
@@ -2196,7 +2197,7 @@ def link_reusable_workflow(
 
         standard_project = _find_project_by_name(db, project_name, caller_member, payload.github_user)
         if not standard_project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
         rwx_project = _find_project_by_id(db, payload.rwx_project_id, caller_member, payload.github_user)
         if not rwx_project or rwx_project.project_type != "rwx":
@@ -2265,7 +2266,7 @@ def unlink_reusable_workflow(
 
         standard_project = _find_project_by_name(db, project_name, caller_member, github_user)
         if not standard_project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
         link = db.query(LinkedReusableWorkflow).filter(
             LinkedReusableWorkflow.standard_project_id == standard_project.project_id,
@@ -2326,7 +2327,7 @@ def update_linked_reusable_workflow(
             db, project_name, caller_member, payload.github_user
         )
         if not standard_project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
         # Enforce project_editor (write) access on the consuming project so that
         # project_viewer/read_only members cannot mutate via this endpoint.

@@ -57,7 +57,7 @@ describe('EnvVars Component', () => {
 
   test('renders without crashing', () => {
     render(<EnvVars {...mockProps} />);
-    // Should not throw any errors - proves helper functions work correctly
+    expect(screen.getByText('TEST_VAR')).toBeInTheDocument();
   });
 
   test('helper functions reduce nesting successfully', () => {

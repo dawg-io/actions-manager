@@ -379,18 +379,21 @@ const NewProject: React.FC<NewProjectProps> = ({ user }) => {
     setCurrentStep((step) => Math.max(step - 1, 1) as WizardStep);
   };
 
+  const findRepoByName = (name: string): Repository | undefined =>
+    repos.find((r) => (r.full_name || r.name) === name);
+
+  const repoStillMatchesScope = (name: string, scope: VisibilityScope): boolean => {
+    const repo = findRepoByName(name);
+    if (!repo) return true; // keep unknown repos; backend will validate
+    return repoMatchesVisibilityScope(repo, scope);
+  };
+
   // Switching the visibility scope must clear any already-selected repositories
   // that no longer match — otherwise the user could submit a mismatched set.
   const handleVisibilityScopeChange = (next: VisibilityScope): void => {
     if (next === visibilityScope) return;
     setVisibilityScope(next);
-    setSelectedRepos((prev) =>
-      prev.filter((name) => {
-        const repo = repos.find((r) => (r.full_name || r.name) === name);
-        if (!repo) return true; // keep unknown repos; backend will validate
-        return repoMatchesVisibilityScope(repo, next);
-      }),
-    );
+    setSelectedRepos((prev) => prev.filter((name) => repoStillMatchesScope(name, next)));
   };
 
   const handleAddRepo = (repoName: string): void => {
@@ -851,6 +854,7 @@ jobs:
                           ? "border-emerald-400/70 bg-emerald-500/10"
                           : "border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-800/60 hover:border-emerald-400/60"
                       }`}
+                      aria-label={`${PREFIX_MODE_CONFIG.label} - Recommended`}
                     >
                       <input
                         type="radio"
@@ -877,6 +881,7 @@ jobs:
                           ? "border-amber-400/70 bg-amber-500/10"
                           : "border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-800/60 hover:border-amber-400/60"
                       }`}
+                      aria-label={NO_PREFIX_MODE_CONFIG.label}
                     >
                       <input
                         type="radio"

@@ -6,6 +6,7 @@
  *   GET  /api/workflows/{workflow_id}/drift
  *   POST /api/workflows/{workflow_id}/resolve-drift
  *   POST /api/drift/adopt-github-version   (scope-aware drift resolution)
+ *   POST /api/projects/{project_id}/drift/bulk-resolve   (bulk-fix workflow drift)
  */
 import apiClient from "./apiClient";
 
@@ -128,6 +129,44 @@ export async function adoptGithubVersion(
 ): Promise<AdoptGithubVersionResponse> {
   const resp = await apiClient.post<AdoptGithubVersionResponse>(
     `/api/drift/adopt-github-version`,
+    body,
+  );
+  return resp.data;
+}
+
+export interface BulkResolveDriftItem {
+  workflow_id: number;
+  repo: string;
+  branch: string;
+}
+
+export interface BulkResolveDriftRequest {
+  github_user: string;
+  items: BulkResolveDriftItem[];
+  resolution: DriftResolution;
+  delivery_mode?: DriftDeliveryMode;
+}
+
+export interface BulkResolveDriftItemResult {
+  workflow_id: number;
+  repo: string;
+  branch: string;
+  success: boolean;
+  message: string;
+  pr_url?: string | null;
+}
+
+export interface BulkResolveDriftResponse {
+  success: boolean;
+  results: BulkResolveDriftItemResult[];
+}
+
+export async function bulkResolveWorkflowDrift(
+  projectId: number,
+  body: BulkResolveDriftRequest,
+): Promise<BulkResolveDriftResponse> {
+  const resp = await apiClient.post<BulkResolveDriftResponse>(
+    `/api/projects/${projectId}/drift/bulk-resolve`,
     body,
   );
   return resp.data;

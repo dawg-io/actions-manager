@@ -14,6 +14,9 @@ from github_api_tracker import github_get
 
 router = APIRouter()
 
+NOT_AUTHENTICATED_DETAIL = "User not authenticated"
+GITHUB_JSON_ACCEPT = "application/vnd.github+json"
+
 
 def _resolve_target_owner(user: str, owner: str | None, token: str, db: Session) -> tuple[str, str]:
     """
@@ -56,7 +59,7 @@ def _resolve_target_owner(user: str, owner: str | None, token: str, db: Session)
 
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
+        "Accept": GITHUB_JSON_ACCEPT,
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
@@ -160,7 +163,7 @@ def get_repos(user: str, request: Request, db: Annotated[Session, Depends(get_db
     """
     _assert_session_owns_user(user, request, db)
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     token = user_tokens[user]
     
@@ -216,7 +219,7 @@ def get_branches(user: str, owner: str, repo: str, request: Request, db: Annotat
     """Fetch all branches of a GitHub repository."""
     _assert_session_owns_user(user, request, db)
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     token = user_tokens[user]
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
@@ -244,12 +247,12 @@ async def create_github_repo(request: Request, db: Annotated[Session, Depends(ge
         data = await request.json()
         user = data.get("user")
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         token = user_tokens[user]
         headers = {
             "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
+            "Accept": GITHUB_JSON_ACCEPT,
             "X-GitHub-Api-Version": "2022-11-28"
         }
         repo_name = "am-reuseable-workflow"
@@ -303,7 +306,7 @@ async def create_rwx_repo(request: Request, db: Annotated[Session, Depends(get_d
         repo_name = data.get("repo_name", "").strip()
 
         if not user or user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         if not repo_name:
             return {"error": "Repository name is required", "status": 400}
@@ -311,7 +314,7 @@ async def create_rwx_repo(request: Request, db: Annotated[Session, Depends(get_d
         token = user_tokens[user]
         headers = {
             "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
+            "Accept": GITHUB_JSON_ACCEPT,
             "X-GitHub-Api-Version": "2022-11-28"
         }
 
@@ -409,12 +412,12 @@ async def get_rwx_repos(
     """
     _assert_session_owns_user(user, request, db)
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     token = user_tokens[user]
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
+        "Accept": GITHUB_JSON_ACCEPT,
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
@@ -529,12 +532,12 @@ def check_repo_status(user: str, repo_name: str, request: Request, db: Annotated
     """
     _assert_session_owns_user(user, request, db)
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     token = user_tokens[user]
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
+        "Accept": GITHUB_JSON_ACCEPT,
         "X-GitHub-Api-Version": "2022-11-28"
     }
     repo_owner = owner or user
@@ -554,7 +557,7 @@ def detect_build_type(user: str, owner: str, repo: str, request: Request, db: An
     """Detect build types in a GitHub repository."""
     _assert_session_owns_user(user, request, db)
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     token = user_tokens[user]
     
@@ -588,7 +591,7 @@ def suggest_workflow(user: str, owner: str, repo: str, request: Request, db: Ann
     """Suggest a workflow based on detected build types or a specific build type."""
     _assert_session_owns_user(user, request, db)
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     token = user_tokens[user]
     

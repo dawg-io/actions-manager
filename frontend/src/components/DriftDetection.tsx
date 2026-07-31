@@ -29,9 +29,11 @@ import {
   getProjectDrift,
   resolveWorkflowDrift,
   adoptGithubVersion,
+  bulkResolveWorkflowDrift,
   type WorkflowDriftDetail,
   type DriftDeliveryMode,
   type AdoptResolutionMode,
+  type DriftResolution,
 } from "../api/drift";
 import ConfirmDialog from "./ConfirmDialog";
 import { getDocsUrl } from "../help/helpLinks";
@@ -62,6 +64,16 @@ interface DriftDetectionProps {
    * Use this to refresh after a save/PR completes.
    */
   refreshSignal?: number;
+  /**
+   * Called whenever a resolve action changes a workflow's status server-side
+   * (synced_with_github via use_github/direct, under_review via a fix PR).
+   * loadDrift() only refreshes this component's own drift list - the parent
+   * owns the workflows/rxworkflows state that status badges elsewhere on the
+   * page render from, so it needs this callback to patch that sibling state
+   * itself. Mirrors the pattern CreatePRModal's PR-campaign flow already
+   * uses (ProjectMgmt.tsx's handlePRCreationSuccess).
+   */
+  onWorkflowStatusesChanged?: (workflowNames: string[], status: string) => void;
 }
 
 /**
@@ -295,6 +307,7 @@ const AdoptGithubVersionModal: React.FC<{
                 : "border-slate-200 dark:border-slate-700 hover:border-slate-400"
             }`}
             data-testid="adopt-mode-project-and-sync"
+            aria-label="Adopt for project and sync other repositories"
           >
             <div className="flex items-start gap-2">
               <input
@@ -354,6 +367,7 @@ const AdoptGithubVersionModal: React.FC<{
                 : "border-slate-200 dark:border-slate-700 hover:border-slate-400"
             }`}
             data-testid="adopt-mode-local-only"
+            aria-label="Adopt locally only"
           >
             <div className="flex items-start gap-2">
               <input
@@ -388,6 +402,7 @@ const AdoptGithubVersionModal: React.FC<{
                 : "border-slate-200 dark:border-slate-700 hover:border-slate-400"
             }`}
             data-testid="adopt-mode-repo-override"
+            aria-label="Create repo-specific override"
           >
             <div className="flex items-start gap-2">
               <input
@@ -445,6 +460,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   selectedRepos,
   onDriftLoaded,
   refreshSignal,
+  onWorkflowStatusesChanged,
 }) => {
   const [drifts, setDrifts] = useState<WorkflowDriftDetail[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -458,10 +474,68 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   // an explicit confirmation naming the repo + target branch.
   const [confirmDirect, setConfirmDirect] = useState<WorkflowDriftDetail | null>(null);
 
+  // Bulk-fix: select multiple drifted workflows and resolve them together.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [bulkResolving, setBulkResolving] = useState<DriftDeliveryMode | "use_github" | null>(null);
+  // Direct restore overwrites GitHub with no PR review - same confirmation
+  // gate as the single-item direct restore above, just naming the batch.
+  const [confirmBulkDirect, setConfirmBulkDirect] = useState(false);
+
   const driftKey = useCallback(
     (d: WorkflowDriftDetail) => `${d.workflow_id}::${d.repo}::${d.branch}`,
     [],
   );
+
+  const driftByKey = useMemo(() => {
+    const m = new Map<string, WorkflowDriftDetail>();
+    drifts.forEach((d) => m.set(driftKey(d), d));
+    return m;
+  }, [drifts, driftKey]);
+
+  // Groups drifted workflows that have the identical GitHub-side change, so
+  // the user can select a whole group in one click instead of eyeballing
+  // diffs one at a time. github_sha is a content hash of that file's GitHub
+  // blob, so it's a cheap and reliable equality key; github_yaml is a
+  // fallback for the rare case a sha wasn't available. __solo__-prefixed
+  // keys guarantee items with neither never falsely group together.
+  const groupKeyFor = useCallback(
+    (d: WorkflowDriftDetail) => d.github_sha ?? d.github_yaml ?? `__solo__${driftKey(d)}`,
+    [driftKey],
+  );
+  const driftGroups = useMemo(() => {
+    const groups = new Map<string, WorkflowDriftDetail[]>();
+    drifts.forEach((d) => {
+      const gk = groupKeyFor(d);
+      groups.set(gk, [...(groups.get(gk) ?? []), d]);
+    });
+    return groups;
+  }, [drifts, groupKeyFor]);
+
+  const toggleSelected = useCallback((k: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedKeys(new Set(drifts.map(driftKey)));
+  }, [drifts, driftKey]);
+
+  const deselectAll = useCallback(() => {
+    setSelectedKeys(new Set());
+  }, []);
+
+  const selectGroup = useCallback((d: WorkflowDriftDetail) => {
+    const group = driftGroups.get(groupKeyFor(d)) ?? [d];
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      group.forEach((g) => next.add(driftKey(g)));
+      return next;
+    });
+  }, [driftGroups, groupKeyFor, driftKey]);
 
   // Mirrors `drifts` so a failed background check can fall back to the last
   // known state without adding `drifts` as a loadDrift dependency (which would
@@ -524,6 +598,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
         if (response.state === "synced") {
           // Success - drift resolved
           setSuccess(response.message || "Drift resolved successfully");
+          onWorkflowStatusesChanged?.([detail.workflow_name], "synced_with_github");
 
           // Refresh drift data to update badges and capture fresh list
           const refreshed = await loadDrift();
@@ -547,6 +622,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
             response.message
               || `Pull request opened in ${detail.repo}. Review and merge it to complete the restore.`,
           );
+          onWorkflowStatusesChanged?.([detail.workflow_name], "under_review");
           await loadDrift();
           if (openDiffKey === key) setOpenDiffKey(null);
         } else {
@@ -563,7 +639,72 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
         setResolvingMode(null);
       }
     },
-    [driftKey, loadDrift, openDiffKey, user],
+    [driftKey, loadDrift, openDiffKey, user, onWorkflowStatusesChanged],
+  );
+
+  const handleBulkResolve = useCallback(
+    async (resolution: DriftResolution, deliveryMode?: DriftDeliveryMode) => {
+      if (!projectId || selectedKeys.size === 0) return;
+      const items: { workflow_id: number; repo: string; branch: string }[] = [];
+      selectedKeys.forEach((k) => {
+        const d = driftByKey.get(k);
+        if (d) items.push({ workflow_id: d.workflow_id, repo: d.repo, branch: d.branch });
+      });
+      if (items.length === 0) return;
+
+      setBulkResolving(deliveryMode ?? "use_github");
+      setError(null);
+      setSuccess(null);
+      try {
+        const response = await bulkResolveWorkflowDrift(projectId, {
+          github_user: user,
+          items,
+          resolution,
+          delivery_mode: deliveryMode,
+        });
+        const okCount = response.results.filter((r) => r.success).length;
+        const failCount = response.results.length - okCount;
+        const failures = response.results.filter((r) => !r.success);
+        const summary = failCount === 0
+          ? `${okCount} of ${okCount} resolved successfully.`
+          : `${okCount} resolved, ${failCount} failed: `
+            + failures.map((f) => `${f.repo} (${f.message})`).join("; ");
+
+        // Same gap as the single-item flow above: the bulk-resolve response
+        // only tells this component's own drift list to refresh - the
+        // parent's workflows/rxworkflows state (and the status badges it
+        // drives) needs the same explicit patch for every item that succeeded.
+        const newStatus = resolution === "use_github" || deliveryMode === "direct"
+          ? "synced_with_github"
+          : "under_review";
+        const successNames = response.results
+          .filter((r) => r.success)
+          .map((r) => driftByKey.get(`${r.workflow_id}::${r.repo}::${r.branch}`)?.workflow_name)
+          .filter((name): name is string => Boolean(name));
+        if (successNames.length > 0) {
+          onWorkflowStatusesChanged?.(successNames, newStatus);
+        }
+
+        setSelectedKeys(new Set());
+        // loadDrift() clears any error state as soon as it starts (see its
+        // own setError(null)), so the outcome must be set AFTER it resolves,
+        // not before — otherwise the refresh wipes the message we just set.
+        const refreshed = await loadDrift();
+        if (failCount === 0 && refreshed.length === 0) {
+          setSuccess("All workflow drift resolved.");
+          setTimeout(() => setShowModal(false), 2000);
+        } else if (failCount === 0) {
+          setSuccess(summary);
+        } else {
+          setError(summary);
+        }
+      } catch (err: unknown) {
+        setError(driftErrorMessage(err, "Bulk resolution failed"));
+      } finally {
+        setBulkResolving(null);
+      }
+    },
+    [projectId, selectedKeys, driftByKey, user, loadDrift, onWorkflowStatusesChanged],
   );
 
   const handleAdoptResolved = useCallback(async (message: string) => {
@@ -643,11 +784,69 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
             </div>
           )}
 
+          {/* Bulk-fix selection bar */}
+          {driftCount > 0 && (
+            <div className="flex flex-wrap items-center gap-3 px-1" data-testid="drift-selection-bar">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  data-testid="select-all-drifts"
+                  checked={selectedKeys.size > 0 && selectedKeys.size === drifts.length}
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedKeys.size > 0 && selectedKeys.size < drifts.length;
+                  }}
+                  onChange={(e) => (e.target.checked ? selectAll() : deselectAll())}
+                />
+                <span className="text-slate-600 dark:text-slate-400">
+                  {selectedKeys.size} of {drifts.length} selected
+                </span>
+              </label>
+              <Button variant="outline" size="sm" onClick={selectAll}>Select All</Button>
+              <Button variant="outline" size="sm" onClick={deselectAll}>Deselect All</Button>
+
+              {selectedKeys.size > 0 && (
+                <div className="flex flex-wrap items-center gap-2 ml-auto" data-testid="bulk-action-toolbar">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={bulkResolving !== null}
+                    onClick={() => handleBulkResolve("use_github")}
+                  >
+                    {bulkResolving === "use_github"
+                      ? "Adopting…"
+                      : `Adopt GitHub Version (${selectedKeys.size})`}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={bulkResolving !== null}
+                    onClick={() => handleBulkResolve("restore_actionsmanager", "pr")}
+                  >
+                    {bulkResolving === "pr"
+                      ? "Creating PRs…"
+                      : `Create Fix PR (${selectedKeys.size})`}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={bulkResolving !== null}
+                    onClick={() => setConfirmBulkDirect(true)}
+                  >
+                    {bulkResolving === "direct"
+                      ? "Restoring…"
+                      : `Restore Directly (${selectedKeys.size})`}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Drift table */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="text-left border-b border-slate-200 dark:border-slate-700">
+                  <th className="py-2 pr-2" />
                   <th className="py-2 pr-4">Workflow</th>
                   <th className="py-2 pr-4">Repo</th>
                   <th className="py-2 pr-4">Branch</th>
@@ -661,12 +860,31 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                   const k = driftKey(d);
                   const isOpen = openDiffKey === k;
                   const busy = resolving === k;
+                  const group = driftGroups.get(groupKeyFor(d)) ?? [d];
                   return (
                     <React.Fragment key={k}>
                       <tr className="border-b border-slate-100 dark:border-slate-800">
+                        <td className="py-2 pr-2">
+                          <input
+                            type="checkbox"
+                            data-testid={`select-drift-${k}`}
+                            checked={selectedKeys.has(k)}
+                            onChange={() => toggleSelected(k)}
+                          />
+                        </td>
                         <td className="py-2 pr-4 font-medium">
                           <div className="flex items-center gap-2">
                             <span>{d.workflow_filename}</span>
+                            {group.length > 1 && (
+                              <button
+                                type="button"
+                                className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+                                data-testid={`select-group-${k}`}
+                                onClick={() => selectGroup(d)}
+                              >
+                                {group.length} identical — select all
+                              </button>
+                            )}
                             {d.is_shared_workflow && (
                               <span
                                 className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
@@ -710,7 +928,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                       </tr>
                       {isOpen && (
                         <tr>
-                          <td colSpan={6} className="py-2">
+                          <td colSpan={7} className="py-2">
                             <div className="space-y-2">
                               <p className="text-sm text-slate-700 dark:text-slate-300">
                                 Repository: <strong>{d.repo}</strong>
@@ -778,6 +996,23 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
           const d = confirmDirect;
           setConfirmDirect(null);
           if (d) handleResolve(d, "restore_actionsmanager", "direct");
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDirect}
+        title="Overwrite GitHub directly?"
+        description={
+          `This immediately overwrites ${selectedKeys.size} workflow(s) with the `
+          + `ActionsManager-managed version. The current GitHub versions are replaced `
+          + `now, with no pull request to review. This cannot be undone from here.`
+        }
+        confirmLabel="Overwrite directly"
+        destructive
+        onCancel={() => setConfirmBulkDirect(false)}
+        onConfirm={() => {
+          setConfirmBulkDirect(false);
+          handleBulkResolve("restore_actionsmanager", "direct");
         }}
       />
     </>

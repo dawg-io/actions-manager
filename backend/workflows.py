@@ -31,6 +31,9 @@ from workflow_templates import (
 )
 from github_api_tracker import github_get, github_put, github_patch
 
+NOT_AUTHENTICATED_DETAIL = "User not authenticated"
+MISSING_WORKFLOW_NAME_DETAIL = "Missing workflow name"
+
 class WorkflowSchema(BaseModel):
     name: str
     content: str
@@ -286,6 +289,38 @@ class ResolveWorkflowDriftRequest(BaseModel):
     branch: str
     resolution: str  # "use_github" or "restore_actionsmanager"
     delivery_mode: Optional[str] = "pr"  # "pr" or "direct" — only used for restore_actionsmanager
+
+
+class BulkResolveDriftItem(BaseModel):
+    workflow_id: int
+    repo: str
+    branch: str
+
+
+class BulkResolveDriftRequest(BaseModel):
+    """Body for POST /api/projects/{project_id}/drift/bulk-resolve.
+
+    resolution/delivery_mode apply uniformly to every item in the batch -
+    mixing resolutions per item isn't supported in one request.
+    """
+    github_user: Optional[str] = None
+    items: List[BulkResolveDriftItem]
+    resolution: str  # "use_github" or "restore_actionsmanager"
+    delivery_mode: Optional[str] = "pr"  # "pr" or "direct" — only used for restore_actionsmanager
+
+
+class BulkResolveDriftItemResult(BaseModel):
+    workflow_id: int
+    repo: str
+    branch: str
+    success: bool
+    message: str
+    pr_url: Optional[str] = None
+
+
+class BulkResolveDriftResponse(BaseModel):
+    success: bool
+    results: List[BulkResolveDriftItemResult]
 
 
 def _cache_project_drift_summary(
@@ -585,22 +620,30 @@ def count_project_reusable_workflows(user: str, project_name: str) -> int:
     finally:
         db.close()
 
-def get_workflow_from_github(owner, repo, workflow_filename, token):
-    """Fetch a specific workflow file from GitHub repository"""
+def get_workflow_from_github(owner, repo, workflow_filename, token, default_branch=None):
+    """Fetch a specific workflow file from GitHub repository.
+
+    ``default_branch``, when supplied, skips the repo-metadata lookup -
+    callers resolving the same repo's default branch for multiple files in
+    one request (e.g. a bulk operation) should resolve it once via
+    ``get_default_branch`` and pass it through here instead of paying for a
+    redundant GET per file.
+    """
     headers = {
         "Authorization": f"token {token}",
         "Accept": ACCEPT_HEADER,
         "X-GitHub-Api-Version": X_API_VERSION
     }
-    
-    # Get the repository info to find the default branch
-    repo_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}"
-    repo_response = requests.get(repo_url, headers=headers)
-    
-    default_branch = "main"  # fallback
-    if repo_response.status_code == 200:
-        default_branch = repo_response.json().get("default_branch", "main")
-    
+
+    if default_branch is None:
+        # Get the repository info to find the default branch
+        repo_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}"
+        repo_response = requests.get(repo_url, headers=headers)
+
+        default_branch = "main"  # fallback
+        if repo_response.status_code == 200:
+            default_branch = repo_response.json().get("default_branch", "main")
+
     # Try to get the workflow file from default branch
     workflow_path = f".github/workflows/{workflow_filename}"
     file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{workflow_path}?ref={default_branch}"
@@ -727,7 +770,7 @@ def _validate_user_and_get_project(db: Session, user: str, project_name: str):
         HTTPException: If user is not authenticated or project is not found
     """
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
     
     token = user_tokens[user]
     
@@ -2278,7 +2321,7 @@ def resolve_drift(
     try:
         github_user = _resolve_github_user(x_github_user, payload.github_user)
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         
         # Get project and workflow
         project = _find_project_by_name(db, github_user, payload.project_name)
@@ -2515,6 +2558,10 @@ def _collect_project_drift_details(
     return details
 
 
+NOT_AUTHORIZED_PROJECT_DETAIL = "Not authorized for this project"
+DELIVERY_MODE_ERROR_DETAIL = "delivery_mode must be 'pr' or 'direct'"
+
+
 def _resolve_workflow_owner_project(db: Session, workflow_id: int):
     """Return (workflow, project) or (None, None) for a workflow_id."""
     wf = db.query(Workflow).filter_by(workflow_id=workflow_id).first()
@@ -2527,7 +2574,11 @@ def _resolve_workflow_owner_project(db: Session, workflow_id: int):
     return wf, project
 
 
-@router.get("/api/projects/{project_id}/drift", response_model=ProjectDriftSummary)
+@router.get(
+    "/api/projects/{project_id}/drift",
+    response_model=ProjectDriftSummary,
+    responses={403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL}},
+)
 def get_project_drift(
     project_id: int,
     github_user: str,
@@ -2535,7 +2586,7 @@ def get_project_drift(
 ):
     """Project-level drift summary — returns all drifted workflows/repos/branches."""
     if github_user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     project = db.query(Project).filter_by(project_id=project_id).first()
     if not project:
@@ -2545,7 +2596,7 @@ def get_project_drift(
     # _find_project_by_name() resolution (handles owner / membership / admin).
     accessible = _find_project_by_name(db, github_user, project.project_name)
     if not accessible or accessible.project_id != project_id:
-        raise HTTPException(status_code=403, detail="Not authorized for this project")
+        raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
 
     try:
         details = _collect_project_drift_details(db, github_user, project)
@@ -2590,7 +2641,7 @@ def get_workflow_drift(
 ):
     """Per-workflow drift detail — includes both YAML versions and SHAs per repo/branch."""
     if github_user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     wf, project = _resolve_workflow_owner_project(db, workflow_id)
     if not wf:
@@ -2657,9 +2708,57 @@ def _direct_push_workflow_to_branch(
     return {"status_code": resp.status_code, "error": resp.text[:500]}
 
 
+def _apply_use_github_resolution(
+    db: Session,
+    github_user: str,
+    wf: Workflow,
+    repo: str,
+    formatted_name: str,
+    token: str,
+    default_branch: Optional[str] = None,
+) -> dict:
+    """Overwrite ``wf``'s local YAML with the current GitHub version for one repo/branch.
+
+    Pure mutation - does not re-check drift afterward. The single-workflow
+    endpoint re-checks drift itself for response shaping; a bulk caller
+    re-fetches the whole project's drift summary once at the end instead of
+    once per item, since a live GitHub diff check per item would be far more
+    expensive than the fetch this helper already does.
+
+    ``default_branch``, when supplied, is forwarded to
+    ``get_workflow_from_github`` to skip its repo-metadata lookup - pass it
+    when resolving several items in the same repo in one request.
+
+    Returns {"success": bool, "github_sha": str|None, "error": str|None}.
+    """
+    owner, repo_short = repo.split("/", 1)
+    github_data = get_workflow_from_github(owner, repo_short, formatted_name, token, default_branch=default_branch)
+    if not github_data:
+        return {
+            "success": False,
+            "github_sha": None,
+            "error": f"Workflow '{formatted_name}' not found in {repo}",
+        }
+
+    github_content = (github_data.get("content") or "").strip()
+    github_sha = github_data.get("sha")
+
+    wf.workflow_yaml = github_content
+    wf.workflow_git_hash = github_sha
+    wf.last_modified_by = github_user
+    wf.workflow_status = "synced_with_github"
+    db.commit()
+
+    return {"success": True, "github_sha": github_sha, "error": None}
+
+
 @router.post(
     "/api/workflows/{workflow_id}/resolve-drift",
-    responses={500: {"description": "Unexpected error during drift restoration"}},
+    responses={
+        400: {"description": "resolution or delivery_mode is invalid"},
+        404: {"description": "Workflow, project, or GitHub file not found"},
+        500: {"description": "Unexpected error during drift restoration"},
+    },
 )
 def resolve_workflow_drift(
     workflow_id: int,
@@ -2676,7 +2775,7 @@ def resolve_workflow_drift(
     """
     github_user = _resolve_github_user(x_github_user, payload.github_user)
     if github_user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     wf, project = _resolve_workflow_owner_project(db, workflow_id)
     if not wf:
@@ -2706,25 +2805,14 @@ def resolve_workflow_drift(
         print(f"  Old local SHA: {wf.workflow_git_hash}")
         print(f"  Old local content length: {len(wf.workflow_yaml or '')}")
 
-        github_data = get_workflow_from_github(owner, repo, formatted_name, token)
-        if not github_data:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Workflow '{formatted_name}' not found in {payload.repo}",
-            )
-
-        github_content = (github_data.get("content") or "").strip()
-        github_sha = github_data.get("sha")
+        resolution = _apply_use_github_resolution(
+            db, github_user, wf, payload.repo, formatted_name, token,
+        )
+        if not resolution["success"]:
+            raise HTTPException(status_code=404, detail=resolution["error"])
+        github_sha = resolution["github_sha"]
 
         print(f"  New GitHub SHA: {github_sha}")
-        print(f"  New GitHub content length: {len(github_content)}")
-
-        # Update local workflow with GitHub version
-        wf.workflow_yaml = github_content
-        wf.workflow_git_hash = github_sha
-        wf.last_modified_by = github_user
-        db.commit()
-
         print("  ✅ Database updated and committed")
 
         # Refresh the workflow from database to ensure we have the latest state
@@ -2826,6 +2914,8 @@ def resolve_workflow_drift(
                     if result.get("sha"):
                         wf.workflow_git_hash = result["sha"]
                     wf.last_modified_by = github_user
+                    wf.workflow_status = "synced_with_github"
+                    project.pr_state = "synced"
                     db.commit()
 
                     print(f"  ✅ Direct push successful, new SHA: {result.get('sha')}")
@@ -2879,7 +2969,7 @@ def resolve_workflow_drift(
                     "pr_result": pr_result,
                 }
 
-            raise HTTPException(status_code=400, detail="delivery_mode must be 'pr' or 'direct'")
+            raise HTTPException(status_code=400, detail=DELIVERY_MODE_ERROR_DETAIL)
         except HTTPException:
             # Already-shaped errors (GitHub 502, pipeline failures, bad input)
             # carry a useful status + detail - let them through unchanged.
@@ -2903,6 +2993,265 @@ def resolve_workflow_drift(
         status_code=400,
         detail="resolution must be 'use_github' or 'restore_actionsmanager'",
     )
+
+
+def _validate_bulk_resolve_items(db: Session, project_id: int, items) -> list:
+    """Resolve + validate every item up front.
+
+    Fails the whole batch before any writes if one item doesn't actually
+    belong to this project.
+    """
+    resolved_items = []
+    for item in items:
+        wf, wf_project = _resolve_workflow_owner_project(db, item.workflow_id)
+        if not wf:
+            raise HTTPException(status_code=404, detail=f"Workflow {item.workflow_id} not found")
+        if not wf_project or wf_project.project_id != project_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Workflow {item.workflow_id} is not part of this project",
+            )
+        if "/" not in item.repo:
+            raise HTTPException(status_code=400, detail="repo must be in 'owner/repo' format")
+        resolved_items.append((item, wf))
+    return resolved_items
+
+
+def _bulk_resolve_use_github(
+    db: Session, github_user: str, project: Project, resolved_items: list, token: str
+) -> List[BulkResolveDriftItemResult]:
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": ACCEPT_HEADER,
+        "X-GitHub-Api-Version": X_API_VERSION,
+    }
+    # Cache each repo's default branch across items so N drifted workflows in
+    # the same repo cost one repo-metadata lookup, not N.
+    default_branch_cache: dict = {}
+    results: List[BulkResolveDriftItemResult] = []
+    for item, wf in resolved_items:
+        formatted_name = format_workflow_name(wf.workflow_name, project.project_code or "", project.use_prefix)
+        try:
+            if item.repo not in default_branch_cache:
+                owner, repo_short = item.repo.split("/", 1)
+                default_branch_cache[item.repo] = get_default_branch(owner, repo_short, headers, github_user, db)
+
+            outcome = _apply_use_github_resolution(
+                db, github_user, wf, item.repo, formatted_name, token,
+                default_branch=default_branch_cache[item.repo],
+            )
+            results.append(BulkResolveDriftItemResult(
+                workflow_id=item.workflow_id,
+                repo=item.repo,
+                branch=item.branch,
+                success=outcome["success"],
+                message=outcome["error"] or f"Workflow '{wf.workflow_name}' updated from GitHub version",
+            ))
+        except Exception as e:  # noqa: BLE001 - convert unexpected errors to a per-item failure
+            db.rollback()
+            results.append(BulkResolveDriftItemResult(
+                workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+                success=False, message=f"Failed to adopt GitHub version: {e}",
+            ))
+    return results
+
+
+def _bulk_resolve_restore_direct(
+    db: Session, github_user: str, project: Project, resolved_items: list, token: str
+) -> List[BulkResolveDriftItemResult]:
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": ACCEPT_HEADER,
+        "X-GitHub-Api-Version": X_API_VERSION,
+    }
+    results: List[BulkResolveDriftItemResult] = []
+    for item, wf in resolved_items:
+        owner, repo_short = item.repo.split("/", 1)
+        branch = item.branch or "main"
+        formatted_name = format_workflow_name(wf.workflow_name, project.project_code or "", project.use_prefix)
+        path = f".github/workflows/{formatted_name}"
+        commit_msg = f"Restore {formatted_name} from ActionsManager for {project.project_code} [skip ci]"
+        try:
+            push_result = _direct_push_workflow_to_branch(
+                owner, repo_short, branch, path, wf.workflow_yaml or "",
+                commit_msg, headers, github_user, db,
+            )
+            if push_result.get("status_code") in (200, 201):
+                if push_result.get("sha"):
+                    wf.workflow_git_hash = push_result["sha"]
+                wf.last_modified_by = github_user
+                wf.workflow_status = "synced_with_github"
+                db.commit()
+                results.append(BulkResolveDriftItemResult(
+                    workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+                    success=True,
+                    message=f"Workflow '{wf.workflow_name}' restored to {item.repo}@{branch} (direct commit)",
+                ))
+            else:
+                results.append(BulkResolveDriftItemResult(
+                    workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+                    success=False,
+                    message=(
+                        f"Failed to push workflow to GitHub: "
+                        f"{push_result.get('status_code')} {push_result.get('error', '')}"
+                    ),
+                ))
+        except Exception as e:  # noqa: BLE001 - convert unexpected errors to a per-item failure
+            db.rollback()
+            results.append(BulkResolveDriftItemResult(
+                workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+                success=False, message=f"Failed to restore workflow directly: {e}",
+            ))
+
+    # Mirrors _handle_sync_direct_push's all_ok aggregate pattern for
+    # the equivalent "push local content out to GitHub directly"
+    # action - results here contains only this branch's items.
+    project.pr_state = "synced" if all(r.success for r in results) else "draft"
+    db.commit()
+    return results
+
+
+def _build_pr_item_result(item, wf, repo: str, matching: dict, top_level_error) -> BulkResolveDriftItemResult:
+    ok = matching.get("status") in ("pr_created", "pr_updated")
+    if ok:
+        message = f"PR opened to restore '{wf.workflow_name}' in {repo}"
+    else:
+        message = (
+            f"Failed to create PR for '{wf.workflow_name}' in {repo}: "
+            f"{matching.get('error') or top_level_error or 'unknown error'}"
+        )
+    return BulkResolveDriftItemResult(
+        workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+        success=ok, message=message,
+        pr_url=matching.get("pr_url") if ok else None,
+    )
+
+
+def _bulk_resolve_pr_group(
+    db: Session, github_user: str, project: Project, repo: str, group: list,
+) -> List[BulkResolveDriftItemResult]:
+    """Create one PR covering every workflow in ``group`` (all share ``repo``)."""
+    workflow_names = [wf.workflow_name for _item, wf in group]
+    try:
+        pr_payload = CreatePullRequestsRequest(
+            github_user=github_user,
+            project_name=project.project_name,
+            selected_repos=[repo],
+            selected_workflows=workflow_names,
+        )
+        pr_result = create_pull_requests(
+            pr_payload, BackgroundTasks(), db, github_user=github_user
+        )
+        pr_results_by_key = pr_result.get("results", {}) if isinstance(pr_result, dict) else {}
+        top_level_error = pr_results_by_key.get("error") if isinstance(pr_results_by_key, dict) else None
+        results = []
+        for item, wf in group:
+            branch = item.branch or "main"
+            matching = pr_results_by_key.get(f"{repo} on {branch}", {})
+            matching = matching if isinstance(matching, dict) else {}
+            results.append(_build_pr_item_result(item, wf, repo, matching, top_level_error))
+        return results
+    except HTTPException as e:
+        return [
+            BulkResolveDriftItemResult(
+                workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+                success=False, message=str(e.detail),
+            )
+            for item, wf in group
+        ]
+    except Exception as e:  # noqa: BLE001 - convert unexpected errors to a per-item failure
+        db.rollback()
+        return [
+            BulkResolveDriftItemResult(
+                workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+                success=False, message=f"Failed to create PR: {e}",
+            )
+            for item, wf in group
+        ]
+
+
+def _bulk_resolve_restore_pr(
+    db: Session, github_user: str, project: Project, resolved_items: list
+) -> List[BulkResolveDriftItemResult]:
+    """Group items by repo and call create_pull_requests once per repo.
+
+    Multiple workflows restored to the SAME repo land in one PR -
+    _process_regular_workflows_update already commits every workflow in
+    selected_workflows to a single Actions Manager branch/PR per repo (branch
+    isn't forwarded to create_pull_requests - it resolves target branches
+    itself from the project's branch_option, same as the single-item
+    endpoint).
+    """
+    by_repo: dict = {}
+    for item, wf in resolved_items:
+        by_repo.setdefault(item.repo, []).append((item, wf))
+
+    results: List[BulkResolveDriftItemResult] = []
+    for repo, group in by_repo.items():
+        results.extend(_bulk_resolve_pr_group(db, github_user, project, repo, group))
+    return results
+
+
+@router.post(
+    "/api/projects/{project_id}/drift/bulk-resolve",
+    response_model=BulkResolveDriftResponse,
+    responses={
+        400: {"description": "Invalid resolution, delivery_mode, repo format, or empty items list"},
+        401: {"description": NOT_AUTHENTICATED_DETAIL},
+        403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL},
+        404: {"description": "Project or workflow not found"},
+    },
+)
+def bulk_resolve_project_drift(
+    project_id: int,
+    payload: BulkResolveDriftRequest,
+    db: Annotated[Session, Depends(get_db)],
+
+    x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
+):
+    """Resolve drift for multiple workflows in one request.
+
+    All items must belong to workflows owned by ``project_id``. Partial
+    failure is supported - one bad item doesn't block the rest, matching the
+    existing per-repo loop-and-collect-results pattern already used by
+    ``_handle_sync_direct_push``.
+    """
+    github_user = _resolve_github_user(x_github_user, payload.github_user)
+    if github_user not in user_tokens:
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
+
+    if payload.resolution not in ("use_github", "restore_actionsmanager"):
+        raise HTTPException(
+            status_code=400,
+            detail="resolution must be 'use_github' or 'restore_actionsmanager'",
+        )
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="items must not be empty")
+
+    project = db.query(Project).filter_by(project_id=project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail=PROJECT_ERROR)
+
+    accessible = _find_project_by_name(db, github_user, project.project_name)
+    if not accessible or accessible.project_id != project_id:
+        raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
+
+    resolved_items = _validate_bulk_resolve_items(db, project_id, payload.items)
+    token = user_tokens[github_user]
+
+    if payload.resolution == "use_github":
+        results = _bulk_resolve_use_github(db, github_user, project, resolved_items, token)
+    else:  # restore_actionsmanager
+        delivery_mode = (payload.delivery_mode or "pr").lower()
+        if delivery_mode not in ("pr", "direct"):
+            raise HTTPException(status_code=400, detail=DELIVERY_MODE_ERROR_DETAIL)
+
+        if delivery_mode == "direct":
+            results = _bulk_resolve_restore_direct(db, github_user, project, resolved_items, token)
+        else:
+            results = _bulk_resolve_restore_pr(db, github_user, project, resolved_items)
+
+    return BulkResolveDriftResponse(success=all(r.success for r in results), results=results)
 
 
 # -----------------------------------------------------------------------------
@@ -2930,7 +3279,7 @@ def _validate_adopt_github_request(
         HTTPException: On validation failure
     """
     if github_user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
     if payload.resolution_mode not in _VALID_RESOLUTION_MODES:
         raise HTTPException(
@@ -2944,7 +3293,7 @@ def _validate_adopt_github_request(
 
     accessible = _find_project_by_name(db, github_user, project.project_name)
     if not accessible or accessible.project_id != project.project_id:
-        raise HTTPException(status_code=403, detail="Not authorized for this project")
+        raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
 
     workflow = db.query(Workflow).filter_by(workflow_id=payload.workflow_id).first()
     if not workflow:
@@ -3318,7 +3667,7 @@ def _handle_adopt_project_and_sync(
     """
     delivery_mode = (payload.delivery_mode or "pr").lower()
     if delivery_mode not in ("pr", "direct"):
-        raise HTTPException(status_code=400, detail="delivery_mode must be 'pr' or 'direct'")
+        raise HTTPException(status_code=400, detail=DELIVERY_MODE_ERROR_DETAIL)
 
     target_repos = _get_target_repos_for_sync(payload, affected_repos)
 
@@ -3348,7 +3697,13 @@ def _handle_adopt_project_and_sync(
     )
 
 
-@router.post("/api/drift/adopt-github-version")
+@router.post(
+    "/api/drift/adopt-github-version",
+    responses={
+        400: {"description": "Invalid resolution_mode, delivery_mode, or repo format"},
+        403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL},
+    },
+)
 def adopt_github_version(
     payload: AdoptGithubVersionRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -3412,7 +3767,7 @@ def _get_project_and_token(payload: "CreatePullRequestsRequest", db: Session, gi
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     if user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
     token = user_tokens[user]
     project = _find_project_by_name(db, user, payload.project_name)
     if not project:
@@ -4490,7 +4845,7 @@ def get_preflight_validation_status(
     """Return (and optionally refresh) the project's preflight validation status."""
     try:
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         token = user_tokens[github_user]
 
         project = _find_project_by_name(db, github_user, project_name)
@@ -4660,7 +5015,7 @@ def _validate_merge_preflight_request(
     Raises HTTPException on validation failure.
     """
     if github_user not in user_tokens:
-        raise HTTPException(status_code=401, detail="User not authenticated")
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
     token = user_tokens[github_user]
 
     if not project:
@@ -4786,7 +5141,7 @@ def close_preflight_validation_pr(
     github_user = _resolve_github_user(x_github_user, payload.github_user)
     try:
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         token = user_tokens[github_user]
 
         project = _find_project_by_name(db, github_user, payload.project_name)
@@ -5226,7 +5581,7 @@ def get_project_pr_status(
     """
     try:
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         token = user_tokens[github_user]
 
@@ -5639,7 +5994,7 @@ def merge_pull_request(
         
         # Check authentication
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         
         token = user_tokens[github_user]
         
@@ -5731,7 +6086,7 @@ def close_pull_request(
         
         # Check authentication
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         
         token = user_tokens[github_user]
         
@@ -5862,7 +6217,7 @@ def get_project_pr_history(
     """
     try:
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         project = _find_project_by_name(db, github_user, project_name)
         if not project:
@@ -5995,7 +6350,7 @@ def get_project_pr_campaigns(
     """
     try:
         if github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         token = user_tokens[github_user]
         project = _find_project_by_name(db, github_user, project_name)
@@ -7925,7 +8280,7 @@ async def update_workflow(
         print(f"   branch_option: {branch_option}")
 
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         token = user_tokens[user]
         headers = {
@@ -7985,10 +8340,10 @@ async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_d
         project_name = data.get("project_name", "").strip()
 
         if not workflow_name:
-            raise HTTPException(status_code=400, detail="Missing workflow name")
+            raise HTTPException(status_code=400, detail=MISSING_WORKFLOW_NAME_DETAIL)
 
         if user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         token = user_tokens[user]
         headers = {
@@ -8097,10 +8452,10 @@ async def delete_reusable_workflow(request: Request, db: Annotated[Session, Depe
         project_name = data.get("project_name", "").strip()
 
         if not workflow_name:
-            raise HTTPException(status_code=400, detail="Missing workflow name")
+            raise HTTPException(status_code=400, detail=MISSING_WORKFLOW_NAME_DETAIL)
 
         if user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         token = user_tokens[user]
         headers = {
@@ -8210,10 +8565,10 @@ async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(ge
         project_name = data.get("project_name", "").strip()
 
         if not workflow_name:
-            raise HTTPException(status_code=400, detail="Missing workflow name")
+            raise HTTPException(status_code=400, detail=MISSING_WORKFLOW_NAME_DETAIL)
 
         if user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         # ✅ Fetch project from the database
         project = db.query(Project).filter(Project.project_name.ilike(project_name)).first()
@@ -8323,7 +8678,7 @@ async def get_workflow_status(request: Request, db: Annotated[Session, Depends(g
             raise HTTPException(status_code=400, detail="Missing required parameters")
 
         if user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
         token = user_tokens[user]
         headers = {
@@ -8491,7 +8846,7 @@ async def sync_workflow(request: Request, db: Annotated[Session, Depends(get_db)
         workflow_name = data.get("workflow_name", "").strip()
 
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
 
         token = user_tokens[user]
         headers = {
@@ -8584,7 +8939,7 @@ async def get_workflows_count(user: str, project_name: str, db: Annotated[Sessio
         print(f"📌 Getting workflows count for user={user}, project={project_name}")
         
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
         
         project = _find_project_by_name(db, user, project_name)
         
@@ -8609,7 +8964,7 @@ async def get_rxworkflows_count(user: str, project_name: str, db: Annotated[Sess
         print(f"📌 Getting reusable workflows count for user={user}, project={project_name}")
         
         if user not in user_tokens:
-            return {"error": "User not authenticated", "status": 401}
+            return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
         
         project = _find_project_by_name(db, user, project_name)
         
@@ -8660,7 +9015,7 @@ async def get_workflow_versions(
         print(f"📌 Getting version history for workflow '{workflow_name}' in project '{project_name}'")
         
         if user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         
         project = _find_project_by_name(db, user, project_name)
         
@@ -8721,7 +9076,7 @@ async def get_workflow_version(
         print(f"📌 Getting version {version_id} for workflow '{workflow_name}'")
         
         if user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         
         project = _find_project_by_name(db, user, project_name)
         
@@ -8773,7 +9128,7 @@ async def restore_workflow_version(
         print(f"📌 Restoring workflow '{payload.workflow_name}' to version {payload.version_id}")
         
         if payload.github_user not in user_tokens:
-            raise HTTPException(status_code=401, detail="User not authenticated")
+            raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
         
         project = _find_project_by_name(db, payload.github_user, payload.project_name)
         
