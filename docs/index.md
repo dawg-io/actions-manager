@@ -61,8 +61,11 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
+
+`ALLOW_INSECURE_HTTP=true` is required because this command serves the app over plain HTTP. Drop it once you put ActionsManager behind HTTPS — see [HTTPS Setup]({% link getting-started/https-setup.md %}).
 
 Then open `http://localhost:8080` and sign in with a GitHub Personal Access Token or configure GitHub OAuth.
 

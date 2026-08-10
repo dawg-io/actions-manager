@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator
 from typing import Annotated, Optional
 
 from database import get_db
-from models import Account, WorkspaceMember
+from models import Account, WorkspaceMember, SEED_ACCOUNT_GITHUB_USER
 from authorization import require_role, get_current_member, VALID_ROLES
 
 router = APIRouter()
@@ -74,6 +74,7 @@ def list_workspace_members(
     rows = (
         db.query(Account, WorkspaceMember)
         .join(WorkspaceMember, Account.user_id == WorkspaceMember.user_id)
+        .filter(Account.github_user != SEED_ACCOUNT_GITHUB_USER)
         .order_by(Account.user_id)
         .all()
     )
@@ -104,9 +105,15 @@ def update_member_role(
     """
     _normalize_legacy_roles(db)
 
+    # The reserved seed account is not a member, so it is not addressable here
+    # even though the endpoint takes a raw user_id.
     member = (
         db.query(WorkspaceMember)
-        .filter(WorkspaceMember.user_id == user_id)
+        .join(Account, Account.user_id == WorkspaceMember.user_id)
+        .filter(
+            WorkspaceMember.user_id == user_id,
+            Account.github_user != SEED_ACCOUNT_GITHUB_USER,
+        )
         .first()
     )
     if not member:
@@ -115,11 +122,16 @@ def update_member_role(
             detail="Workspace member not found",
         )
 
-    # Prevent the last admin from losing admin role
+    # Prevent the last admin from losing admin role. Counting the seed account
+    # here would let the only real admin demote themselves.
     if member.workspace_role == "admin" and body.workspace_role != "admin":
         admin_count = (
             db.query(WorkspaceMember)
-            .filter(WorkspaceMember.workspace_role == "admin")
+            .join(Account, Account.user_id == WorkspaceMember.user_id)
+            .filter(
+                WorkspaceMember.workspace_role == "admin",
+                Account.github_user != SEED_ACCOUNT_GITHUB_USER,
+            )
             .count()
         )
         if admin_count <= 1:

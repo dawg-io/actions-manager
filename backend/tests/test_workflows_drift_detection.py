@@ -449,7 +449,7 @@ class TestWorkflowDriftDetectionExtended:
         assert count == 0
 
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_process_regular_workflows_no_drift(self, mock_get_github, mock_get_branch, mock_get_shas):
@@ -473,9 +473,9 @@ class TestWorkflowDriftDetectionExtended:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return the SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_test.yml": "abc123"  # Same SHA as in DB
-            }
+            }, None)
             
             # Mock GitHub returns same content (will be called for SHA mismatch scenarios)
             mock_get_github.return_value = {
@@ -493,7 +493,24 @@ class TestWorkflowDriftDetectionExtended:
             db.close()
 
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
+    def test_process_regular_workflows_empty_list_never_fetches_shas(self, mock_get_shas):
+        """A project with repos but zero regular workflows must not pay for a
+        Trees listing it has nothing to compare against - the sibling
+        _process_reusable_workflows already guards this the same way."""
+        db = TestingSessionLocal()
+        try:
+            results = _process_regular_workflows(
+                db, [], ["owner/repo"], "TEST", "test_token"
+            )
+
+            assert results == []
+            mock_get_shas.assert_not_called()
+        finally:
+            db.close()
+
+    @patch('workflows.user_tokens', {'testuser': 'test_token'})
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_process_regular_workflows_with_drift(self, mock_get_github, mock_get_branch, mock_get_shas):
@@ -517,9 +534,9 @@ class TestWorkflowDriftDetectionExtended:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return a different SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_test.yml": "def456"  # Different SHA
-            }
+            }, None)
             
             # Mock GitHub returns different content
             mock_get_github.return_value = {
@@ -559,11 +576,19 @@ class TestWorkflowDriftDetectionExtended:
             
             # Mock GitHub returns None (not found)
             mock_get_github.return_value = None
-            
-            results = _process_regular_workflows(
-                db, workflows, ["owner/repo"], "TEST", "test_token"
-            )
-            
+
+            # The repo lists successfully and simply contains no workflow files.
+            # This has to be explicit: a *failed* listing is now "unknown", not
+            # "absent", so relying on the request erroring would test nothing.
+            # get_default_branch is mocked too: resolving the branch to check
+            # is a real API call, and a failed resolution is now "unknown"
+            # rather than a silent fallback to "main".
+            with patch('workflows.fetch_workflow_tree', return_value=({}, None)), \
+                 patch('workflows.get_default_branch', return_value="main"):
+                results = _process_regular_workflows(
+                    db, workflows, ["owner/repo"], "TEST", "test_token"
+                )
+
             # When workflow doesn't exist in GitHub and has no git hash,
             # _compare_workflow_content returns None, so no drift is reported
             assert len(results) == 0
@@ -591,14 +616,22 @@ class TestWorkflowDriftDetectionExtended:
             
             # Mock GitHub returns None (deleted)
             mock_get_github.return_value = None
-            
-            results = _process_regular_workflows(
-                db, workflows, ["owner/repo"], "TEST", "test_token"
-            )
-            
+
+            # Repo lists fine and the file is genuinely gone — as above, this
+            # must be an empty listing rather than a failed one.
+            # get_default_branch is mocked too: resolving the branch to check
+            # is a real API call, and a failed resolution is now "unknown"
+            # rather than a silent fallback to "main".
+            with patch('workflows.fetch_workflow_tree', return_value=({}, None)), \
+                 patch('workflows.get_default_branch', return_value="main"):
+                results = _process_regular_workflows(
+                    db, workflows, ["owner/repo"], "TEST", "test_token"
+                )
+
             # Workflow was synced before but now deleted, should report drift
             assert len(results) == 1
             assert results[0].has_drift == True
+            assert results[0].check_failed is False
             assert "deleted" in results[0].message.lower()
         finally:
             db.close()
@@ -639,7 +672,7 @@ class TestWorkflowDriftDetectionExtended:
             db.close()
 
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_process_reusable_workflows_no_drift(self, mock_get_github, mock_get_branch, mock_get_shas):
@@ -663,9 +696,9 @@ class TestWorkflowDriftDetectionExtended:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return the SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_reusable.yml": "xyz789"  # Same SHA as in DB
-            }
+            }, None)
             
             # Mock GitHub returns same content
             mock_get_github.return_value = {
@@ -683,7 +716,7 @@ class TestWorkflowDriftDetectionExtended:
             db.close()
 
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_process_reusable_workflows_with_drift(self, mock_get_github, mock_get_branch, mock_get_shas):
@@ -707,9 +740,9 @@ class TestWorkflowDriftDetectionExtended:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return a different SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_reusable.yml": "uvw456"  # Different SHA
-            }
+            }, None)
             
             # Mock GitHub returns different content
             mock_get_github.return_value = {
@@ -821,7 +854,7 @@ class TestBatchSHAComparison:
             del user_tokens["testuser"]
     
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_batch_sha_comparison_no_fetch_when_sha_matches(self, mock_get_workflow, mock_get_branch, mock_get_shas):
@@ -845,9 +878,9 @@ class TestBatchSHAComparison:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return the same SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_test.yml": "abc123"  # Same SHA as in DB
-            }
+            }, None)
             
             results = _process_regular_workflows(
                 db, workflows, ["owner/repo"], "TEST", "test_token"
@@ -867,7 +900,7 @@ class TestBatchSHAComparison:
             db.close()
     
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_batch_sha_comparison_fetch_when_sha_differs(self, mock_get_workflow, mock_get_branch, mock_get_shas):
@@ -891,9 +924,9 @@ class TestBatchSHAComparison:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return different SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_test.yml": "new456"  # Different SHA
-            }
+            }, None)
             
             # Mock get_workflow_from_github to return updated content
             mock_get_workflow.return_value = {
@@ -919,7 +952,7 @@ class TestBatchSHAComparison:
             db.close()
     
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     @patch('workflows.get_workflow_from_github')
     def test_batch_sha_comparison_deleted_from_github(self, mock_get_workflow, mock_get_branch, mock_get_shas):
@@ -943,7 +976,7 @@ class TestBatchSHAComparison:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to NOT include this workflow
-            mock_get_shas.return_value = {}  # Workflow not in GitHub
+            mock_get_shas.return_value = ({}, None)  # Workflow not in GitHub
             
             # get_workflow_from_github should not be called since SHA is None
             
@@ -960,7 +993,7 @@ class TestBatchSHAComparison:
             db.close()
     
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     def test_batch_sha_comparison_never_synced(self, mock_get_branch, mock_get_shas):
         """Test workflow that was never pushed to GitHub (no git hash in DB)."""
@@ -983,7 +1016,7 @@ class TestBatchSHAComparison:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to NOT include this workflow
-            mock_get_shas.return_value = {}
+            mock_get_shas.return_value = ({}, None)
             
             results = _process_regular_workflows(
                 db, workflows, ["owner/repo"], "TEST", "test_token"
@@ -996,7 +1029,7 @@ class TestBatchSHAComparison:
             db.close()
     
     @patch('workflows.user_tokens', {'testuser': 'test_token'})
-    @patch('workflows.get_all_workflow_shas')
+    @patch('workflows.fetch_workflow_tree')
     @patch('workflows.get_default_branch')
     def test_reusable_workflows_batch_sha_comparison(self, mock_get_branch, mock_get_shas):
         """Test batch SHA comparison for reusable workflows."""
@@ -1019,9 +1052,9 @@ class TestBatchSHAComparison:
             mock_get_branch.return_value = "main"
             
             # Mock get_all_workflow_shas to return matching SHA
-            mock_get_shas.return_value = {
+            mock_get_shas.return_value = ({
                 "AM_TEST_reusable.yml": "xyz789"
-            }
+            }, None)
             
             results = _process_reusable_workflows(
                 db, workflows, "testuser", "TEST", "test_token"

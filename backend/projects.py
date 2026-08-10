@@ -7,13 +7,13 @@ import string
 import traceback
 from typing import Annotated, List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, Query, Path, Header
+from fastapi import APIRouter, HTTPException, Depends, Query, Path, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import func, union_all
 from pydantic import BaseModel, field_validator
 from github_api_tracker import github_get
-from auth import user_tokens
+from auth import user_tokens, resolve_optional_session_user
 from models import (
     Project,
     Account,
@@ -30,6 +30,8 @@ from models import (
     Codeowners,
     RepoWorkflowOverride,
     CustomFile,
+    WorkflowDriftState,
+    ProjectDisplayOrder,
     generate_project_key_from_name,
 )
 from database import get_db
@@ -307,6 +309,26 @@ class ProjectSchema(BaseModel):
         return normalized
 
 
+class ProjectOrderUpdateSchema(BaseModel):
+    """Payload for saving a user's manual Projects-grid order (issue #1804).
+
+    Local display metadata only — no GitHub writes and no change to any project
+    row, so projects.updated_at is untouched.
+    """
+
+    github_user: Optional[str] = None
+    project_ids: List[int]
+
+    @field_validator("project_ids")
+    @classmethod
+    def _validate_project_ids(cls, v: List[int]) -> List[int]:
+        if not v:
+            raise ValueError("project_ids must not be empty")
+        if len(set(v)) != len(v):
+            raise ValueError("project_ids must not contain duplicates")
+        return v
+
+
 class ProjectColorUpdateSchema(BaseModel):
     """Patch-style payload for updating only a project's identity color.
 
@@ -432,7 +454,9 @@ def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modifi
     # 🔧 FIX: Search for existing workflow within the current project only
     existing_workflow = db.query(Workflow).join(ProjectWorkflow).filter(
         ProjectWorkflow.project_id == project_id,
-        Workflow.workflow_name.ilike(workflow.name.strip()),
+        # Case-insensitive equality rather than ILIKE: '_' is a wildcard in SQL
+        # LIKE, so "ci_build" would match and overwrite an unrelated "ciXbuild".
+        func.lower(Workflow.workflow_name) == workflow.name.strip().lower(),
         Workflow.reusable_workflow == is_reusable
     ).first()
 
@@ -829,6 +853,81 @@ def _require_project_editor(db: Session, caller_member, project_id: int) -> None
 
 
 @router.put(
+    "/projects/order",
+    responses={
+        400: {"description": "Order does not match the caller's accessible projects"},
+        401: {"description": "Authentication required"},
+        500: {"description": "Internal server error"},
+    },
+)
+def update_project_order(
+    payload: ProjectOrderUpdateSchema,
+    db: Annotated[Session, Depends(get_db)],
+    x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
+):
+    """Save the caller's manual ordering of the Projects grid (issue #1804).
+
+    Ordering is per user, so any user who can see a project may arrange it —
+    including project_viewer. This changes no project data and no other user's
+    view, so the project_editor gate the other write endpoints use would be
+    wrong here. Access is still enforced: the submitted list must match the
+    caller's accessible projects exactly.
+    """
+    try:
+        caller_member = _resolve_caller_member(db, x_github_user)
+        if caller_member is None:
+            raise HTTPException(status_code=401, detail="Authentication required to save project order")
+
+        accessible = _accessible_project_ids(db, caller_member)
+        submitted = set(payload.project_ids)
+
+        # An exact match is required. A partial list would silently drop
+        # projects out of the saved order; unknown or inaccessible ids would let
+        # a caller record positions for projects they cannot see.
+        if submitted != accessible:
+            unauthorized = submitted - accessible
+            missing = accessible - submitted
+            if unauthorized:
+                detail = (
+                    "project_ids contains projects that do not exist or are not "
+                    f"accessible: {sorted(unauthorized)}"
+                )
+            else:
+                detail = f"project_ids must list every accessible project; missing: {sorted(missing)}"
+            raise HTTPException(status_code=400, detail=detail)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ PUT /projects/order - Unexpected error during validation: {e}")
+        raise HTTPException(status_code=500, detail=_ERR_INTERNAL_VALIDATION)
+
+    try:
+        # Full replace in one transaction, so a partly-applied order can never
+        # be observed. No Project row is touched — updated_at must not move.
+        db.query(ProjectDisplayOrder).filter(
+            ProjectDisplayOrder.user_id == caller_member.user_id
+        ).delete(synchronize_session=False)
+
+        for position, project_id in enumerate(payload.project_ids):
+            db.add(ProjectDisplayOrder(
+                user_id=caller_member.user_id,
+                project_id=project_id,
+                position=position,
+            ))
+        db.commit()
+
+        return {
+            "message": "✅ Project order updated successfully!",
+            "project_ids": payload.project_ids,
+        }
+    except Exception as e:
+        traceback.print_exc()
+        db.rollback()
+        print(f"❌ PUT /projects/order - Failed to save order: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save project order")
+
+
+@router.put(
     "/projects/{project_id}/",
     responses={
         403: {"description": "Access denied"},
@@ -1097,6 +1196,126 @@ def _resolve_caller_member(db: Session, x_github_user: Optional[str]):
     )
 
 
+def _resolve_display_order_member(db: Session, request, x_github_user: Optional[str]):
+    """Identity used to pick whose saved project order to apply.
+
+    get_projects authorizes from the X-GitHub-User header, but the frontend's
+    apiClient authenticates GETs with the session cookie alone, so that header
+    is usually absent — without this fallback the saved order would silently
+    never apply in the real app. Falls back to the session rather than the
+    client-supplied github_user query param, which is spoofable and would let a
+    caller read another user's arrangement.
+    """
+    member = _resolve_caller_member(db, x_github_user)
+    if member is not None:
+        return member
+
+    session_user = resolve_optional_session_user(request, db)
+    if session_user is None:
+        return None
+    return (
+        db.query(WorkspaceMember)
+        .filter(WorkspaceMember.user_id == session_user.user_id)
+        .first()
+    )
+
+
+def _delete_project_display_order(db: Session, project_id: int) -> None:
+    """Remove every user's saved position for a project being deleted.
+
+    Cascade now handles this on both databases (issue #1811 enabled SQLite's
+    `PRAGMA foreign_keys`, which had made every ON DELETE CASCADE a no-op).
+    Kept as belt-and-braces so the cleanup is explicit at the call site and does
+    not depend on engine configuration.
+    """
+    db.query(ProjectDisplayOrder).filter(
+        ProjectDisplayOrder.project_id == project_id
+    ).delete(synchronize_session=False)
+
+
+def _accessible_project_ids(db: Session, caller_member) -> set:
+    """Project IDs the caller may see, mirroring get_projects' two branches exactly.
+
+    Admins see every project; non-admins only those with a ProjectMembership row.
+    One query either way — resolving per project id would be N queries.
+    """
+    if is_project_admin(caller_member):
+        return {pid for (pid,) in db.query(Project.project_id).all()}
+    return {
+        pid for (pid,) in
+        db.query(ProjectMembership.project_id)
+        .filter(ProjectMembership.user_id == caller_member.user_id)
+        .all()
+    }
+
+
+def _apply_saved_display_order(db: Session, caller_member, rows: list) -> list:
+    """Order project rows by the caller's saved arrangement (issue #1804).
+
+    ``rows`` arrives ordered by updated_at DESC. Projects with a saved position
+    come first in that order; anything without one keeps its incoming
+    updated_at position and lands after, which is how new projects append to
+    the end. project_id breaks any tie deterministically.
+
+    Sorting here rather than in SQL keeps one code path for SQLite and
+    PostgreSQL — "NULLS LAST" is spelled differently across them.
+    """
+    if caller_member is None:
+        # No identity, so no per-user preference to apply.
+        return rows
+
+    positions = dict(
+        db.query(ProjectDisplayOrder.project_id, ProjectDisplayOrder.position)
+        .filter(ProjectDisplayOrder.user_id == caller_member.user_id)
+        .all()
+    )
+    if not positions:
+        return rows
+
+    def sort_key(indexed):
+        incoming_index, row = indexed
+        project = row[0]
+        saved = positions.get(project.project_id)
+        if saved is None:
+            return (1, incoming_index, project.project_id)
+        return (0, saved, project.project_id)
+
+    return [row for _, row in sorted(enumerate(rows), key=sort_key)]
+
+
+def _initialize_display_order(db: Session, caller_member, rows: list) -> None:
+    """Persist the current updated_at-descending order the first time a user lists projects.
+
+    Without this, a user who has never dragged anything would keep falling back
+    to updated_at, so editing a project would still move its card — the exact
+    behaviour issue #1804 removes. Runs once: after this the user always has
+    rows, and updated_at is never consulted for those projects again.
+    """
+    if caller_member is None or not rows:
+        return
+
+    already_ordered = (
+        db.query(ProjectDisplayOrder.id)
+        .filter(ProjectDisplayOrder.user_id == caller_member.user_id)
+        .first()
+    )
+    if already_ordered:
+        return
+
+    try:
+        for position, row in enumerate(rows):
+            db.add(ProjectDisplayOrder(
+                user_id=caller_member.user_id,
+                project_id=row[0].project_id,
+                position=position,
+            ))
+        db.commit()
+    except Exception:
+        # Never fail a read because the one-time seed lost a race with a
+        # concurrent request; the next list call retries.
+        db.rollback()
+
+
 def _effective_pr_state(
     project: Project,
     rwx_ids_with_open_linked_prs: set,
@@ -1123,6 +1342,7 @@ def _effective_pr_state(
 @router.get("/projects/")
 def get_projects(
     github_user: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
 ):
@@ -1184,6 +1404,13 @@ def get_projects(
             .order_by(Project.updated_at.desc())
             .all()
         )
+
+    # updated_at only decides the *initial* arrangement now (issue #1804). Once a
+    # user has a saved order it wins, so opening or editing a project no longer
+    # moves its card.
+    order_member = _resolve_display_order_member(db, request, x_github_user)
+    _initialize_display_order(db, order_member, rows)
+    rows = _apply_saved_display_order(db, order_member, rows)
 
     # For RWX projects, determine if any linked standard project has an open PR
     # campaign so the project list can show "Under Review" instead of "Synced".
@@ -1971,6 +2198,24 @@ def get_project(
     if caller_member:
         caller_project_role = check_project_access(db, caller_member, project.project_id) or "project_viewer"
 
+    # Per-workflow drift state persisted by the last drift check (see issue
+    # #1793) — lets the initial page load show the correct drift badge
+    # immediately instead of defaulting to "no drift" and flipping once the
+    # client-side live check (DriftDetection component) resolves.
+    workflow_ids = [wf.workflow_id for wf in all_workflows]
+    drifted_workflow_ids = set()
+    if workflow_ids:
+        drifted_workflow_ids = {
+            row.workflow_id
+            for row in db.query(WorkflowDriftState.workflow_id)
+            .filter(WorkflowDriftState.workflow_id.in_(workflow_ids), WorkflowDriftState.has_drift.is_(True))
+            .distinct()
+            .all()
+        }
+    drifted_workflow_names = sorted({
+        wf.workflow_name for wf in all_workflows if wf.workflow_id in drifted_workflow_ids
+    })
+
     return {
         "project_id": project.project_id,
         "project_name": project.project_name,
@@ -1997,6 +2242,7 @@ def get_project(
         "last_preflight_error": project.last_preflight_error,
         "last_preflight_pr_url": project.last_preflight_pr_url,
         "drift_detected": check_drift and len(repo_names) > 0,
+        "drifted_workflow_names": drifted_workflow_names,
         "caller_project_role": caller_project_role,
         "custom_files": _serialize_custom_files(db, project.project_id),
     }
@@ -2050,6 +2296,7 @@ def delete_project(
         if not project:
             raise HTTPException(status_code=404, detail="❌ Project not found or access denied")
 
+        _delete_project_display_order(db, project.project_id)
         db.delete(project)
         db.commit()
         

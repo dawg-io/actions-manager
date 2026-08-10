@@ -239,6 +239,80 @@ class TestProjectDeletionHelpers:
         assert environments[0]["name"] == "production"
         assert environments[1]["name"] == "staging"
 
+    def test_log_missing_repos_debug_runs_without_error(self):
+        """Diagnostic helper queries project-repo associations without raising."""
+        from project_deletion import _log_missing_repos_debug
+
+        mock_project = Mock(spec=Project)
+        mock_project.project_id = 1
+
+        mock_db = Mock(spec=Session)
+        mock_pr = Mock()
+        mock_pr.repo_id = 5
+        mock_db.query.return_value.filter.return_value.all.return_value = [mock_pr]
+        mock_repo = Mock()
+        mock_repo.repo_name = "owner/repo"
+        mock_db.query.return_value.filter.return_value.first.return_value = mock_repo
+
+        _log_missing_repos_debug(mock_project, mock_db)
+
+    @patch('project_deletion.user_tokens', {})
+    def test_collect_github_resources_skips_without_token(self):
+        """No user_tokens entry for github_user -> returns empty lists, no API calls."""
+        from project_deletion import _collect_github_resources_for_deletion_summary
+
+        mock_project = Mock(spec=Project)
+        mock_db = Mock(spec=Session)
+
+        secrets, env_vars, environments = _collect_github_resources_for_deletion_summary(
+            mock_project, "testuser", ["owner/repo"], mock_db
+        )
+
+        assert secrets == []
+        assert env_vars == []
+        assert environments == []
+
+    @patch('project_deletion.user_tokens', {})
+    def test_collect_github_resources_skips_without_repos(self):
+        """No repo_names -> returns empty lists, no API calls, regardless of token."""
+        from project_deletion import _collect_github_resources_for_deletion_summary
+
+        mock_project = Mock(spec=Project)
+        mock_db = Mock(spec=Session)
+
+        secrets, env_vars, environments = _collect_github_resources_for_deletion_summary(
+            mock_project, "testuser", [], mock_db
+        )
+
+        assert secrets == []
+        assert env_vars == []
+        assert environments == []
+
+    @patch('project_deletion.user_tokens', {"testuser": "test-token"})
+    @patch('project_deletion._process_repository_resources')
+    def test_collect_github_resources_aggregates_across_repos(self, mock_process):
+        """Aggregates secrets/env vars/environments across every repo and tolerates per-repo failure."""
+        from project_deletion import _collect_github_resources_for_deletion_summary
+
+        mock_process.side_effect = [
+            ([{"name": "SECRET1"}], [{"name": "VAR1"}], [{"name": "production"}]),
+            Exception("repo unreachable"),
+        ]
+
+        mock_project = Mock(spec=Project)
+        mock_project.project_code = "TEST"
+        mock_project.use_prefix = True
+        mock_db = Mock(spec=Session)
+
+        secrets, env_vars, environments = _collect_github_resources_for_deletion_summary(
+            mock_project, "testuser", ["owner/repo1", "owner/repo2"], mock_db
+        )
+
+        assert secrets == [{"name": "SECRET1"}]
+        assert env_vars == [{"name": "VAR1"}]
+        assert environments == [{"name": "production"}]
+        assert mock_process.call_count == 2
+
     def test_build_deletion_summary(self):
         """Test deletion summary construction."""
         mock_project = Mock(spec=Project)
@@ -774,6 +848,90 @@ class TestOrphanedResourceCleanup:
 
         assert len(deletion_results["github_resources_deleted"]) == 1
         assert "TRACKED_SECRET" in deletion_results["github_resources_deleted"][0]
+
+
+class TestDeleteEnvironmentSecrets:
+    """Tests for _delete_environment_secrets (no prior direct coverage)."""
+
+    @patch('project_deletion.requests.get')
+    @patch('project_deletion.requests.delete')
+    def test_delete_environment_secrets_no_prefix_only_tracked(self, mock_delete, mock_get):
+        """Only tracked secrets are deleted from each environment for no-prefix projects."""
+        from project_deletion import _delete_environment_secrets
+
+        environments_response = Mock(status_code=200)
+        environments_response.json.return_value = {"environments": [{"name": "production"}]}
+        env_secrets_response = Mock(status_code=200)
+        env_secrets_response.json.return_value = {
+            "secrets": [{"name": "TRACKED_SECRET"}, {"name": "UNTRACKED_SECRET"}]
+        }
+        mock_get.side_effect = [environments_response, env_secrets_response]
+        mock_delete.return_value = Mock(status_code=204)
+
+        mock_project = Mock(spec=Project)
+        mock_project.project_id = 1
+        mock_project.use_prefix = False
+
+        mock_db = Mock(spec=Session)
+        mock_secret = Mock()
+        mock_secret.secret_name = "TRACKED_SECRET"
+        mock_db.query.return_value.filter.return_value.all.return_value = [mock_secret]
+
+        deletion_results = {"github_resources_deleted": [], "errors": []}
+        headers = {"Authorization": "token test-token"}
+
+        _delete_environment_secrets("owner/repo", headers, "", deletion_results, mock_project, mock_db)
+
+        assert mock_delete.call_count == 1
+        assert len(deletion_results["github_resources_deleted"]) == 1
+        assert "TRACKED_SECRET" in deletion_results["github_resources_deleted"][0]
+        assert "production" in deletion_results["github_resources_deleted"][0]
+
+    @patch('project_deletion.requests.get')
+    @patch('project_deletion.requests.delete')
+    def test_delete_environment_secrets_prefix_match_across_environments(self, mock_delete, mock_get):
+        """Prefix-matching secrets are deleted across multiple environments."""
+        from project_deletion import _delete_environment_secrets
+
+        environments_response = Mock(status_code=200)
+        environments_response.json.return_value = {
+            "environments": [{"name": "staging"}, {"name": "production"}]
+        }
+        staging_secrets = Mock(status_code=200)
+        staging_secrets.json.return_value = {"secrets": [{"name": "AM_TEST_SECRET"}, {"name": "OTHER"}]}
+        production_secrets = Mock(status_code=200)
+        production_secrets.json.return_value = {"secrets": [{"name": "AM_TEST_SECRET"}]}
+        mock_get.side_effect = [environments_response, staging_secrets, production_secrets]
+        mock_delete.return_value = Mock(status_code=204)
+
+        deletion_results = {"github_resources_deleted": [], "errors": []}
+        headers = {"Authorization": "token test-token"}
+
+        _delete_environment_secrets("owner/repo", headers, "AM_TEST_", deletion_results)
+
+        assert mock_delete.call_count == 2
+        assert len(deletion_results["github_resources_deleted"]) == 2
+
+    @patch('project_deletion.requests.get')
+    def test_delete_environment_secrets_empty_prefix_matches_nothing(self, mock_get):
+        """Empty prefix with use_prefix=True must not match/delete anything."""
+        from project_deletion import _delete_environment_secrets
+
+        environments_response = Mock(status_code=200)
+        environments_response.json.return_value = {"environments": [{"name": "production"}]}
+        env_secrets_response = Mock(status_code=200)
+        env_secrets_response.json.return_value = {"secrets": [{"name": "SOME_SECRET"}]}
+        mock_get.side_effect = [environments_response, env_secrets_response]
+
+        mock_project = Mock(spec=Project)
+        mock_project.use_prefix = True
+
+        deletion_results = {"github_resources_deleted": [], "errors": []}
+        headers = {"Authorization": "token test-token"}
+
+        _delete_environment_secrets("owner/repo", headers, "", deletion_results, mock_project, None)
+
+        assert len(deletion_results["github_resources_deleted"]) == 0
 
 
 class TestPartialDeletionHandling:

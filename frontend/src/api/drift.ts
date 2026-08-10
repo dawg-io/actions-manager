@@ -32,6 +32,18 @@ export interface WorkflowDriftDetail {
   affected_repo_count?: number;
   affected_repos?: string[];
   source_repo_name?: string | null;
+  /**
+   * The check could not be completed (revoked token, rate limit, GitHub 5xx).
+   * has_drift carries no meaning when this is true — the state is unknown, so
+   * the UI must not present it as either drifted or clean.
+   */
+  check_failed?: boolean;
+  /**
+   * The workflow file is absent from GitHub. github_yaml is null rather than
+   * empty, and there is nothing to adopt — the diff view must say so instead
+   * of rendering a blank "Current GitHub version" pane.
+   */
+  deleted_in_github?: boolean;
 }
 
 export interface ProjectDriftSummary {
@@ -39,7 +51,20 @@ export interface ProjectDriftSummary {
   project_name: string;
   drift_count: number;
   drifted_workflows: WorkflowDriftDetail[];
-  last_checked: string;
+  /**
+   * When the reported state was established — null when no check has ever run.
+   * Not the time of the request: an empty list from a check that never
+   * happened must not read as "verified clean just now".
+   */
+  last_checked: string | null;
+  /** Workflow/repo pairs GitHub could not be queried about; >0 means the picture is incomplete. */
+  unchecked_count?: number;
+  /**
+   * Why the reported state may be older than it looks — e.g. the background
+   * sweep cannot check this project because its owner has no saved token.
+   * Null when automatic checking is working normally.
+   */
+  stale_reason?: string | null;
 }
 
 export type DriftResolution = "use_github" | "restore_actionsmanager";
@@ -51,6 +76,12 @@ export interface ResolveDriftRequest {
   branch: string;
   resolution: DriftResolution;
   delivery_mode?: DriftDeliveryMode;
+  /**
+   * The GitHub blob SHA this decision was based on. The backend refuses a
+   * direct push with 409 if GitHub has moved on since, so a stale drift view
+   * can't silently revert someone else's fix.
+   */
+  expected_github_sha?: string | null;
 }
 
 export interface ResolveDriftResponse {
@@ -78,6 +109,9 @@ export interface AdoptGithubVersionRequest {
   workflow_id: number;
   repo_id?: number;
   repo_name?: string;
+  // The branch whose drift is being resolved — without it the backend adopts
+  // from the repo's default branch, which may not be the file the user saw.
+  branch?: string;
   resolution_mode: AdoptResolutionMode;
   delivery_mode?: DriftDeliveryMode;
   target_repo_ids?: number[];
@@ -102,12 +136,52 @@ export interface AdoptGithubVersionResponse {
   new_drift_status: string;
 }
 
+/**
+ * Project drift summary.
+ *
+ * Serves the last known state by default, which costs no GitHub API calls — so
+ * opening a project is free however often it is done. Pass `refresh` to run a
+ * live check, which is what the "Check now" action does.
+ */
 export async function getProjectDrift(
   projectId: number,
   githubUser: string,
+  options?: { refresh?: boolean },
 ): Promise<ProjectDriftSummary> {
   const resp = await apiClient.get<ProjectDriftSummary>(
     `/api/projects/${projectId}/drift`,
+    {
+      params: {
+        github_user: githubUser,
+        ...(options?.refresh ? { refresh: true } : {}),
+      },
+    },
+  );
+  return resp.data;
+}
+
+export interface WorkflowDriftResponse {
+  workflow_id: number;
+  workflow_name: string;
+  workflow_filename: string;
+  has_drift: boolean;
+  drift_details: WorkflowDriftDetail[];
+  last_checked: string;
+}
+
+/**
+ * Live drift detail for one workflow, including GitHub's current content.
+ *
+ * The cached project summary deliberately omits `github_yaml`, because a
+ * stored snapshot may no longer match GitHub. This fetches the real thing when
+ * a diff is actually opened.
+ */
+export async function getWorkflowDrift(
+  workflowId: number,
+  githubUser: string,
+): Promise<WorkflowDriftResponse> {
+  const resp = await apiClient.get<WorkflowDriftResponse>(
+    `/api/workflows/${workflowId}/drift`,
     { params: { github_user: githubUser } },
   );
   return resp.data;
@@ -138,6 +212,8 @@ export interface BulkResolveDriftItem {
   workflow_id: number;
   repo: string;
   branch: string;
+  /** See ResolveDriftRequest.expected_github_sha. */
+  expected_github_sha?: string | null;
 }
 
 export interface BulkResolveDriftRequest {

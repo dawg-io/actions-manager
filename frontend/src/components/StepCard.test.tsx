@@ -1,14 +1,13 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import StepCard from './StepCard';
+import { StepSelectionProvider, StepSelection } from './StepSelectionContext';
 import type { WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
-import type { ActionsProject } from '../api/actionsProjects';
-import type { ActionGroup } from '../api/actionGroups';
 
 function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
-  return { id: 'step-1', uses: '', ...overrides };
+  return { id: 'step-1', name: 'Checkout', uses: '', ...overrides };
 }
 
 const noValidationErrors: ValidationError[] = [];
@@ -17,133 +16,100 @@ function baseProps(overrides: Partial<React.ComponentProps<typeof StepCard>> = {
   return {
     step: makeStep(),
     stepIndex: 0,
-    onChange: vi.fn(),
+    jobId: 'build',
     onRemove: vi.fn(),
     onDuplicate: vi.fn(),
     validationErrors: noValidationErrors,
-    importedActions: [] as ActionsProject[],
-    actionGroups: [] as ActionGroup[],
     ...overrides,
   };
 }
 
-const importedAction: ActionsProject = {
-  actions_project_id: 42,
-  name: 'TruffleHog OSS',
-  description: 'Find leaked credentials',
-  source_url: 'https://github.com/trufflesecurity/trufflehog/blob/main/action.yml',
-  owner: 'trufflesecurity',
-  repo: 'trufflehog',
-  ref: 'main',
-  yaml_path: 'action.yml',
-  inputs: [
-    { name: 'path', description: 'Path to scan', required: true, default: '.', type: 'string', options: null },
-  ],
-  branding_icon: null,
-  branding_color: null,
-};
-
-async function openActionPicker(user: ReturnType<typeof userEvent.setup>, count: number): Promise<void> {
-  await user.click(screen.getByRole('radio', { name: /Use Action/ }));
-  await user.click(screen.getByRole('button', { name: `Browse imported actions (${count})` }));
+interface SelectionValue {
+  selected: StepSelection | null;
+  onSelect: (s: StepSelection | null) => void;
 }
 
-describe('StepCard imported actions', () => {
-  it('renders no imported-actions picker when the list is empty', async () => {
-    const user = userEvent.setup();
-    render(<StepCard {...baseProps()} />);
-    await user.click(screen.getByRole('radio', { name: /Use Action/ }));
-    expect(screen.queryByText(/Browse imported actions/)).not.toBeInTheDocument();
+const noSelection = (): SelectionValue => ({ selected: null, onSelect: vi.fn() });
+
+function renderCard(
+  props: Partial<React.ComponentProps<typeof StepCard>> = {},
+  selection: SelectionValue = noSelection()
+) {
+  return render(
+    <StepSelectionProvider value={selection}>
+      <StepCard {...baseProps(props)} />
+    </StepSelectionProvider>
+  );
+}
+
+describe('StepCard row', () => {
+  it('renders the step number and title', () => {
+    renderCard();
+
+    expect(screen.getByText('1.')).toBeInTheDocument();
+    expect(screen.getByText('Checkout')).toBeInTheDocument();
   });
 
-  it('shows a menu item and datalist option for each imported action', async () => {
-    const user = userEvent.setup();
-    render(<StepCard {...baseProps({ importedActions: [importedAction] })} />);
+  it('falls back to a positional title for an unnamed step', () => {
+    renderCard({ step: makeStep({ name: undefined }), stepIndex: 2 });
 
-    await openActionPicker(user, 1);
-
-    expect(screen.getByRole('menuitem', { name: 'TruffleHog OSS' })).toBeInTheDocument();
+    expect(screen.getByText('Step 3')).toBeInTheDocument();
   });
 
-  it('sets step.uses and pre-fills typed fields when an imported action is clicked', async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<StepCard {...baseProps({ importedActions: [importedAction], onChange })} />);
+  it('is a row only - the panel is the sole place a step is edited', () => {
+    renderCard();
 
-    await openActionPicker(user, 1);
-    await user.click(screen.getByRole('menuitem', { name: 'TruffleHog OSS' }));
-
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ uses: 'trufflesecurity/trufflehog@main' })
-    );
+    expect(screen.queryByLabelText('Step Name (optional)')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Use Action/ })).not.toBeInTheDocument();
   });
 
-  it('renders the branding icon on a menu item when the imported action has one', async () => {
+  it('selects the step when its title row is clicked', async () => {
     const user = userEvent.setup();
-    const brandedAction: ActionsProject = {
-      ...importedAction,
-      actions_project_id: 99,
-      name: 'Branded Action',
-      branding_icon: 'rocket',
-      branding_color: 'blue',
-    };
-    render(<StepCard {...baseProps({ importedActions: [brandedAction] })} />);
+    const onSelect = vi.fn();
+    renderCard({}, { selected: null, onSelect });
 
-    await openActionPicker(user, 1);
+    await user.click(screen.getByText('Checkout'));
 
-    // lucide's DynamicIcon resolves the real icon via an async import inside
-    // a useEffect (rendering a fallback icon synchronously in the meantime),
-    // so wait for the settled result instead of asserting immediately.
-    await waitFor(() => {
-      const item = screen.getByRole('menuitem', { name: 'Branded Action' });
-      expect(item.querySelector('svg')).toBeInTheDocument();
+    expect(onSelect).toHaveBeenCalledWith({ jobId: 'build', stepId: 'step-1' });
+  });
+
+  it('marks the selected row with aria-current', () => {
+    renderCard({}, { selected: { jobId: 'build', stepId: 'step-1' }, onSelect: vi.fn() });
+
+    expect(screen.getByRole('button', { name: /Checkout/ })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('leaves a same-id step in a different job unselected', () => {
+    renderCard({}, { selected: { jobId: 'test', stepId: 'step-1' }, onSelect: vi.fn() });
+
+    expect(screen.getByRole('button', { name: /Checkout/ })).toHaveAttribute('aria-current', 'false');
+  });
+
+  it('surfaces error and warning badges', () => {
+    renderCard({
+      validationErrors: [
+        { field: 'jobs[0].steps[0].uses', message: 'Required', severity: 'error' },
+        { field: 'jobs[0].steps[0].name', message: 'Consider naming', severity: 'warning' },
+      ],
     });
+
+    expect(screen.getByText('❌')).toBeInTheDocument();
+    expect(screen.getByText('⚠️')).toBeInTheDocument();
   });
 
-  it('filters the menu by group and never shows an action in two groups at once', async () => {
-    const user = userEvent.setup();
-    const checkout: ActionsProject = { ...importedAction, actions_project_id: 1, name: 'Checkout' };
-    const setupNode: ActionsProject = { ...importedAction, actions_project_id: 2, name: 'Setup Node' };
-    const groupA: ActionGroup = { action_group_id: 10, name: 'GroupA', description: null, actions_project_ids: [1] };
-    const groupB: ActionGroup = { action_group_id: 11, name: 'GroupB', description: null, actions_project_ids: [1, 2] };
+  it('renders the move, duplicate and remove actions', () => {
+    renderCard({ onMoveUp: vi.fn(), onMoveDown: vi.fn() });
 
-    render(
-      <StepCard
-        {...baseProps({
-          importedActions: [checkout, setupNode],
-          actionGroups: [groupA, groupB],
-        })}
-      />
-    );
-
-    await openActionPicker(user, 2);
-
-    // Default "All": both actions show, Checkout appears exactly once.
-    expect(screen.getAllByRole('menuitem', { name: 'Checkout' })).toHaveLength(1);
-    expect(screen.getByRole('menuitem', { name: 'Setup Node' })).toBeInTheDocument();
-
-    // Checkout is in both GroupA and GroupB, but selecting either group
-    // still shows it exactly once — never duplicated.
-    await user.click(screen.getByRole('button', { name: 'GroupA' }));
-    expect(screen.getAllByRole('menuitem', { name: 'Checkout' })).toHaveLength(1);
-    expect(screen.queryByRole('menuitem', { name: 'Setup Node' })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'GroupB' }));
-    expect(screen.getAllByRole('menuitem', { name: 'Checkout' })).toHaveLength(1);
-    expect(screen.getByRole('menuitem', { name: 'Setup Node' })).toBeInTheDocument();
+    expect(screen.getByTitle('Move up')).toBeInTheDocument();
+    expect(screen.getByTitle('Move down')).toBeInTheDocument();
+    expect(screen.getByTitle('Duplicate step')).toBeInTheDocument();
+    expect(screen.getByTitle('Remove step')).toBeInTheDocument();
   });
 
-  it('renders a typed field pre-filled from the imported action schema once uses matches', () => {
-    render(
-      <StepCard
-        {...baseProps({
-          step: makeStep({ uses: 'trufflesecurity/trufflehog@main' }),
-          importedActions: [importedAction],
-        })}
-      />
-    );
+  it('omits move controls at the ends of the list', () => {
+    renderCard();
 
-    expect(screen.getByText(/path/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('.')).toBeInTheDocument();
+    expect(screen.queryByTitle('Move up')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Move down')).not.toBeInTheDocument();
   });
 });

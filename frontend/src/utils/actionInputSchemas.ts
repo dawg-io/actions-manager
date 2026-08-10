@@ -35,3 +35,40 @@ export function getActionInputSchema(
   const match = importedActions.find((project) => `${project.owner}/${project.repo}` === slug);
   return match ? actionsProjectToSchema(match) : undefined;
 }
+
+export type ActionInputEntry = [string, WorkflowCallInput];
+
+/**
+ * Splits an action's inputs into the ones worth showing up front and the ones
+ * that belong behind a disclosure. An action like `actions/checkout` declares
+ * a dozen-odd inputs of which one or two matter, so rendering them all buries
+ * the useful fields.
+ *
+ * Visible: required inputs, plus any optional input the user has actually set.
+ * A set value is visible even when it equals the action's default - the key is
+ * in `with:` either way, so it is going into the YAML.
+ *
+ * `sticky` holds optional inputs that must stay put even though they are no
+ * longer in `with` - it keeps a field from unmounting under the cursor when
+ * its value is cleared mid-edit.
+ */
+export function partitionActionInputs(
+  schema: { [inputName: string]: WorkflowCallInput } | undefined,
+  withValues: { [key: string]: string } | undefined,
+  sticky: ReadonlySet<string>
+): { visible: ActionInputEntry[]; hidden: ActionInputEntry[] } {
+  const visible: ActionInputEntry[] = [];
+  const hidden: ActionInputEntry[] = [];
+
+  for (const entry of Object.entries(schema || {})) {
+    const [name, inputDef] = entry;
+    const isSet = withValues ? Object.hasOwn(withValues, name) : false;
+    if (inputDef.required || isSet || sticky.has(name)) {
+      visible.push(entry);
+    } else {
+      hidden.push(entry);
+    }
+  }
+
+  return { visible, hidden };
+}

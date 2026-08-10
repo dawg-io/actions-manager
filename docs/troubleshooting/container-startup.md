@@ -82,6 +82,28 @@ Then pass it as an environment variable:
 
 ---
 
+### Non-Local HTTP APP_URL Rejected
+
+**Symptom:** The container exits on first boot and the logs show:
+
+```
+APP_URL='http://192.168.1.100:8080' is non-local plain HTTP. This is insecure —
+tokens and credentials would be transmitted in cleartext. Either switch to
+https:// or set ALLOW_INSECURE_HTTP=true to allow it.
+```
+
+**Cause:** `APP_URL` points at a non-loopback address over plain `http://`. `localhost`, `127.0.0.1`, and `::1` are exempt; anything else needs an explicit opt-in.
+
+**Solution:** Put ActionsManager behind an HTTPS reverse proxy and use an `https://` `APP_URL` (see [HTTPS Setup]({% link getting-started/https-setup.md %})). To keep running over plain HTTP on a trusted network, add:
+
+```bash
+-e ALLOW_INSECURE_HTTP=true
+```
+
+The same flag also re-enables PAT login over non-local HTTP, which is blocked by default.
+
+---
+
 ### Volume Mount Permission Error
 
 **Symptom:** Container fails with a permissions error when writing to the data volume.

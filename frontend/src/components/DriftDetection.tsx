@@ -27,6 +27,7 @@ import {
 import { Button } from "./ui/button";
 import {
   getProjectDrift,
+  getWorkflowDrift,
   resolveWorkflowDrift,
   adoptGithubVersion,
   bulkResolveWorkflowDrift,
@@ -34,8 +35,10 @@ import {
   type DriftDeliveryMode,
   type AdoptResolutionMode,
   type DriftResolution,
+  type BulkResolveDriftItem,
 } from "../api/drift";
 import ConfirmDialog from "./ConfirmDialog";
+import { deleteWorkflowFromGitHub, deleteWorkflowFromDatabase } from "../api/workflows";
 import { getDocsUrl } from "../help/helpLinks";
 
 /**
@@ -46,6 +49,20 @@ import { getDocsUrl } from "../help/helpLinks";
 const driftErrorMessage = (err: unknown, fallback: string): string => {
   const r = err as { response?: { data?: { detail?: string } }; message?: string };
   return r?.response?.data?.detail || r?.message || fallback;
+};
+
+/**
+ * The status row's message for a project with no known drift: unchecked
+ * (GitHub didn't respond), clean-with-a-timestamp, or never checked.
+ */
+const getDriftStatusRowMessage = (uncheckedCount: number, lastChecked: string | null): string => {
+  if (uncheckedCount > 0) {
+    return `Couldn't check ${uncheckedCount} workflow${uncheckedCount === 1 ? "" : "s"} — GitHub didn't respond. Drift status may be out of date.`;
+  }
+  if (lastChecked) {
+    return `No drift detected — last checked ${new Date(lastChecked).toLocaleString()}`;
+  }
+  return "Not checked yet";
 };
 
 interface DriftDetectionProps {
@@ -74,12 +91,97 @@ interface DriftDetectionProps {
    * uses (ProjectMgmt.tsx's handlePRCreationSuccess).
    */
   onWorkflowStatusesChanged?: (workflowNames: string[], status: string) => void;
+  /**
+   * Workflow names with drift persisted by the last check, from the project
+   * fetch. Renders the banner on first paint so it doesn't pop in and shift
+   * the layout once the live check resolves. Superseded by live data as soon
+   * as the check completes.
+   */
+  seededDriftNames?: string[];
 }
 
 /**
  * Render two `<pre>` blocks side-by-side highlighting changed lines.
  * Lightweight (no extra deps) inline diff suitable for short workflow files.
  */
+/**
+ * Shown instead of a diff when the workflow file no longer exists in GitHub.
+ *
+ * A side-by-side diff renders the missing side as a single blank line, which
+ * reads as "the file is empty" rather than "the file is gone". Adopting
+ * GitHub's version is also impossible here — the server re-fetches and 404s —
+ * so that action is replaced with the two that make sense: put the file back,
+ * or accept the deletion and remove the workflow everywhere.
+ */
+const DeletedInGithubPanel: React.FC<{
+  detail: WorkflowDriftDetail;
+  busyAction: DriftDeliveryMode | null;
+  onRestorePR: () => void;
+  onRestoreDirect: () => void;
+  onDeleteEverywhere: () => void;
+}> = ({ detail, busyAction, onRestorePR, onRestoreDirect, onDeleteEverywhere }) => {
+  const disabled = busyAction !== null;
+  return (
+    <div
+      className="rounded-md border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20"
+      data-testid="deleted-in-github-panel"
+    >
+      <p className="text-sm font-medium text-red-900 dark:text-red-200">
+        This workflow no longer exists in {detail.repo}
+      </p>
+      <p className="mt-1 text-xs text-red-800 dark:text-red-300">
+        The file was removed from GitHub outside ActionsManager. ActionsManager still manages
+        it, so it will keep being reported as drifted until you either put it back or remove it
+        here too.
+      </p>
+
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+        <div className="flex-1">
+          <Button
+            size="sm"
+            variant="default"
+            disabled={disabled}
+            onClick={onRestorePR}
+            className="w-full justify-start"
+            data-testid="deleted-restore-pr-button"
+          >
+            {busyAction === "pr" ? "Creating pull request…" : "Recreate via Pull Request"}
+          </Button>
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+            Opens a pull request in <strong>{detail.repo}</strong> that adds the workflow back.
+          </p>
+        </div>
+        <div className="flex-1">
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={disabled}
+            onClick={onDeleteEverywhere}
+            className="w-full justify-start"
+            data-testid="delete-everywhere-button"
+          >
+            Delete Everywhere
+          </Button>
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+            Accepts the deletion: removes this workflow from the other repositories and from
+            ActionsManager.
+          </p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onRestoreDirect}
+        className="mt-3 text-xs text-slate-600 underline hover:text-slate-900 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-100"
+        data-testid="deleted-restore-direct-button"
+      >
+        {busyAction === "direct" ? "Restoring directly…" : "Or recreate it directly, without review"}
+      </button>
+    </div>
+  );
+};
+
 const SideBySideDiff: React.FC<{
   left: string;
   right: string;
@@ -257,6 +359,7 @@ const AdoptGithubVersionModal: React.FC<{
         workflow_id: detail.workflow_id,
         repo_id: repoId ?? undefined,
         repo_name: detail.repo,
+        branch: detail.branch,
         resolution_mode: mode,
         delivery_mode: mode === "adopt_project_and_sync" ? delivery : undefined,
       });
@@ -461,18 +564,36 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   onDriftLoaded,
   refreshSignal,
   onWorkflowStatusesChanged,
+  seededDriftNames,
 }) => {
   const [drifts, setDrifts] = useState<WorkflowDriftDetail[]>([]);
+  const [uncheckedCount, setUncheckedCount] = useState(0);
+  const [liveLoaded, setLiveLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [openDiffKey, setOpenDiffKey] = useState<string | null>(null);
+  // When the shown state was established. null = never checked, which must not
+  // render as "clean" — see the banner below.
+  const [lastChecked, setLastChecked] = useState<string | null>(null);
+  // Why the state may be older than it looks (e.g. the background sweep can't
+  // check this project). Null when nothing is wrong.
+  const [staleReason, setStaleReason] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  // GitHub's side of a diff, fetched when a row is expanded. The cached list
+  // omits it deliberately: a stored snapshot may no longer match GitHub.
+  const [liveDiffs, setLiveDiffs] = useState<Record<string, WorkflowDriftDetail>>({});
+  const [diffLoadingKey, setDiffLoadingKey] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
   const [resolvingMode, setResolvingMode] = useState<DriftDeliveryMode | null>(null);
   const [adoptDetail, setAdoptDetail] = useState<WorkflowDriftDetail | null>(null);
   // Direct restore overwrites GitHub with no PR review, so it is gated behind
   // an explicit confirmation naming the repo + target branch.
   const [confirmDirect, setConfirmDirect] = useState<WorkflowDriftDetail | null>(null);
+  // "Delete Everywhere" for a workflow already removed from GitHub: drops the
+  // file from the project's other repos and the workflow from ActionsManager.
+  const [confirmDeleteEverywhere, setConfirmDeleteEverywhere] = useState<WorkflowDriftDetail | null>(null);
+  const [deletingEverywhere, setDeletingEverywhere] = useState(false);
 
   // Bulk-fix: select multiple drifted workflows and resolve them together.
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
@@ -546,33 +667,104 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   // ProjectMgmt.tsx's loadRequestCounterRef.
   const requestIdRef = useRef(0);
 
-  const loadDrift = useCallback(async (): Promise<WorkflowDriftDetail[]> => {
+  const loadDrift = useCallback(async (
+    opts?: { refresh?: boolean },
+  ): Promise<WorkflowDriftDetail[]> => {
     const requestId = ++requestIdRef.current;
     if (!user || !projectId || !projectName || selectedRepos.length === 0) {
       driftsRef.current = [];
       setDrifts([]);
+      // Otherwise these carry over from whatever project was last loaded,
+      // e.g. showing this project as "last checked 3pm" using another
+      // project's timestamp.
+      setLastChecked(null);
+      setStaleReason(null);
+      setUncheckedCount(0);
+      // A loaded project with no repos can't drift, so treat that as a
+      // completed check and let the seeded banner clear. Before the project
+      // loads there is no projectId yet — stay pending so the seed still shows.
+      if (projectId) setLiveLoaded(true);
       onDriftLoaded?.([]);
       return [];
     }
     setError(null);
     try {
-      const summary = await getProjectDrift(projectId, user);
+      const summary = await getProjectDrift(projectId, user, { refresh: opts?.refresh });
       if (requestId !== requestIdRef.current) return driftsRef.current;
       driftsRef.current = summary.drifted_workflows;
       setDrifts(summary.drifted_workflows);
+      setLastChecked(summary.last_checked ?? null);
+      setStaleReason(summary.stale_reason ?? null);
+      // >0 means GitHub couldn't be queried for some repos, so an empty drift
+      // list is not evidence that everything is in sync.
+      setUncheckedCount(summary.unchecked_count ?? 0);
+      setLiveLoaded(true);
       onDriftLoaded?.(summary.drifted_workflows);
       return summary.drifted_workflows;
     } catch (err: unknown) {
       if (requestId !== requestIdRef.current) return driftsRef.current;
       setError(driftErrorMessage(err, "Failed to check drift"));
-      // A failed background check must not erase a previously known drift state.
+      // A failed background check must not erase a previously known drift
+      // state, so liveLoaded stays as-is: on a first-load failure the seeded
+      // banner keeps rendering rather than blanking out.
       return driftsRef.current;
     }
   }, [user, projectId, projectName, selectedRepos, onDriftLoaded]);
 
+  /**
+   * Read the stored state and stop there — opening a project costs no GitHub
+   * calls at all.
+   *
+   * This used to fire a live check behind the render whenever the stored state
+   * looked old, because nothing else kept it fresh. The background sweep does
+   * that now, so re-checking on mount would spend rate limit re-answering a
+   * question already answered on a timer. When the sweep genuinely cannot
+   * check a project, `stale_reason` says so, which is more honest than a
+   * silent refresh that may also fail.
+   */
   useEffect(() => {
     loadDrift();
   }, [loadDrift, refreshSignal]);
+
+  /** Run a live check on demand. */
+  const handleCheckNow = useCallback(async () => {
+    setChecking(true);
+    try {
+      await loadDrift({ refresh: true });
+      // Anything fetched for a diff describes the previous check.
+      setLiveDiffs({});
+    } finally {
+      setChecking(false);
+    }
+  }, [loadDrift]);
+
+  /**
+   * Expand a row, fetching GitHub's current content if the cached row lacks it.
+   *
+   * The list is served from stored state and omits github_yaml on purpose, so
+   * this is where the one API call per opened diff happens.
+   */
+  const handleToggleDiff = useCallback(async (detail: WorkflowDriftDetail, key: string) => {
+    if (openDiffKey === key) {
+      setOpenDiffKey(null);
+      return;
+    }
+    setOpenDiffKey(key);
+    if (detail.github_yaml !== null || liveDiffs[key] || !user) return;
+
+    setDiffLoadingKey(key);
+    try {
+      const live = await getWorkflowDrift(detail.workflow_id, user);
+      const match = live.drift_details.find(
+        (d) => d.repo === detail.repo && d.branch === detail.branch,
+      );
+      if (match) setLiveDiffs((prev) => ({ ...prev, [key]: match }));
+    } catch (err: unknown) {
+      setError(driftErrorMessage(err, "Failed to load the GitHub version"));
+    } finally {
+      setDiffLoadingKey(null);
+    }
+  }, [openDiffKey, liveDiffs, user]);
 
   const handleResolve = useCallback(
     async (
@@ -592,6 +784,9 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
           branch: detail.branch,
           resolution,
           delivery_mode: deliveryMode,
+          // What this decision was based on. If GitHub has moved on, the
+          // backend 409s rather than overwriting the newer content.
+          expected_github_sha: detail.github_sha,
         });
 
         // Check the resolution result state
@@ -632,8 +827,16 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
           if (openDiffKey === key) setOpenDiffKey(null);
         }
       } catch (err: unknown) {
-        setError(driftErrorMessage(err, "Resolution failed"));
-        // Keep diff open on error
+        const message = driftErrorMessage(err, "Resolution failed");
+        // A 409 means the file moved on, and the row still holds the SHA that
+        // was just rejected — refresh so retrying compares against what is
+        // actually on GitHub instead of failing identically forever. loadDrift
+        // clears the error itself, so set the message after it, not before.
+        if ((err as { response?: { status?: number } })?.response?.status === 409) {
+          await loadDrift();
+        }
+        // Keep diff open on error so the user can see what they were resolving.
+        setError(message);
       } finally {
         setResolving(null);
         setResolvingMode(null);
@@ -645,10 +848,17 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   const handleBulkResolve = useCallback(
     async (resolution: DriftResolution, deliveryMode?: DriftDeliveryMode) => {
       if (!projectId || selectedKeys.size === 0) return;
-      const items: { workflow_id: number; repo: string; branch: string }[] = [];
+      const items: BulkResolveDriftItem[] = [];
       selectedKeys.forEach((k) => {
         const d = driftByKey.get(k);
-        if (d) items.push({ workflow_id: d.workflow_id, repo: d.repo, branch: d.branch });
+        // expected_github_sha lets the backend reject any item whose file moved
+        // on since the check, without failing the rest of the batch.
+        if (d) items.push({
+          workflow_id: d.workflow_id,
+          repo: d.repo,
+          branch: d.branch,
+          expected_github_sha: d.github_sha,
+        });
       });
       if (items.length === 0) return;
 
@@ -707,6 +917,29 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
     [projectId, selectedKeys, driftByKey, user, loadDrift, onWorkflowStatusesChanged],
   );
 
+  const handleDeleteEverywhere = useCallback(async (detail: WorkflowDriftDetail) => {
+    setDeletingEverywhere(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      // The file is already gone from detail.repo; affected_repos is the rest
+      // of the project's repos that still share this workflow. Repos where the
+      // file is already absent are skipped server-side.
+      const repos = Array.from(new Set([detail.repo, ...(detail.affected_repos ?? [])]));
+      await deleteWorkflowFromGitHub(user, repos, detail.workflow_name, "", projectName);
+      await deleteWorkflowFromDatabase(user, projectName, detail.workflow_name);
+
+      setConfirmDeleteEverywhere(null);
+      setOpenDiffKey(null);
+      setSuccess(`'${detail.workflow_name}' removed from ActionsManager and ${repos.length} repositor${repos.length === 1 ? "y" : "ies"}.`);
+      await loadDrift();
+    } catch (err: unknown) {
+      setError(driftErrorMessage(err, "Failed to delete the workflow"));
+    } finally {
+      setDeletingEverywhere(false);
+    }
+  }, [user, projectName, loadDrift]);
+
   const handleAdoptResolved = useCallback(async (message: string) => {
     setSuccess(message);
     const refreshed = await loadDrift();
@@ -717,19 +950,54 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
   }, [loadDrift]);
 
   const driftCount = drifts.length;
+  // Until the live check has succeeded once, drive the banner from the drift
+  // the last check persisted. Otherwise the banner is absent on first paint
+  // and pops in when the check resolves, shifting the page layout.
+  const bannerCount = liveLoaded ? driftCount : (seededDriftNames?.length ?? 0);
+  // The seed carries names only, so the modal's rows/resolve actions aren't
+  // usable yet. An error still enables it — that's how the user reaches the
+  // failure message inside the modal.
+  const canReviewDrift = liveLoaded || error !== null;
   const summaryText = useMemo(() => {
-    if (driftCount === 0) return "";
-    if (driftCount === 1) return "1 workflow changed in GitHub";
-    return `${driftCount} workflows changed in GitHub`;
-  }, [driftCount]);
-
-  if (driftCount === 0 && !showModal) {
-    return null;
-  }
+    if (bannerCount === 0) return "";
+    if (bannerCount === 1) return "1 workflow changed in GitHub";
+    return `${bannerCount} workflows changed in GitHub`;
+  }, [bannerCount]);
 
   return (
     <>
-      {driftCount > 0 && (
+      {bannerCount === 0 && (
+        // Persistent, muted status row so a clean or never-checked project
+        // always has a way to trigger a live check — the "Review Drift"
+        // button below only exists once drift is already known, so without
+        // this there was no manual-check path at all until something first
+        // went wrong. handleCheckNow runs directly; there's nothing to
+        // review yet, so opening the modal first would add a step for
+        // nothing.
+        <output
+          className="mx-4 mb-2 px-4 py-2 rounded-lg flex items-center gap-3 bg-slate-100 border border-slate-300 text-slate-800 dark:bg-slate-800/60 dark:border-slate-600 dark:text-slate-200"
+          data-testid="drift-status-row"
+        >
+          <span aria-hidden="true">{uncheckedCount > 0 || !lastChecked ? "❔" : "✅"}</span>
+          <span className="font-medium flex-1">
+            {getDriftStatusRowMessage(uncheckedCount, lastChecked)}
+          </span>
+          {uncheckedCount === 0 && staleReason && (
+            <span className="text-xs text-slate-500 dark:text-slate-400">{staleReason}</span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCheckNow}
+            disabled={checking}
+            data-testid="drift-inline-check-now-button"
+          >
+            {checking ? "Checking…" : "Check Now"}
+          </Button>
+        </output>
+      )}
+
+      {bannerCount > 0 && (
         <div
           className="mx-4 mb-2 px-4 py-2 rounded-lg flex items-center gap-3 bg-amber-50 border border-amber-200 text-amber-900 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-200"
           role="alert"
@@ -742,9 +1010,10 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
             variant="outline"
             size="sm"
             onClick={() => setShowModal(true)}
+            disabled={!canReviewDrift}
             data-testid="review-drift-button"
           >
-            Review Drift
+            {canReviewDrift ? "Review Drift" : "Checking…"}
           </Button>
         </div>
       )}
@@ -762,6 +1031,32 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
               The following workflows were changed directly in GitHub. Review the diff and
               choose how to resolve each drift safely.
             </DialogDescription>
+            <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+              <span data-testid="drift-last-checked">
+                {lastChecked
+                  ? `Last checked ${new Date(lastChecked).toLocaleString()}`
+                  : "Never checked"}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCheckNow}
+                disabled={checking}
+                data-testid="drift-check-now-button"
+              >
+                {checking ? "Checking…" : "Check Now"}
+              </Button>
+            </div>
+            {staleReason && (
+              // Without this the timestamp simply stops advancing and the
+              // feature reads as broken rather than blocked on a token.
+              <p
+                className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+                data-testid="drift-stale-reason"
+              >
+                {staleReason}
+              </p>
+            )}
             <a
               className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400 self-start"
               href={getDocsUrl("driftDetection")}
@@ -859,6 +1154,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                 {drifts.map((d) => {
                   const k = driftKey(d);
                   const isOpen = openDiffKey === k;
+                  const diffButtonLabel = isOpen ? "Hide Diff" : "View Diff";
                   const busy = resolving === k;
                   const group = driftGroups.get(groupKeyFor(d)) ?? [d];
                   return (
@@ -907,9 +1203,18 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                         <td className="py-2 pr-4">{d.repo}</td>
                         <td className="py-2 pr-4">{d.branch}</td>
                         <td className="py-2 pr-4">
-                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-                            Drift detected
-                          </span>
+                          {d.deleted_in_github ? (
+                            <span
+                              className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                              data-testid="drift-status-deleted"
+                            >
+                              Deleted in GitHub
+                            </span>
+                          ) : (
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                              Drift detected
+                            </span>
+                          )}
                         </td>
                         <td className="py-2 pr-4 text-xs text-slate-500 dark:text-slate-400">
                           {d.last_checked
@@ -920,9 +1225,10 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setOpenDiffKey(isOpen ? null : k)}
+                            onClick={() => handleToggleDiff(d, k)}
+                            disabled={diffLoadingKey === k}
                           >
-                            {isOpen ? "Hide Diff" : "View Diff"}
+                            {diffLoadingKey === k ? "Loading…" : diffButtonLabel}
                           </Button>
                         </td>
                       </tr>
@@ -939,18 +1245,30 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
                                   {d.message}
                                 </p>
                               )}
-                              <SideBySideDiff
-                                left={d.actionsmanager_yaml ?? ""}
-                                right={d.github_yaml ?? ""}
-                                repo={d.repo}
-                                branch={d.branch}
-                                onAdoptGithub={() => setAdoptDetail(d)}
-                                onRestorePR={() =>
-                                  handleResolve(d, "restore_actionsmanager", "pr")
-                                }
-                                onRestoreDirect={() => setConfirmDirect(d)}
-                                busyAction={busy ? resolvingMode : null}
-                              />
+                              {d.deleted_in_github ? (
+                                <DeletedInGithubPanel
+                                  detail={d}
+                                  busyAction={busy ? resolvingMode : null}
+                                  onRestorePR={() =>
+                                    handleResolve(d, "restore_actionsmanager", "pr")
+                                  }
+                                  onRestoreDirect={() => setConfirmDirect(d)}
+                                  onDeleteEverywhere={() => setConfirmDeleteEverywhere(d)}
+                                />
+                              ) : (
+                                <SideBySideDiff
+                                  left={d.actionsmanager_yaml ?? ""}
+                                  right={liveDiffs[k]?.github_yaml ?? d.github_yaml ?? ""}
+                                  repo={d.repo}
+                                  branch={d.branch}
+                                  onAdoptGithub={() => setAdoptDetail(d)}
+                                  onRestorePR={() =>
+                                    handleResolve(d, "restore_actionsmanager", "pr")
+                                  }
+                                  onRestoreDirect={() => setConfirmDirect(d)}
+                                  busyAction={busy ? resolvingMode : null}
+                                />
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -996,6 +1314,25 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
           const d = confirmDirect;
           setConfirmDirect(null);
           if (d) handleResolve(d, "restore_actionsmanager", "direct");
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteEverywhere !== null}
+        title="Delete this workflow everywhere?"
+        description={
+          confirmDeleteEverywhere
+            ? `'${confirmDeleteEverywhere.workflow_name}' will be deleted from `
+              + `${Array.from(new Set([confirmDeleteEverywhere.repo, ...(confirmDeleteEverywhere.affected_repos ?? [])])).join(", ")} `
+              + `and removed from ActionsManager, including its version history. `
+              + `This cannot be undone.`
+            : ""
+        }
+        confirmLabel={deletingEverywhere ? "Deleting…" : "Delete everywhere"}
+        destructive
+        onCancel={() => setConfirmDeleteEverywhere(null)}
+        onConfirm={() => {
+          if (confirmDeleteEverywhere) handleDeleteEverywhere(confirmDeleteEverywhere);
         }}
       />
 

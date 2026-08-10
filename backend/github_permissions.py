@@ -226,6 +226,174 @@ class GitHubPermissionValidator:
                 "token_type": self.token_type,
             }
 
+    def _apply_token_type_check(self, result: Dict) -> bool:
+        """Step 1: detect token type, validate the token, populate auth_type details. Returns False if the token is invalid (result is already terminal)."""
+        token_type_check = self._detect_token_type()
+        if not token_type_check["token_valid"]:
+            result["status"] = PermissionStatus.TOKEN_INVALID
+            result["valid"] = False
+            result["issues"].append("GitHub access token is invalid or expired")
+            result["recommendations"].append("Please sign out and sign in again to re-authenticate with GitHub")
+            return False
+
+        self.is_github_app = token_type_check["is_github_app"]
+        self.token_type = token_type_check.get("token_type", self.token_type)
+        if self.is_github_app:
+            result["details"]["auth_type"] = CredentialSource.GITHUB_APP
+        elif self.token_type in {TokenType.CLASSIC_PAT, TokenType.FINE_GRAINED_PAT}:
+            result["details"]["auth_type"] = CredentialSource.PERSONAL_ACCESS_TOKEN
+        else:
+            result["details"]["auth_type"] = CredentialSource.OAUTH
+        result["details"]["token_type"] = self.token_type
+        return True
+
+    def _apply_oauth_scope_check(self, result: Dict) -> None:
+        scope_check = self._check_oauth_scopes()
+        result["granted_scopes"] = scope_check["granted_scopes"]
+        result["missing_scopes"] = scope_check["missing_scopes"]
+        result["details"]["scopes"] = scope_check
+
+        if not scope_check["missing_scopes"]:
+            return
+
+        # Categorize missing scopes — only hard-fail for critical ones
+        critical_missing = [
+            scope for scope in scope_check["missing_scopes"]
+            if REQUIRED_GITHUB_PERMISSIONS.get(scope, PermissionRequirement(scope="", description="", required_for=[], critical=True)).critical
+        ]
+        optional_missing = [s for s in scope_check["missing_scopes"] if s not in critical_missing]
+
+        if critical_missing:
+            result["status"] = PermissionStatus.MISSING_SCOPES
+            result["valid"] = False
+            result["issues"].append(
+                f"Missing critical GitHub permissions: {', '.join(critical_missing)}"
+            )
+            result["recommendations"].append(
+                "Sign out and sign in again. When GitHub asks for permissions, make sure to authorize all requested scopes."
+            )
+
+        if optional_missing:
+            result["warnings"].append(
+                f"Missing optional GitHub permissions: {', '.join(optional_missing)}"
+            )
+            result["recommendations"].append(
+                "Some features may be limited. For full functionality, re-authorize the application with all scopes."
+            )
+
+    def _apply_github_app_permission_check(self, result: Dict) -> None:
+        app_permissions_check = self._check_github_app_permissions()
+        result["details"]["app_permissions"] = app_permissions_check
+
+        if not app_permissions_check.get("has_required_permissions", True):
+            result["status"] = PermissionStatus.MISSING_SCOPES
+            result["valid"] = False
+
+            missing_perms = app_permissions_check.get("missing_permissions", [])
+            if missing_perms:
+                result["issues"].append(
+                    f"GitHub App installation is missing required permissions: {', '.join(missing_perms)}"
+                )
+            else:
+                result["issues"].append("GitHub App installation is missing required permissions")
+
+            result["recommendations"].append(
+                "The GitHub App needs to be configured with additional permissions. Contact your administrator to update the app installation."
+            )
+
+        optional_missing = app_permissions_check.get("optional_missing", [])
+        if optional_missing:
+            result["warnings"].append(
+                f"GitHub App is missing optional permissions: {', '.join(optional_missing[:3])}"
+            )
+            result["recommendations"].append(
+                "For full functionality, consider granting the app additional optional permissions."
+            )
+
+    def _apply_scope_check(self, result: Dict) -> None:
+        """Step 2: OAuth scopes, fine-grained PAT, or GitHub App installation permissions — branched by token type.
+
+        GitHub App tokens don't use OAuth scopes, they use installation permissions.
+        """
+        if not self.is_github_app and self.token_type != TokenType.FINE_GRAINED_PAT:
+            self._apply_oauth_scope_check(result)
+        elif self.token_type == TokenType.FINE_GRAINED_PAT:
+            result["details"]["scopes"] = {
+                "granted_scopes": [],
+                "missing_scopes": [],
+                "has_all_required": True,
+                "note": "Fine-grained personal access tokens use repository permissions instead of OAuth scopes.",
+            }
+            result["recommendations"].append(
+                "Fine-grained personal access tokens should include Metadata: read plus Contents and Actions: read/write. Add Pull requests, Secrets, Variables, or Administration only for features you use."
+            )
+        else:
+            self._apply_github_app_permission_check(result)
+
+    def _apply_repository_access_check(self, result: Dict) -> None:
+        """Step 3: repository access.
+
+        GitHub App repo access is managed by the installation, not the user token.
+        A GitHub App user token (ghu_) does not carry the 'repo' OAuth scope, so
+        /user/repos will return an empty list even when the app has full repo access.
+        Showing "Cannot access repos" in this case is a false positive — skip it.
+        """
+        if self.is_github_app:
+            result["details"]["repository_access"] = {
+                "has_repo_access": True,
+                "note": "Repository access is managed by the GitHub App installation"
+            }
+            return
+
+        repo_check = self._check_repository_access()
+        result["details"]["repository_access"] = repo_check
+
+        if not repo_check["has_repo_access"]:
+            result["valid"] = False
+            if result["status"] == PermissionStatus.VALID:
+                result["status"] = PermissionStatus.MISSING_REPO_ACCESS
+            repo_error = repo_check.get("error", "")
+            if "organization access is blocked" in repo_error.lower():
+                result["status"] = PermissionStatus.MISSING_ORG_APPROVAL
+                result["issues"].append("Organization policies are blocking this token from accessing repositories")
+                result["recommendations"].append(
+                    "Ask an organization administrator to allow this token or create a token that is approved for the target organization."
+                )
+            else:
+                result["issues"].append("Cannot access any repositories")
+                result["recommendations"].append(
+                    "Ensure you have at least one repository that Actions Manager can access"
+                )
+        elif repo_check.get("has_write_restrictions"):
+            if result["status"] == PermissionStatus.VALID:
+                result["status"] = PermissionStatus.INSUFFICIENT_REPO_PERMISSIONS
+                result["valid"] = False
+            result["issues"].append(
+                f"Limited write access to some repositories: {', '.join(repo_check['limited_repos'][:5])}"
+            )
+            result["recommendations"].append(
+                "Write access is required for full repository management features. Grant write permissions to the affected repositories."
+            )
+
+    def _apply_organization_access_check(self, result: Dict) -> None:
+        """Step 4: organization access (skip for GitHub App tokens - they handle this differently)."""
+        if self.is_github_app:
+            return
+
+        org_check = self._check_organization_access()
+        result["details"]["organization_access"] = org_check
+
+        if org_check["has_org_restrictions"]:
+            if result["status"] == PermissionStatus.VALID:
+                result["status"] = PermissionStatus.MISSING_ORG_APPROVAL
+                result["valid"] = False
+            result["issues"].append(
+                f"Organization access restricted for: {', '.join(org_check['restricted_orgs'][:3])}"
+            )
+            result["recommendations"].append(
+                "Some organization repositories may be restricted. Contact your organization admin to approve Actions Manager as a third-party OAuth app."
+            )
+
     def validate_all_permissions(self) -> Dict:
         """
         Comprehensive permission validation.
@@ -250,157 +418,12 @@ class GitHubPermissionValidator:
             "details": {}
         }
 
-        # Step 1: Detect token type and validate token is valid
-        token_type_check = self._detect_token_type()
-        if not token_type_check["token_valid"]:
-            result["status"] = PermissionStatus.TOKEN_INVALID
-            result["valid"] = False
-            result["issues"].append("GitHub access token is invalid or expired")
-            result["recommendations"].append("Please sign out and sign in again to re-authenticate with GitHub")
+        if not self._apply_token_type_check(result):
             return result
 
-        # Store token type for later use
-        self.is_github_app = token_type_check["is_github_app"]
-        self.token_type = token_type_check.get("token_type", self.token_type)
-        if self.is_github_app:
-            result["details"]["auth_type"] = CredentialSource.GITHUB_APP
-        elif self.token_type in {TokenType.CLASSIC_PAT, TokenType.FINE_GRAINED_PAT}:
-            result["details"]["auth_type"] = CredentialSource.PERSONAL_ACCESS_TOKEN
-        else:
-            result["details"]["auth_type"] = CredentialSource.OAUTH
-        result["details"]["token_type"] = self.token_type
-
-        # Step 2: Check OAuth scopes (only for OAuth tokens)
-        # GitHub App tokens don't use OAuth scopes, they use installation permissions
-        if not self.is_github_app and self.token_type != TokenType.FINE_GRAINED_PAT:
-            scope_check = self._check_oauth_scopes()
-            result["granted_scopes"] = scope_check["granted_scopes"]
-            result["missing_scopes"] = scope_check["missing_scopes"]
-            result["details"]["scopes"] = scope_check
-
-            if scope_check["missing_scopes"]:
-                # Categorize missing scopes — only hard-fail for critical ones
-                critical_missing = [
-                    scope for scope in scope_check["missing_scopes"]
-                    if REQUIRED_GITHUB_PERMISSIONS.get(scope, PermissionRequirement(scope="", description="", required_for=[], critical=True)).critical
-                ]
-                optional_missing = [s for s in scope_check["missing_scopes"] if s not in critical_missing]
-
-                if critical_missing:
-                    result["status"] = PermissionStatus.MISSING_SCOPES
-                    result["valid"] = False
-                    result["issues"].append(
-                        f"Missing critical GitHub permissions: {', '.join(critical_missing)}"
-                    )
-                    result["recommendations"].append(
-                        "Sign out and sign in again. When GitHub asks for permissions, make sure to authorize all requested scopes."
-                    )
-
-                if optional_missing:
-                    result["warnings"].append(
-                        f"Missing optional GitHub permissions: {', '.join(optional_missing)}"
-                    )
-                    result["recommendations"].append(
-                        "Some features may be limited. For full functionality, re-authorize the application with all scopes."
-                    )
-        elif self.token_type == TokenType.FINE_GRAINED_PAT:
-            result["details"]["scopes"] = {
-                "granted_scopes": [],
-                "missing_scopes": [],
-                "has_all_required": True,
-                "note": "Fine-grained personal access tokens use repository permissions instead of OAuth scopes.",
-            }
-            result["recommendations"].append(
-                "Fine-grained personal access tokens should include Metadata: read plus Contents and Actions: read/write. Add Pull requests, Secrets, Variables, or Administration only for features you use."
-            )
-        else:
-            # For GitHub App tokens, validate installation permissions
-            app_permissions_check = self._check_github_app_permissions()
-            result["details"]["app_permissions"] = app_permissions_check
-
-            if not app_permissions_check.get("has_required_permissions", True):
-                result["status"] = PermissionStatus.MISSING_SCOPES
-                result["valid"] = False
-
-                # Add specific missing permissions to issues
-                missing_perms = app_permissions_check.get("missing_permissions", [])
-                if missing_perms:
-                    result["issues"].append(
-                        f"GitHub App installation is missing required permissions: {', '.join(missing_perms)}"
-                    )
-                else:
-                    result["issues"].append("GitHub App installation is missing required permissions")
-
-                result["recommendations"].append(
-                    "The GitHub App needs to be configured with additional permissions. Contact your administrator to update the app installation."
-                )
-
-            # Add warnings for optional missing permissions
-            optional_missing = app_permissions_check.get("optional_missing", [])
-            if optional_missing:
-                result["warnings"].append(
-                    f"GitHub App is missing optional permissions: {', '.join(optional_missing[:3])}"
-                )
-                result["recommendations"].append(
-                    "For full functionality, consider granting the app additional optional permissions."
-                )
-
-        # Step 3: Check repository access
-        # GitHub App repo access is managed by the installation, not the user token.
-        # A GitHub App user token (ghu_) does not carry the 'repo' OAuth scope, so
-        # /user/repos will return an empty list even when the app has full repo access.
-        # Showing "Cannot access repos" in this case is a false positive — skip it.
-        if not self.is_github_app:
-            repo_check = self._check_repository_access()
-            result["details"]["repository_access"] = repo_check
-
-            if not repo_check["has_repo_access"]:
-                result["valid"] = False
-                if result["status"] == PermissionStatus.VALID:
-                    result["status"] = PermissionStatus.MISSING_REPO_ACCESS
-                repo_error = repo_check.get("error", "")
-                if "organization access is blocked" in repo_error.lower():
-                    result["status"] = PermissionStatus.MISSING_ORG_APPROVAL
-                    result["issues"].append("Organization policies are blocking this token from accessing repositories")
-                    result["recommendations"].append(
-                        "Ask an organization administrator to allow this token or create a token that is approved for the target organization."
-                    )
-                else:
-                    result["issues"].append("Cannot access any repositories")
-                    result["recommendations"].append(
-                        "Ensure you have at least one repository that Actions Manager can access"
-                    )
-            elif repo_check.get("has_write_restrictions"):
-                if result["status"] == PermissionStatus.VALID:
-                    result["status"] = PermissionStatus.INSUFFICIENT_REPO_PERMISSIONS
-                    result["valid"] = False
-                result["issues"].append(
-                    f"Limited write access to some repositories: {', '.join(repo_check['limited_repos'][:5])}"
-                )
-                result["recommendations"].append(
-                    "Write access is required for full repository management features. Grant write permissions to the affected repositories."
-                )
-        else:
-            result["details"]["repository_access"] = {
-                "has_repo_access": True,
-                "note": "Repository access is managed by the GitHub App installation"
-            }
-
-        # Step 4: Check organization access (skip for GitHub App tokens - they handle this differently)
-        if not self.is_github_app:
-            org_check = self._check_organization_access()
-            result["details"]["organization_access"] = org_check
-
-            if org_check["has_org_restrictions"]:
-                if result["status"] == PermissionStatus.VALID:
-                    result["status"] = PermissionStatus.MISSING_ORG_APPROVAL
-                    result["valid"] = False
-                result["issues"].append(
-                    f"Organization access restricted for: {', '.join(org_check['restricted_orgs'][:3])}"
-                )
-                result["recommendations"].append(
-                    "Some organization repositories may be restricted. Contact your organization admin to approve Actions Manager as a third-party OAuth app."
-                )
+        self._apply_scope_check(result)
+        self._apply_repository_access_check(result)
+        self._apply_organization_access_check(result)
 
         return result
 
@@ -703,6 +726,51 @@ def get_required_scopes_description() -> Dict[str, Dict]:
     }
 
 
+def _valid_permission_message(auth_type: Optional[str], token_type: Optional[str]) -> str:
+    if auth_type == CredentialSource.PERSONAL_ACCESS_TOKEN:
+        if token_type == TokenType.FINE_GRAINED_PAT:
+            return "✅ Fine-grained personal access token validated successfully."
+        return "✅ Personal access token validated successfully."
+    return "✅ All GitHub permissions are correctly configured."
+
+
+def _append_issues_section(messages: List[str], validation_result: Dict) -> None:
+    if not validation_result["issues"]:
+        return
+    messages.append("**Issues Found:**")
+    for issue in validation_result["issues"]:
+        messages.append(f"• {issue}")
+    messages.append("")
+
+
+def _append_warnings_section(messages: List[str], validation_result: Dict) -> None:
+    if not validation_result["warnings"]:
+        return
+    messages.append("**Warnings:**")
+    for warning in validation_result["warnings"]:
+        messages.append(f"• {warning}")
+    messages.append("")
+
+
+def _append_affected_functionality_section(messages: List[str], validation_result: Dict) -> None:
+    if not validation_result["missing_scopes"]:
+        return
+    messages.append("**Affected Functionality:**")
+    for scope in validation_result["missing_scopes"]:
+        perm = REQUIRED_GITHUB_PERMISSIONS.get(scope)
+        if perm:
+            messages.append(f"• **{scope}**: {', '.join(perm.required_for[:3])}")
+    messages.append("")
+
+
+def _append_recommendations_section(messages: List[str], validation_result: Dict) -> None:
+    if not validation_result["recommendations"]:
+        return
+    messages.append("**How to Fix:**")
+    for i, rec in enumerate(validation_result["recommendations"], 1):
+        messages.append(f"{i}. {rec}")
+
+
 def format_permission_issues_for_user(validation_result: Dict) -> str:
     """
     Format permission validation results into user-friendly message.
@@ -710,45 +778,14 @@ def format_permission_issues_for_user(validation_result: Dict) -> str:
     Returns a formatted string explaining permission issues and how to fix them.
     """
     details = validation_result.get("details", {})
-    auth_type = details.get("auth_type")
-    token_type = details.get("token_type")
 
     if validation_result["valid"]:
-        if auth_type == CredentialSource.PERSONAL_ACCESS_TOKEN:
-            if token_type == TokenType.FINE_GRAINED_PAT:
-                return "✅ Fine-grained personal access token validated successfully."
-            return "✅ Personal access token validated successfully."
-        return "✅ All GitHub permissions are correctly configured."
+        return _valid_permission_message(details.get("auth_type"), details.get("token_type"))
 
-    messages = []
-
-    # Add issues
-    if validation_result["issues"]:
-        messages.append("**Issues Found:**")
-        for issue in validation_result["issues"]:
-            messages.append(f"• {issue}")
-        messages.append("")
-
-    # Add warnings
-    if validation_result["warnings"]:
-        messages.append("**Warnings:**")
-        for warning in validation_result["warnings"]:
-            messages.append(f"• {warning}")
-        messages.append("")
-
-    # Add what's affected
-    if validation_result["missing_scopes"]:
-        messages.append("**Affected Functionality:**")
-        for scope in validation_result["missing_scopes"]:
-            perm = REQUIRED_GITHUB_PERMISSIONS.get(scope)
-            if perm:
-                messages.append(f"• **{scope}**: {', '.join(perm.required_for[:3])}")
-        messages.append("")
-
-    # Add recommendations
-    if validation_result["recommendations"]:
-        messages.append("**How to Fix:**")
-        for i, rec in enumerate(validation_result["recommendations"], 1):
-            messages.append(f"{i}. {rec}")
+    messages: List[str] = []
+    _append_issues_section(messages, validation_result)
+    _append_warnings_section(messages, validation_result)
+    _append_affected_functionality_section(messages, validation_result)
+    _append_recommendations_section(messages, validation_result)
 
     return "\n".join(messages)

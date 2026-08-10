@@ -267,9 +267,39 @@ def test_bulk_use_github_one_item_exception_does_not_abort_the_batch(db_state):
     assert "403" in results_by_id[db_state["deploy_id"]]["message"]
 
 
+def test_bulk_use_github_adopts_from_the_branch_the_item_names(db_state):
+    """Adopt from the branch the user was looking at, not the repo default.
+
+    The drift row the user clicked names a branch; adopting from any other
+    branch imports a different file than the one they were shown. When every
+    item names its branch the repo default is never needed at all.
+    """
+    seen = []
+
+    def fake_github_fetch(owner, repo, filename, token, default_branch=None):
+        seen.append(default_branch)
+        return {"content": f"name: {filename}\non: pull_request", "sha": f"sha-{filename}"}
+
+    with patch("workflows.get_workflow_from_github", side_effect=fake_github_fetch), \
+         patch("workflows.get_default_branch", return_value="main") as mock_default_branch:
+        resp = _bulk_resolve(
+            db_state["project_id"],
+            [
+                {"workflow_id": db_state["ci_id"], "repo": "alice/repo1", "branch": "release/2.1"},
+                {"workflow_id": db_state["deploy_id"], "repo": "alice/repo1", "branch": "release/2.1"},
+            ],
+            resolution="use_github",
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["success"] is True
+    assert seen == ["release/2.1", "release/2.1"]
+    assert mock_default_branch.call_count == 0
+
+
 def test_bulk_use_github_caches_default_branch_per_repo(db_state):
-    """Regression: two items in the same repo should resolve the repo's
-    default branch once, not once per item."""
+    """Regression: items arriving without a branch fall back to the repo's
+    default, resolved once for the repo rather than once per item."""
     def fake_github_fetch(owner, repo, filename, token, default_branch=None):
         assert default_branch == "main"  # the cached value was actually forwarded
         return {"content": f"name: {filename}\non: pull_request", "sha": f"sha-{filename}"}
@@ -279,8 +309,8 @@ def test_bulk_use_github_caches_default_branch_per_repo(db_state):
         resp = _bulk_resolve(
             db_state["project_id"],
             [
-                {"workflow_id": db_state["ci_id"], "repo": "alice/repo1", "branch": "main"},
-                {"workflow_id": db_state["deploy_id"], "repo": "alice/repo1", "branch": "main"},
+                {"workflow_id": db_state["ci_id"], "repo": "alice/repo1", "branch": ""},
+                {"workflow_id": db_state["deploy_id"], "repo": "alice/repo1", "branch": ""},
             ],
             resolution="use_github",
         )

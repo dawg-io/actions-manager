@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import EventPicker from './EventPicker';
 import JobList from './JobList';
-import { 
-  WorkflowGUI, 
-  WorkflowJob, 
-  WorkflowEvent, 
-  validateWorkflow, 
+import StepDetailPanel from './StepDetailPanel';
+import { StepSelection, StepSelectionProvider } from './StepSelectionContext';
+import {
+  WorkflowGUI,
+  WorkflowJob,
+  WorkflowEvent,
+  validateWorkflow,
   ValidationError
 } from '../utils/workflowGuiConversion';
+import { uniqueId } from '../utils/stepSelection';
 import { ActionsProject } from '../api/actionsProjects';
 import { ActionGroup } from '../api/actionGroups';
 // eslint-disable-next-line no-restricted-imports -- Legacy: TODO migrate CSS file to Tailwind CSS classes
@@ -29,6 +32,7 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
   actionGroups
 }) => {
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
+  const [selected, setSelected] = useState<StepSelection | null>(null);
 
   // Memoize validation errors to prevent infinite re-renders
   const memoizedValidationErrors = useMemo(() => {
@@ -72,13 +76,14 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
   };
 
   const addJob = () => {
+    const id = uniqueId(workflow.jobs.map(j => j.id), `job-${workflow.jobs.length + 1}`);
     const newJob: WorkflowJob = {
-      id: `job-${workflow.jobs.length + 1}`,
+      id,
       name: `Job ${workflow.jobs.length + 1}`,
       runsOn: 'ubuntu-latest',
       steps: []
     };
-    
+
     onChange({
       ...workflow,
       jobs: [...workflow.jobs, newJob]
@@ -227,13 +232,24 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
           </button>
         </div>
         
-        <JobList
-          jobs={workflow.jobs}
-          onChange={handleJobsChange}
-          validationErrors={validationErrors}
-          importedActions={importedActions}
-          actionGroups={actionGroups}
-        />
+        <StepSelectionProvider value={{ selected, onSelect: setSelected }}>
+          <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-4">
+            <JobList
+              jobs={workflow.jobs}
+              onChange={handleJobsChange}
+              validationErrors={validationErrors}
+            />
+            <StepDetailPanel
+              workflow={workflow}
+              selected={selected}
+              onSelect={setSelected}
+              onChange={onChange}
+              validationErrors={validationErrors}
+              importedActions={importedActions}
+              actionGroups={actionGroups}
+            />
+          </div>
+        </StepSelectionProvider>
       </div>
 
       {/* Unsupported Fields Notice */}

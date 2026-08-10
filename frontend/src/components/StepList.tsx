@@ -1,24 +1,19 @@
 import React from 'react';
 import StepCard from './StepCard';
+import { useStepSelection } from './StepSelectionContext';
+import { uniqueId, isFieldUnder } from '../utils/stepSelection';
 import { WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
-import { ActionsProject } from '../api/actionsProjects';
-import { ActionGroup } from '../api/actionGroups';
 
 interface StepListProps {
   steps: WorkflowStep[];
   onChange: (steps: WorkflowStep[]) => void;
   validationErrors: ValidationError[];
   jobIndex: number;
-  importedActions: ActionsProject[];
-  actionGroups: ActionGroup[];
+  jobId: string;
 }
 
-const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, jobIndex, importedActions, actionGroups }) => {
-  const updateStep = (index: number, updatedStep: WorkflowStep) => {
-    const newSteps = [...steps];
-    newSteps[index] = updatedStep;
-    onChange(newSteps);
-  };
+const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, jobIndex, jobId }) => {
+  const { onSelect } = useStepSelection();
 
   const removeStep = (index: number) => {
     onChange(steps.filter((_, i) => i !== index));
@@ -37,18 +32,19 @@ const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, 
     const step = steps[index];
     const newStep: WorkflowStep = {
       ...step,
-      id: `${step.id}-copy`,
+      id: uniqueId(steps.map(s => s.id), `${step.id}-copy`),
       name: step.name ? `${step.name} (Copy)` : undefined
     };
-    
+
     const newSteps = [...steps];
     newSteps.splice(index + 1, 0, newStep);
     onChange(newSteps);
+    onSelect({ jobId, stepId: newStep.id });
   };
 
   const getStepErrors = (stepIndex: number): ValidationError[] => {
     return validationErrors.filter(error => 
-      error.field.startsWith(`jobs[${jobIndex}].steps[${stepIndex}]`)
+      isFieldUnder(error.field, `jobs[${jobIndex}].steps[${stepIndex}]`)
     );
   };
 
@@ -64,14 +60,12 @@ const StepList: React.FC<StepListProps> = ({ steps, onChange, validationErrors, 
             key={step.id}
             step={step}
             stepIndex={index}
-            onChange={(updatedStep) => updateStep(index, updatedStep)}
+            jobId={jobId}
             onRemove={() => removeStep(index)}
             onMoveUp={index > 0 ? () => moveStep(index, index - 1) : undefined}
             onMoveDown={index < steps.length - 1 ? () => moveStep(index, index + 1) : undefined}
             onDuplicate={() => duplicateStep(index)}
             validationErrors={getStepErrors(index)}
-            importedActions={importedActions}
-            actionGroups={actionGroups}
           />
         ))
       )}

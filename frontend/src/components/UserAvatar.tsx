@@ -480,6 +480,15 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
           <span>Workspace Members</span>
         </DropdownMenuItem>
 
+        {/* Notifications Link */}
+        <DropdownMenuItem
+          onClick={() => { navigate('/workspace/notifications'); }}
+          className="cursor-pointer"
+        >
+          <span className="mr-2">🔔</span>
+          <span>Notifications</span>
+        </DropdownMenuItem>
+
         {/* Theme Toggle */}
         <DropdownMenuItem 
           onClick={handleThemeToggle}

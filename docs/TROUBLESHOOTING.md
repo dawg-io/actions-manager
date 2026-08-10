@@ -385,6 +385,33 @@ ENV CI=false
 
 ## Database Issues
 
+### "Purged N orphaned row(s)" on First Startup After Upgrading
+
+**Symptom:**
+```
+🔄 Purging rows orphaned while SQLite foreign keys were disabled...
+   pass 1: removed 214 orphaned row(s) across 6 table(s)
+✅ Purged 214 orphaned row(s):
+```
+
+**This is expected, not an error.** Earlier versions never enabled SQLite's
+`foreign_keys` pragma, which is off by default, so `ON DELETE CASCADE` never
+fired. Deleting a project left its memberships, secrets, pull request records,
+notification history and other child rows behind as orphans referencing a
+project that no longer existed.
+
+Foreign keys are now enforced, and a one-time migration removes those leftover
+rows so the database matches its own constraints. The count reflects how much
+had accumulated — a large number on a long-running install is normal. The
+migration is idempotent, so later startups report
+`No orphaned rows found`.
+
+PostgreSQL deployments are unaffected: PostgreSQL has always enforced these
+constraints, so orphans could never accumulate there and the migration skips.
+
+**Note:** deleting a project now also deletes that project's notification
+delivery history, which previously survived. This is intentional.
+
 ### SQLite Database Locked
 
 **Symptom:**

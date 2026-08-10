@@ -29,7 +29,7 @@ from github_permissions import (
     TokenType,
     format_permission_issues_for_user,
 )
-from models import Account, AuthSession, WorkspaceMember  # ✅ Import the Account and WorkspaceMember models
+from models import Account, AuthSession, WorkspaceMember, SEED_ACCOUNT_GITHUB_USER  # ✅ Import the Account and WorkspaceMember models
 
 router = APIRouter()
 
@@ -611,6 +611,28 @@ def get_request_user() -> Optional[str]:
     return _request_github_user.get()
 
 
+def resolve_optional_session_user(request: Request, db: Session) -> Optional[Account]:
+    """Resolve the session user, or None when there is no valid session.
+
+    Same identity source as resolve_authenticated_user but never raises, for
+    read endpoints that must keep serving unauthenticated callers while still
+    personalising output when a session exists (e.g. per-user project order).
+    """
+    session_token = extract_session_token(request)
+    if not session_token:
+        return None
+
+    session = (
+        db.query(AuthSession)
+        .filter(AuthSession.token_hash == _hash_session_token(session_token))
+        .first()
+    )
+    if not session or session.revoked_at is not None or _as_utc(session.expires_at) <= _now_utc():
+        return None
+
+    return db.query(Account).filter(Account.github_user == session.github_user).first()
+
+
 def resolve_authenticated_user(request: Request, db: Session) -> Account:
     """
     Resolve the authenticated user from the server-issued session token.
@@ -1027,9 +1049,16 @@ def _ensure_workspace_membership(user: Account, db: Session) -> None:
     Ensure the user has a workspace membership record.
 
     - If no membership exists, create one.
-    - The very first user in the system is auto-promoted to admin.
+    - The very first real user in the system is auto-promoted to admin.
     - All subsequent users default to read_only.
+
+    The reserved seed account never gets a membership and is never counted:
+    it is created by a migration before anyone logs in, so counting it made
+    the installer look like the second user and land on read_only.
     """
+    if user.github_user == SEED_ACCOUNT_GITHUB_USER:
+        return
+
     existing = db.query(WorkspaceMember).filter(WorkspaceMember.user_id == user.user_id).first()
     if existing:
         return
@@ -1043,7 +1072,12 @@ def _ensure_workspace_membership(user: Account, db: Session) -> None:
     except Exception:
         pass
 
-    member_count = db.query(WorkspaceMember).count()
+    member_count = (
+        db.query(WorkspaceMember)
+        .join(Account, Account.user_id == WorkspaceMember.user_id)
+        .filter(Account.github_user != SEED_ACCOUNT_GITHUB_USER)
+        .count()
+    )
     role = "admin" if member_count == 0 else "read_only"
 
     membership = WorkspaceMember(

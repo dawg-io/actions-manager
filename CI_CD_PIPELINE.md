@@ -42,8 +42,8 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 │  └──────────────┘  └──────────────┘  └─────────────────┘  │
 │                                                               │
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐  │
-│  │   Docker     │  │   Coverage   │  │   SonarQube     │  │
-│  │   Build      │  │   Reports    │  │   Analysis      │  │
+│  │   Docker     │  │   Health     │  │   SonarQube     │  │
+│  │ Build & Test │  │   Check      │  │     Scan        │  │
 │  │              │  │              │  │                 │  │
 │  └──────────────┘  └──────────────┘  └─────────────────┘  │
 │                                                               │
@@ -116,7 +116,7 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - **YAML Linting**:
   - yamllint (workflow files)
 
-### 4. Docker Build (`docker-image.yml`)
+### 4. Docker Build & Test (`docker-build-and-test.yml`)
 
 **Trigger**: Push to main/develop/feature branches
 
@@ -130,20 +130,9 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - Cleanup of old images
 - Triggers SonarQube scan
 
-### 5. Coverage Reports (`coverage.yml`)
+### 5. SonarQube Scan (`sonarqube_scan.yml`)
 
-**Trigger**: Workflow call
-
-**Purpose**: Generate test coverage reports
-
-**Jobs**:
-- Run frontend tests with coverage
-- Run backend tests with coverage
-- Verify coverage thresholds
-
-### 6. SonarQube Analysis (`sonarqube_scan.yml`)
-
-**Trigger**: Called from docker-image workflow
+**Trigger**: Called from the Docker Build & Test workflow
 
 **Purpose**: Code quality and security analysis
 
@@ -153,7 +142,7 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - Quality gate validation
 - Technical debt tracking
 
-### 7. SBOM Generation (`sbom-generation.yml`)
+### 6. SBOM Generation (`sbom-generation.yml`)
 
 **Trigger**: Push to main/develop, tags, scheduled weekly
 
@@ -171,7 +160,7 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - CycloneDX for dependency BOM
 - Syft for container analysis
 
-### 8. Performance Testing (`performance-testing.yml`)
+### 7. Performance Testing (`performance-testing.yml`)
 
 **Trigger**: Push to main, PRs to main, scheduled weekly
 
@@ -191,7 +180,7 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
   - Layer efficiency (Dive)
   - Container startup time
 
-### 9. Dependabot (`dependabot.yml`)
+### 8. Dependabot (`dependabot.yml`)
 
 **Trigger**: Scheduled weekly
 
@@ -207,7 +196,7 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - Auto-assigned reviewers
 - Labeled by component
 
-### 10. Docker Image Cleanup (`delete-docker-image.yml`)
+### 9. Cleanup Old Container Images (`cleanup-old-container-images.yml`)
 
 **Trigger**: Scheduled daily, manual
 
@@ -305,7 +294,7 @@ All new workflows use `arc-runner-set` for consistency and reliability. This pro
 | PR Validation | ❌ | ✅ | ❌ | ❌ |
 | Security Scan | ✅ | ✅ | ✅ (daily) | ✅ |
 | Linting | ✅ | ✅ | ❌ | ✅ |
-| Docker Build | ✅ | ❌ | ❌ | ✅ |
+| Docker Build & Test | ✅ | ❌ | ❌ | ✅ |
 | Coverage | Called | Called | ❌ | ✅ |
 | SonarQube | Called | ❌ | ❌ | ✅ |
 | SBOM | ✅ (main/dev) | ❌ | ✅ (weekly) | ✅ |

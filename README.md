@@ -31,8 +31,11 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
+
+`ALLOW_INSECURE_HTTP=true` is required because this command serves the app over plain HTTP. Drop it once you put ActionsManager behind HTTPS — see the [HTTPS setup guide](https://actionsmanager.io/getting-started/https-setup).
 
 Then open `http://localhost:8080`, choose **Sign in with Personal Access Token**, and paste a fine-grained or classic PAT. Do **not** put personal PATs in Docker command lines, shell history, screenshots, or committed environment files.
 
@@ -125,7 +128,7 @@ ActionsManager is built around a few concrete primitives that make multi-reposit
 - **Workflows are applied across repos**, not per-repo. When you define or update a workflow in a project, ActionsManager tracks every repository it should exist in and what state it should be in.
 - **Reusable workflows are centrally defined** in a designated repository (the producer). They are versioned and treated as the canonical definition.
 - **Caller workflows consume them** in each target repository. ActionsManager generates and maintains these caller files, keeping their `uses:` reference and inputs aligned with the producer.
-- **Drift detection ensures consistency** by continuously comparing the workflow content in each repository against the managed definition, flagging any divergence (manual edits, missing files, outdated reusable references).
+- **Drift detection ensures consistency** by re-checking every repository and branch a project delivers to on a background schedule, comparing the workflow file there against the managed definition and flagging any divergence (manual edits, direct commits, deleted files).
 - **PR-based delivery allows safe rollout** — changes are proposed as pull requests across all impacted repositories, can be reviewed and merged independently or in bulk, and direct-commit mode is available when review overhead isn't needed.
 
 The result: one place to change a workflow, one place to see who's out of sync, one place to roll the change out.
@@ -160,9 +163,9 @@ This same flow covers rolling out a new workflow to a project, retiring an obsol
 - Manage **both** reusable workflow definitions (producers) and caller workflows (consumers) together
 
 ### 📊 Drift Detection & Resolution
-- Continuous comparison of repository workflow state against the managed definition
-- Surfaces manual edits, missing files, and outdated reusable workflow references
-- Guided resolution to bring drifted repositories back into compliance
+- Automatic background re-checks of every repository and branch a project delivers to
+- Surfaces manual edits, direct commits, and workflow files deleted outside the platform
+- Guided resolution — fix PR, direct restore, or adopt GitHub's version — single or in bulk
 
 ### 🚀 PR-Based and Direct Delivery Modes
 - **PR mode**: Reviewable pull requests across many repositories with audit trail

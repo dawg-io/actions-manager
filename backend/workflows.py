@@ -11,16 +11,19 @@ import hashlib
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import or_
+import ipaddress
+from urllib.parse import quote, urlsplit
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from database import SessionLocal, get_db
 import auth as auth_module
 from auth import user_tokens, get_github_api_endpoints
-from models import Project, Workflow, ProjectWorkflow, Account, ProjectPullRequest, ProjectPRCampaign, Repo, ProjectRepo, WorkflowVersion, LinkedReusableWorkflow, WorkspaceMember, ProjectMembership, RepoWorkflowOverride, CustomFile, Codeowners
+from models import Project, Workflow, ProjectWorkflow, Account, ProjectPullRequest, ProjectPRCampaign, Repo, ProjectRepo, WorkflowVersion, LinkedReusableWorkflow, WorkspaceMember, ProjectMembership, RepoWorkflowOverride, CustomFile, Codeowners, WorkflowDriftState, WorkflowTreeCache
 from pydantic import BaseModel, Field
 from typing import Annotated, List, Optional
-from authorization import is_project_admin
+from authorization import is_project_admin, check_project_access
+from mode_validation import resolve_app_url, _host_is_loopback
 from reusable_workflow_visibility import validate_reusable_workflow_link
 from reusable_workflow_detection import is_reusable_workflow_yaml
 from workflow_templates import (
@@ -30,6 +33,18 @@ from workflow_templates import (
     get_available_template_types
 )
 from github_api_tracker import github_get, github_put, github_patch
+from drift_notifications import (
+    record_drift_transitions,
+    record_drift_check_failed,
+    clear_workflow_drift,
+    recompute_project_drift_summary,
+    drop_workflow_drift,
+)
+from campaign_notifications import (
+    record_campaign_opened,
+    record_campaign_pr_transition,
+    record_campaign_status_transition,
+)
 
 NOT_AUTHENTICATED_DETAIL = "User not authenticated"
 MISSING_WORKFLOW_NAME_DETAIL = "Missing workflow name"
@@ -201,8 +216,34 @@ class PRCampaignsResponse(BaseModel):
     closed_prs: int
     repositories_affected: int
 
+class NotModified(Exception):
+    """GitHub answered 304 — the resource is unchanged since our stored ETag.
+
+    Not an error: it is the cheap path. The caller replays its cached copy.
+    Carried as an exception rather than a sentinel return so it cannot be
+    mistaken for "no workflow files", the way a bare {} once was.
+    """
+
+
+class DriftCheckUnavailable(Exception):
+    """GitHub could not tell us the current state of a repo.
+
+    Distinct from "the file is not there": a revoked token, a rate limit or a
+    5xx means the answer is unknown. Treating those as absence made every
+    workflow in the repo look deleted, and treating them as "no drift" emitted
+    a false drift.resolved for workflows that were still drifted.
+    """
+
+
 class DriftStatus(BaseModel):
     workflow_name: str
+    # Which repo and branch this result is about. Carried as data because the
+    # repo used to be recovered by substring-matching the repo name out of
+    # ``message``, which cannot express a branch and breaks whenever the
+    # message wording changes. Empty only for statuses that aren't tied to a
+    # repo at all (deployment variables).
+    repo: str = ""
+    branch: str = ""
     has_drift: bool
     github_content: Optional[str] = None
     local_content: Optional[str] = None
@@ -210,6 +251,15 @@ class DriftStatus(BaseModel):
     local_sha: Optional[str] = None
     message: str
     drift_type: str = "workflow"  # workflow, reusable_workflow, deployment_vars
+    # True when the check could not be completed. Such a status carries no
+    # opinion about drift: it must never be persisted or notified on, because
+    # "we don't know" is not "resolved".
+    check_failed: bool = False
+    # True when the workflow file is absent from GitHub. Previously this was
+    # only distinguishable by substring-matching the message, so consumers
+    # could not tell "deleted" from "empty file" — the UI rendered a blank
+    # diff pane and offered to adopt content that does not exist.
+    deleted_in_github: bool = False
 
 class DriftDetectionRequest(BaseModel):
     github_user: Optional[str] = None
@@ -249,6 +299,14 @@ class WorkflowDriftDetail(BaseModel):
     affected_repo_count: int = 0      # Other repos in the project that share this workflow without overrides
     affected_repos: List[str] = Field(default_factory=list)  # Repo names of the affected repos (without the source repo)
     source_repo_name: Optional[str] = None  # Convenience copy of ``repo`` to align with the spec
+    # The check could not be completed (revoked token, rate limit, GitHub 5xx).
+    # has_drift carries no meaning when this is True — the state is unknown, and
+    # it is never persisted or notified on.
+    check_failed: bool = False
+    # The workflow file is absent from GitHub. github_yaml is None rather than
+    # empty, and adopting GitHub's version is impossible — there is nothing to
+    # adopt.
+    deleted_in_github: bool = False
 
 
 class AdoptGithubVersionRequest(BaseModel):
@@ -257,6 +315,10 @@ class AdoptGithubVersionRequest(BaseModel):
     project_id: int
     repo_id: Optional[int] = None  # Optional if repo_name is supplied
     repo_name: Optional[str] = None
+    # The branch whose drift the user is resolving. Without it this adopted
+    # content from the repo's default branch, so a project delivering to
+    # release/2.1 could import main's version of the file instead.
+    branch: Optional[str] = None
     workflow_id: int
     resolution_mode: str  # adopt_project_and_sync | adopt_local_only | create_repo_override
     delivery_mode: Optional[str] = "pr"  # "pr" or "direct" — only used with adopt_project_and_sync
@@ -269,7 +331,18 @@ class ProjectDriftSummary(BaseModel):
     project_name: str
     drift_count: int
     drifted_workflows: List[WorkflowDriftDetail]
-    last_checked: str
+    # When the reported state was established — null when no check has ever
+    # run. Not the time of this request: an empty list from a check that never
+    # happened must not read as "verified clean just now".
+    last_checked: Optional[str] = None
+    # Workflow/repo pairs GitHub could not be queried about. Non-zero means the
+    # drift picture is incomplete, so an empty drifted_workflows must not be
+    # presented as "everything is in sync".
+    unchecked_count: int = 0
+    # Why the state above may be older than it looks — e.g. the background
+    # sweep cannot check this project because its owner has no saved token.
+    # Without this the timestamp just stops moving and nothing explains it.
+    stale_reason: Optional[str] = None
 
 
 class WorkflowDriftResponse(BaseModel):
@@ -289,12 +362,19 @@ class ResolveWorkflowDriftRequest(BaseModel):
     branch: str
     resolution: str  # "use_github" or "restore_actionsmanager"
     delivery_mode: Optional[str] = "pr"  # "pr" or "direct" — only used for restore_actionsmanager
+    # The GitHub blob SHA the drift was computed against. When supplied, a
+    # direct push is refused with 409 if GitHub has moved on since, so a
+    # colleague's fix can't be silently reverted by a stale page. Optional so
+    # existing callers keep working; the UI always sends it.
+    expected_github_sha: Optional[str] = None
 
 
 class BulkResolveDriftItem(BaseModel):
     workflow_id: int
     repo: str
     branch: str
+    # See ResolveWorkflowDriftRequest.expected_github_sha.
+    expected_github_sha: Optional[str] = None
 
 
 class BulkResolveDriftRequest(BaseModel):
@@ -335,6 +415,13 @@ def _cache_project_drift_summary(
     project.drift_count = max(int(drift_count or 0), 0)
     project.last_drift_check_at = datetime.now(timezone.utc)
     project.drift_error_summary = (error_summary or "").strip()[:500] or None
+    # "check_failed" is the only outcome that didn't get a real answer from
+    # GitHub; "clean" and "drifted" both mean the check succeeded, even when
+    # the answer is "you have drift", so both reset the streak.
+    if drift_status == "check_failed":
+        project.drift_check_failure_count = (project.drift_check_failure_count or 0) + 1
+    else:
+        project.drift_check_failure_count = 0
     db.commit()
 
 
@@ -354,6 +441,9 @@ router = APIRouter()
 GITHUB_API_URL = "https://api.github.com"
 ACCEPT_HEADER = "application/vnd.github+json"
 X_API_VERSION = "2022-11-28"
+# requests has no default timeout, so a hung GitHub socket blocks the worker
+# thread until the process restarts rather than failing the request.
+GITHUB_TIMEOUT_SECONDS = int(os.getenv("GITHUB_TIMEOUT_SECONDS", "30"))
 PROJECT_ERROR = "Project not found"
 ACCOUNT_ERROR = "Account not found"
 BRANCH_INFO_NOT_FOUND = "Branch information not found; branch not deleted"
@@ -635,20 +725,16 @@ def get_workflow_from_github(owner, repo, workflow_filename, token, default_bran
         "X-GitHub-Api-Version": X_API_VERSION
     }
 
-    if default_branch is None:
-        # Get the repository info to find the default branch
-        repo_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}"
-        repo_response = requests.get(repo_url, headers=headers)
-
-        default_branch = "main"  # fallback
-        if repo_response.status_code == 200:
-            default_branch = repo_response.json().get("default_branch", "main")
+    if not default_branch:
+        # Same resolution (and the same failure semantics) as everywhere else,
+        # rather than a second inline copy that quietly settled on "main".
+        default_branch = get_default_branch(owner, repo, headers)
 
     # Try to get the workflow file from default branch
     workflow_path = f".github/workflows/{workflow_filename}"
-    file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{workflow_path}?ref={default_branch}"
+    file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{workflow_path}?ref={quote(default_branch, safe='')}"
     
-    response = requests.get(file_url, headers=headers)
+    response = requests.get(file_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     if response.status_code == 200:
         file_data = response.json()
@@ -661,54 +747,104 @@ def get_workflow_from_github(owner, repo, workflow_filename, token, default_bran
     else:
         raise Exception(f"GitHub API error: {response.status_code}")
 
-def get_all_workflow_shas(owner: str, repo: str, branch: str, token: str) -> dict:
+def fetch_workflow_tree(owner: str, repo: str, branch: str, token: str,
+                        etag: Optional[str] = None) -> tuple:
     """
-    Fetch all workflow file SHAs in a single API call using the Git Trees API.
-    Returns {filename: sha} mapping for all files in .github/workflows/.
-    
+    List a branch's workflow files via the Git Trees API, optionally conditionally.
+
     Args:
-        owner: Repository owner
-        repo: Repository name
-        branch: Branch name to check
-        token: GitHub access token
-        
+        etag: A previously returned ETag. When supplied the request carries
+            ``If-None-Match`` and GitHub answers 304 if nothing changed —
+            **304s do not count against the rate limit**, so re-verifying an
+            untouched branch is free. Raises NotModified in that case, leaving
+            the caller to replay its cached mapping.
+
     Returns:
-        dict: Mapping of filename to SHA for all workflow files
+        tuple: ({filename: blob_sha}, etag) — the etag to store for next time.
+
+    Raises:
+        NotModified: unchanged since ``etag`` was issued.
+        DriftCheckUnavailable: GitHub could not tell us what is there.
     """
     headers = {
         "Authorization": f"token {token}",
         "Accept": ACCEPT_HEADER,
         "X-GitHub-Api-Version": X_API_VERSION
     }
-    
-    # Use Git Trees API to get all files in .github/workflows directory
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/trees/{branch}:.github/workflows"
-    response = requests.get(url, headers=headers)
-    
+    if etag:
+        headers["If-None-Match"] = etag
+
+    # Use Git Trees API to get all files in .github/workflows directory.
+    # The branch is percent-encoded because '#' is legal in a git ref but ends
+    # the URL path — GitHub then 404s, which this function reads as "no
+    # workflow files here" and every workflow in the repo looks deleted.
+    # ('/' needs no encoding: GitHub resolves the tree-ish server-side and
+    # accepts it either way. Encoding it is harmless and verified against the
+    # live API.)
+    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/trees/{quote(branch, safe='')}:.github/workflows"
+    response = requests.get(url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
+
+    if response.status_code == 304:
+        raise NotModified(f"{owner}/{repo}@{branch} unchanged")
+
+    if response.status_code == 404:
+        # The directory genuinely has no workflows — an empty result is the truth.
+        return {}, response.headers.get("ETag")
+
     if response.status_code != 200:
-        # If directory doesn't exist or other error, return empty dict
-        return {}
-    
+        # Anything else (401 revoked token, 403/429 rate limit, 5xx) means we do
+        # not know what is in the repo. Returning {} here used to be
+        # indistinguishable from "no workflows", which made every workflow in
+        # the repo look deleted from GitHub.
+        raise DriftCheckUnavailable(
+            f"GitHub returned {response.status_code} listing workflows in "
+            f"{owner}/{repo}@{branch}"
+        )
+
     # Extract blob SHAs from the tree response
     tree_data = response.json()
-    return {
+    shas = {
         item["path"]: item["sha"]
         for item in tree_data.get("tree", [])
         if item["type"] == "blob"
     }
+    return shas, response.headers.get("ETag")
+
+
+def get_all_workflow_shas(owner: str, repo: str, branch: str, token: str) -> dict:
+    """Unconditional listing of a branch's workflow file SHAs.
+
+    Kept for callers with nowhere to cache an ETag. The drift path uses
+    ``fetch_workflow_tree`` directly so it can go conditional.
+    """
+    shas, _etag = fetch_workflow_tree(owner, repo, branch, token)
+    return shas
 
 def get_default_branch(owner, repo, headers, user: str = None, db: Session = None):
-    """Get the default branch for a repository"""
+    """Get the default branch for a repository.
+
+    Raises DriftCheckUnavailable when GitHub does not tell us. This used to
+    return "main" on any failure, which turned a revoked token or a rate limit
+    into a *wrong answer* rather than an error: drift was then compared against
+    a branch nobody chose, and reported "synchronized" against a file the
+    project had never written to. Callers that genuinely want a best-effort
+    guess now have to say so at the call site.
+    """
     repo_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}"
     if user and db:
         response = github_get(repo_url, user, db, headers=headers)
     else:
-        response = requests.get(repo_url, headers=headers)
-    
-    if response.status_code == 200:
-        return response.json().get("default_branch", "main")
-    else:
-        return "main"  # fallback
+        response = requests.get(repo_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
+
+    if response.status_code != 200:
+        raise DriftCheckUnavailable(
+            f"GitHub returned {response.status_code} resolving the default branch of {owner}/{repo}"
+        )
+
+    default_branch = response.json().get("default_branch")
+    if not default_branch:
+        raise DriftCheckUnavailable(f"GitHub did not report a default branch for {owner}/{repo}")
+    return default_branch
 
 def verify_workflow_belongs_to_project(workflow_content, project_code, workflow_name):
     """
@@ -833,17 +969,24 @@ def _normalize_yaml_for_comparison(yaml_content: str) -> str:
 def _create_drift_status(workflow_name: str, has_drift: bool,
                         github_content: Optional[str], local_content: Optional[str],
                         github_sha: Optional[str], local_sha: Optional[str],
-                        message: str, drift_type: str) -> DriftStatus:
+                        message: str, drift_type: str,
+                        check_failed: bool = False,
+                        deleted_in_github: bool = False,
+                        repo: str = "", branch: str = "") -> DriftStatus:
     """Create a DriftStatus object with the given parameters."""
     return DriftStatus(
         workflow_name=workflow_name,
+        repo=repo,
+        branch=branch,
         has_drift=has_drift,
         github_content=github_content,
         local_content=local_content,
         github_sha=github_sha,
         local_sha=local_sha,
         message=message,
-        drift_type=drift_type
+        drift_type=drift_type,
+        check_failed=check_failed,
+        deleted_in_github=deleted_in_github,
     )
 
 
@@ -1105,8 +1248,145 @@ def _workflow_ids_locked_by_pr(pr, stem_by_id: dict, rwx_repos_by_wid: dict) -> 
     return locked
 
 
+def _drift_for_missing_workflow(workflow, repo_name: str, drift_type: str, db: Session, project_id: int,
+                                branch: str = "") -> Optional[DriftStatus]:
+    """Workflow doesn't exist on GitHub. Decide deleted / pending-merge / never-synced.
+
+    Only flag as drift if the workflow has a REAL git hash (was previously synced) —
+    excludes workflows with no hash, or a hash of all zeros (locally committed but
+    never pushed: "0000..."). When a PR is created, workflow_git_hash is set to the
+    PR branch SHA, which won't be present on the target branch until merge — so an
+    open PR means "pending merge", not "deleted".
+    """
+    LOCAL_COMMIT_HASH = "0" * 40  # 40 zeros indicates local-only commit
+    has_real_hash = (
+        workflow.workflow_git_hash
+        and workflow.workflow_git_hash != LOCAL_COMMIT_HASH
+    )
+    label = 'Reusable w' if drift_type == 'reusable_workflow' else 'W'
+
+    if has_real_hash:
+        if db and project_id and _has_open_pr_for_workflow(db, project_id, workflow.workflow_name, repo_name):
+            print(f"ℹ️  Workflow '{workflow.workflow_name}' missing from target branch but has open PR — classifying as pending merge (not drifted)")
+            return _create_drift_status(
+                workflow_name=workflow.workflow_name,
+                has_drift=False,
+                github_content=None,
+                local_content=workflow.workflow_yaml,
+                github_sha=None,
+                local_sha=workflow.workflow_git_hash,
+                message=f"{label}orkflow in open PR - pending merge to {repo_name}",
+                drift_type=drift_type,
+                repo=repo_name,
+                branch=branch,
+            )
+
+        return _create_drift_status(
+            workflow_name=workflow.workflow_name,
+            has_drift=True,
+            github_content=None,
+            local_content=workflow.workflow_yaml,
+            github_sha=None,
+            local_sha=workflow.workflow_git_hash,
+            message=f"{label}orkflow was deleted from {repo_name}",
+            drift_type=drift_type,
+            deleted_in_github=True,
+            repo=repo_name,
+            branch=branch,
+        )
+
+    # Workflow has never been synced (no real git hash). An open PR means
+    # new_open_pr state (not drift); otherwise it's just never synced yet.
+    if db and project_id and _has_open_pr_for_workflow(db, project_id, workflow.workflow_name, repo_name):
+        print(f"ℹ️  Workflow '{workflow.workflow_name}' has open PR - classifying as new_open_pr (not drifted)")
+        return _create_drift_status(
+            workflow_name=workflow.workflow_name,
+            has_drift=False,
+            github_content=None,
+            local_content=workflow.workflow_yaml,
+            github_sha=None,
+            local_sha=workflow.workflow_git_hash,
+            message=f"{label}orkflow in open PR - pending merge to {repo_name}",
+            drift_type=drift_type,
+            repo=repo_name,
+            branch=branch,
+        )
+
+    return None
+
+
+def _drift_for_content_mismatch(workflow, github_content, github_sha, repo_name: str, drift_type: str,
+                                 db: Session, project_id: int, local_normalized: str, github_normalized: str,
+                                 branch: str = "") -> DriftStatus:
+    """Content differs from target branch. Decide local-edit / under-review / true drift.
+
+    If the workflow was modified locally in ActionsManager (Commit Locally), the hash
+    is reset to all zeros and status is "committed_locally" — that's an intentional
+    local edit pending sync, NOT drift from GitHub. Drift means GitHub changed outside
+    ActionsManager; a local AM edit must never be flagged as drift.
+    """
+    label = 'Reusable w' if drift_type == 'reusable_workflow' else 'W'
+    LOCAL_COMMIT_HASH = "0" * 40
+    # Only the zeroed hash proves this was an intentional local edit: every path
+    # that edits a workflow in ActionsManager sets that sentinel. Status alone is
+    # not enough, because closing a fix PR without merging also reverts the
+    # workflow to "committed_locally" while leaving a real GitHub SHA behind.
+    # Treating that as a local edit suppressed genuine drift indefinitely and
+    # emitted drift.resolved while GitHub still differed.
+    is_local_modification = workflow.workflow_git_hash == LOCAL_COMMIT_HASH
+    if is_local_modification:
+        print(f"ℹ️  Workflow '{workflow.workflow_name}' was modified locally (status={workflow.workflow_status}) - classifying as local_modified (not drifted)")
+        return _create_drift_status(
+            workflow_name=workflow.workflow_name,
+            has_drift=False,
+            github_content=github_content,
+            local_content=workflow.workflow_yaml,
+            github_sha=github_sha,
+            local_sha=workflow.workflow_git_hash,
+            message=f"{label}orkflow modified locally - pending sync to {repo_name}",
+            drift_type=drift_type,
+            repo=repo_name,
+            branch=branch,
+        )
+
+    if db and project_id and _has_open_pr_for_workflow(db, project_id, workflow.workflow_name, repo_name):
+        # Workflow has open PR and local differs from target branch — expected for
+        # workflows under review, classify as under_review, not drift.
+        print(f"ℹ️  Workflow '{workflow.workflow_name}' has open PR with changes - classifying as under_review (not drifted)")
+        return _create_drift_status(
+            workflow_name=workflow.workflow_name,
+            has_drift=False,
+            github_content=github_content,
+            local_content=workflow.workflow_yaml,
+            github_sha=github_sha,
+            local_sha=workflow.workflow_git_hash,
+            message=f"{label}orkflow under review in open PR for {repo_name}",
+            drift_type=drift_type,
+            repo=repo_name,
+            branch=branch,
+        )
+
+    print(f"✅ Drift detected for {'reusable ' if drift_type == 'reusable_workflow' else ''}workflow '{workflow.workflow_name}' (content differs)")
+    if local_normalized and github_normalized:
+        print(f"  First 200 chars of local (normalized): {repr(local_normalized[:200])}")
+        print(f"  First 200 chars of GitHub (normalized): {repr(github_normalized[:200])}")
+
+    return _create_drift_status(
+        workflow_name=workflow.workflow_name,
+        has_drift=True,
+        github_content=github_content,
+        local_content=workflow.workflow_yaml,
+        github_sha=github_sha,
+        local_sha=workflow.workflow_git_hash,
+        message=f"{label}orkflow content differs between local and {repo_name}",
+        drift_type=drift_type,
+        repo=repo_name,
+        branch=branch,
+    )
+
+
 def _compare_workflow_content(workflow, github_data, repo_name: str, project_code: str, drift_type: str = "workflow",
-                               db: Session = None, project_id: int = None) -> DriftStatus:
+                               db: Session = None, project_id: int = None, branch: str = "") -> DriftStatus:
     """Compare workflow content between local and GitHub using deterministic drift logic.
 
     Core drift rule:
@@ -1118,71 +1398,7 @@ def _compare_workflow_content(workflow, github_data, repo_name: str, project_cod
         DriftStatus: The drift status for this workflow
     """
     if github_data is None:
-        # Workflow doesn't exist on GitHub
-        # Only flag as drift if the workflow has a REAL git hash (was previously synced)
-        # Exclude workflows with:
-        # - No hash (None or empty string)
-        # - Hash of all zeros (locally committed but never pushed: "0000...")
-        LOCAL_COMMIT_HASH = "0" * 40  # 40 zeros indicates local-only commit
-        has_real_hash = (
-            workflow.workflow_git_hash
-            and workflow.workflow_git_hash != LOCAL_COMMIT_HASH
-        )
-
-        if has_real_hash:
-            # Workflow was previously synced (has a real git hash), but is missing
-            # from the target branch.
-            # Before flagging this as drift, check if there's an open PR for this
-            # workflow — when a PR is created, workflow_git_hash is set to the PR
-            # branch SHA, which won't be present on the target branch until merge.
-            # In that case the workflow is "pending merge", not "deleted".
-            if db and project_id:
-                has_open_pr = _has_open_pr_for_workflow(db, project_id, workflow.workflow_name, repo_name)
-                if has_open_pr:
-                    print(f"ℹ️  Workflow '{workflow.workflow_name}' missing from target branch but has open PR — classifying as pending merge (not drifted)")
-                    return _create_drift_status(
-                        workflow_name=workflow.workflow_name,
-                        has_drift=False,
-                        github_content=None,
-                        local_content=workflow.workflow_yaml,
-                        github_sha=None,
-                        local_sha=workflow.workflow_git_hash,
-                        message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow in open PR - pending merge to {repo_name}",
-                        drift_type=drift_type
-                    )
-
-            # Workflow was previously synced but now missing from GitHub
-            return _create_drift_status(
-                workflow_name=workflow.workflow_name,
-                has_drift=True,
-                github_content=None,
-                local_content=workflow.workflow_yaml,
-                github_sha=None,
-                local_sha=workflow.workflow_git_hash,
-                message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow was deleted from {repo_name}",
-                drift_type=drift_type
-            )
-
-        # Workflow has never been synced (no real git hash)
-        # Check if it has an open PR - if so, classify as new_open_pr state (not drift)
-        if db and project_id:
-            has_open_pr = _has_open_pr_for_workflow(db, project_id, workflow.workflow_name, repo_name)
-            if has_open_pr:
-                print(f"ℹ️  Workflow '{workflow.workflow_name}' has open PR - classifying as new_open_pr (not drifted)")
-                return _create_drift_status(
-                    workflow_name=workflow.workflow_name,
-                    has_drift=False,
-                    github_content=None,
-                    local_content=workflow.workflow_yaml,
-                    github_sha=None,
-                    local_sha=workflow.workflow_git_hash,
-                    message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow in open PR - pending merge to {repo_name}",
-                    drift_type=drift_type
-                )
-
-        # If no real git hash exists and no open PR, it means the workflow was never pushed to GitHub
-        # so it's not drift - just a local workflow that hasn't been synced yet
-        return None
+        return _drift_for_missing_workflow(workflow, repo_name, drift_type, db, project_id, branch)
 
     github_content = github_data["content"]
     github_sha = github_data["sha"]
@@ -1218,67 +1434,15 @@ def _compare_workflow_content(workflow, github_data, repo_name: str, project_cod
             github_sha=github_sha,
             local_sha=workflow.workflow_git_hash,
             message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow synchronized with {repo_name}",
-            drift_type=drift_type
+            drift_type=drift_type,
+            repo=repo_name,
+            branch=branch,
         )
-    else:
-        # Content differs from target branch.
-        # If the workflow was modified locally in ActionsManager (Commit Locally),
-        # the hash is reset to all zeros and status is "committed_locally". In
-        # that case the difference is an intentional local edit pending sync,
-        # NOT drift from GitHub. Drift means GitHub changed outside ActionsManager;
-        # a local AM edit must never be flagged as drift.
-        LOCAL_COMMIT_HASH = "0" * 40
-        is_local_modification = (
-            workflow.workflow_git_hash == LOCAL_COMMIT_HASH
-            or workflow.workflow_status == "committed_locally"
-        )
-        if is_local_modification:
-            print(f"ℹ️  Workflow '{workflow.workflow_name}' was modified locally (status={workflow.workflow_status}) - classifying as local_modified (not drifted)")
-            return _create_drift_status(
-                workflow_name=workflow.workflow_name,
-                has_drift=False,
-                github_content=github_content,
-                local_content=workflow.workflow_yaml,
-                github_sha=github_sha,
-                local_sha=workflow.workflow_git_hash,
-                message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow modified locally - pending sync to {repo_name}",
-                drift_type=drift_type
-            )
 
-        # Check if there's an open PR - if so, this may be under_review (not drift)
-        if db and project_id:
-            has_open_pr = _has_open_pr_for_workflow(db, project_id, workflow.workflow_name, repo_name)
-            if has_open_pr:
-                # Workflow has open PR and local differs from target branch
-                # This is expected for workflows under review - classify as under_review, not drift
-                print(f"ℹ️  Workflow '{workflow.workflow_name}' has open PR with changes - classifying as under_review (not drifted)")
-                return _create_drift_status(
-                    workflow_name=workflow.workflow_name,
-                    has_drift=False,
-                    github_content=github_content,
-                    local_content=workflow.workflow_yaml,
-                    github_sha=github_sha,
-                    local_sha=workflow.workflow_git_hash,
-                    message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow under review in open PR for {repo_name}",
-                    drift_type=drift_type
-                )
-
-        # No open PR - this is true drift
-        print(f"✅ Drift detected for {'reusable ' if drift_type == 'reusable_workflow' else ''}workflow '{workflow.workflow_name}' (content differs)")
-        if local_normalized and github_normalized:
-            print(f"  First 200 chars of local (normalized): {repr(local_normalized[:200])}")
-            print(f"  First 200 chars of GitHub (normalized): {repr(github_normalized[:200])}")
-
-        return _create_drift_status(
-            workflow_name=workflow.workflow_name,
-            has_drift=True,
-            github_content=github_content,
-            local_content=workflow.workflow_yaml,
-            github_sha=github_sha,
-            local_sha=workflow.workflow_git_hash,
-            message=f"{'Reusable w' if drift_type == 'reusable_workflow' else 'W'}orkflow content differs between local and {repo_name}",
-            drift_type=drift_type
-        )
+    return _drift_for_content_mismatch(
+        workflow, github_content, github_sha, repo_name, drift_type, db, project_id,
+        local_normalized, github_normalized, branch=branch,
+    )
 
 
 class _WorkflowExpectedView:
@@ -1337,45 +1501,250 @@ def _get_repo_workflow_override(db: Session, project_id: int, repo_name: str, wo
     return project_overrides.get((repo_id, workflow_id))
 
 
+def _resolve_drift_branches_for_repo(db: Session, project: "Project", repo_name: str,
+                                     owner: str, repo: str, headers: dict, user: str) -> List[str]:
+    """Which branches drift should check for one repo.
+
+    Deliberately the *same* resolution delivery uses, so drift is measured
+    against the branches ActionsManager actually writes to. Previously drift
+    always read the repo's GitHub default branch, so a project delivering to
+    ``release/*`` was compared against ``main`` and reported "synchronized"
+    against a file it had never written.
+
+    Without a project (direct callers that check a bare repo list) there is no
+    branch configuration to honour, so this falls back to the repo's default
+    branch — the same shape as ``_resolve_effective_target_branches``.
+    """
+    if project is None or db is None:
+        return [get_default_branch(owner, repo, headers, user, db)]
+
+    cfg = resolve_branch_config_for_repo(db, project, repo_name)
+    return _resolve_branches_for_repo(
+        owner, repo,
+        cfg["branch_option"], cfg["branch_regex"], cfg["branch_max_age_days"],
+        headers, user, db,
+        recency_cache_repo=repo_name,
+    )
+
+
+def _get_tree_cache_row(db: Session, repo_name: str, branch: str):
+    """The cached tree listing for one (repo, branch), or None."""
+    if db is None:
+        return None
+    repo = db.query(Repo).filter(Repo.repo_name == repo_name).first()
+    if repo is None:
+        return None
+    return (
+        db.query(WorkflowTreeCache)
+        .filter(WorkflowTreeCache.repo_id == repo.repo_id,
+                WorkflowTreeCache.branch == branch)
+        .first()
+    )
+
+
+def _store_tree_cache(db: Session, repo_name: str, branch: str, shas: dict, etag: Optional[str]) -> None:
+    """Remember a listing and its ETag so the next check can go conditional."""
+    if db is None or not etag:
+        return
+    repo = db.query(Repo).filter(Repo.repo_name == repo_name).first()
+    if repo is None:
+        return
+    row = _get_tree_cache_row(db, repo_name, branch)
+    if row is None:
+        row = WorkflowTreeCache(repo_id=repo.repo_id, branch=branch)
+        db.add(row)
+    row.etag = etag
+    row.sha_map_json = json.dumps(shas)
+    row.fetched_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+def _fetch_tree_using_cache(db: Session, repo_name: str, owner: str, repo: str,
+                            branch: str, token: str) -> dict:
+    """Listing for one (repo, branch), conditional on a stored ETag when we have one.
+
+    A 304 means nothing changed, so the cached mapping is replayed and the call
+    costs nothing against the rate limit. If a 304 arrives with no usable cached
+    mapping the request is retried unconditionally — replaying an empty map
+    would report every workflow in the repo as deleted.
+    """
+    row = _get_tree_cache_row(db, repo_name, branch)
+    etag = row.etag if row else None
+
+    try:
+        shas, new_etag = fetch_workflow_tree(owner, repo, branch, token, etag=etag)
+    except NotModified:
+        if row is not None and row.sha_map_json:
+            print(f"🟢 {repo_name}@{branch} unchanged (304, no rate-limit cost)")
+            return json.loads(row.sha_map_json)
+        print(f"⚠️ {repo_name}@{branch} returned 304 with nothing cached — refetching")
+        shas, new_etag = fetch_workflow_tree(owner, repo, branch, token)
+
+    _store_tree_cache(db, repo_name, branch, shas, new_etag)
+    return shas
+
+
+def _prefetch_workflow_shas_per_repo(repo_names: List[str], token: str, db: Session = None,
+                                     project: "Project" = None, user: str = None) -> dict:
+    """Batch-fetch workflow file SHAs via the Git Trees API, keyed by (repo, branch).
+
+    One Trees call per (repo, branch) rather than per workflow, and that call is
+    conditional on a stored ETag — an untouched branch answers 304 and costs
+    nothing against the rate limit.
+
+    A branch whose listing fails maps to None ("unknown"), never {} ("no
+    workflow files") — callers turn None into a check_failed status, whereas {}
+    would report every workflow in that repo as deleted from GitHub.
+    """
+    repo_sha_cache: dict = {}
+    for repo_name in repo_names:
+        if "/" not in repo_name:
+            continue
+        owner, repo = repo_name.split("/", 1)
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": ACCEPT_HEADER,
+            "X-GitHub-Api-Version": X_API_VERSION
+        }
+        try:
+            branches = _resolve_drift_branches_for_repo(db, project, repo_name, owner, repo, headers, user)
+        except Exception as e:
+            # Branch resolution itself failed, so we don't know what to compare
+            # against. Record one unknown entry so the repo reports check_failed
+            # rather than silently falling back to a branch nobody chose.
+            print(f"⚠️ Could not resolve branches for {repo_name}: {e}")
+            repo_sha_cache[(repo_name, "")] = None
+            continue
+
+        for branch in branches:
+            try:
+                all_workflow_shas = _fetch_tree_using_cache(db, repo_name, owner, repo, branch, token)
+                repo_sha_cache[(repo_name, branch)] = all_workflow_shas
+                print(f"🔍 {len(all_workflow_shas)} workflow file SHAs for {repo_name}@{branch}")
+            except Exception as e:
+                print(f"⚠️ Could not list workflows in {repo_name}@{branch}: {e}")
+                repo_sha_cache[(repo_name, branch)] = None
+    return repo_sha_cache
+
+
+def _update_workflow_hash_after_content_match(db: Session, workflow, override, expected, github_data, repo_name: str) -> None:
+    """Content matched despite the SHA differing — refresh the stored hash (override's if one applies, else the shared workflow's)."""
+    new_github_sha = github_data["sha"]
+    if expected.workflow_git_hash == new_github_sha:
+        return
+    if override is not None:
+        override.workflow_git_hash = new_github_sha
+        db.commit()
+        print(f"✅ Updated git hash for repo override '{workflow.workflow_name}' in {repo_name}: {new_github_sha} (content matched despite SHA difference)")
+    else:
+        workflow.workflow_git_hash = new_github_sha
+        db.commit()
+        print(f"✅ Updated git hash for workflow '{workflow.workflow_name}' in {repo_name}: {new_github_sha} (content matched despite SHA difference)")
+
+
+def _check_regular_workflow_in_repo(db: Session, workflow, repo_name: str, owner: str, repo: str,
+                                     formatted_workflow_name: str, workflow_shas: dict, project_code: str,
+                                     token: str, project_id: int, branch: str = "") -> Optional[DriftStatus]:
+    """Drift-check one workflow against one repo, using a prefetched SHA to skip a full content fetch when possible."""
+    # Resolve the expected content for this repo: prefer a repo-specific
+    # override when one exists, otherwise fall back to the shared project
+    # workflow. This is the core of the design-level drift fix: a repo with
+    # an override compares against the override, not the project workflow,
+    # so it doesn't constantly re-report drift.
+    override = _get_repo_workflow_override(db, project_id, repo_name, workflow.workflow_id)
+    expected = _WorkflowExpectedView(workflow, override)
+
+    if workflow_shas is None:
+        # We could not list this repo's workflows at all, so we do not know
+        # whether the file is missing or we simply couldn't see it.
+        return _create_drift_status(
+            workflow_name=workflow.workflow_name,
+            has_drift=False,
+            github_content=None,
+            local_content=expected.workflow_yaml,
+            github_sha=None,
+            local_sha=expected.workflow_git_hash,
+            message=f"Could not check {repo_name} — GitHub did not return its workflows",
+            drift_type="workflow",
+            check_failed=True,
+            repo=repo_name,
+            branch=branch,
+        )
+
+    try:
+        github_sha = workflow_shas.get(formatted_workflow_name)
+
+        if github_sha is None:
+            # Workflow doesn't exist in GitHub
+            github_data = None
+        elif expected.workflow_git_hash == github_sha:
+            # SHAs match - no drift, skip fetching full content
+            sha_display = github_sha[:7] if github_sha else 'None'
+            print(f"⚪ No drift for workflow '{workflow.workflow_name}' in {repo_name} (SHA match: {sha_display})")
+            return _create_drift_status(
+                workflow_name=workflow.workflow_name,
+                has_drift=False,
+                github_content=expected.workflow_yaml,  # Use local as proxy since they match
+                local_content=expected.workflow_yaml,
+                github_sha=github_sha,
+                local_sha=expected.workflow_git_hash,
+                message=f"Workflow synchronized with {repo_name}",
+                drift_type="workflow",
+                repo=repo_name,
+                branch=branch,
+            )
+        else:
+            # SHA differs or workflow was never synced - fetch full content
+            print(f"🔍 SHA mismatch for workflow '{workflow.workflow_name}' in {repo_name} - fetching full content")
+            print(f"  Local SHA: {expected.workflow_git_hash}")
+            print(f"  GitHub SHA: {github_sha}")
+            github_data = get_workflow_from_github(owner, repo, formatted_workflow_name, token, default_branch=branch)
+
+        # Compare workflow content (against override-aware expected view)
+        drift_status = _compare_workflow_content(expected, github_data, repo_name, project_code, "workflow",
+                                                 db=db, project_id=project_id, branch=branch)
+        if drift_status and not drift_status.has_drift and github_data:
+            _update_workflow_hash_after_content_match(db, workflow, override, expected, github_data, repo_name)
+        return drift_status
+    except Exception as e:
+        print(f"⚠️ Error checking workflow {workflow.workflow_name} in {repo_name}: {e}")
+        return _create_drift_status(
+            workflow_name=workflow.workflow_name,
+            # Not has_drift=False: a failed check used to be recorded as clean,
+            # which emitted drift.resolved for workflows that were still drifted.
+            has_drift=False,
+            github_content=None,
+            local_content=workflow.workflow_yaml,
+            github_sha=None,
+            local_sha=workflow.workflow_git_hash,
+            message=f"Could not check {repo_name}: {str(e)}",
+            drift_type="workflow",
+            check_failed=True,
+            repo=repo_name,
+            branch=branch,
+        )
+
+
 def _process_regular_workflows(db: Session, regular_workflows: List, repo_names: List[str],
-                              project_code: str, token: str, use_prefix: bool = True, project_id: int = None) -> List[DriftStatus]:
+                              project_code: str, token: str, use_prefix: bool = True, project_id: int = None,
+                              project: "Project" = None, user: str = None) -> List[DriftStatus]:
     """
     Process regular workflows for drift detection across multiple repositories.
     Uses Git Trees API for batch SHA comparison to minimize API calls.
-    
+
+    Yields one status per (workflow, repo, branch): a project can deliver the
+    same workflow to several branches, and each is independently drifted or not.
+
     Returns:
         List[DriftStatus]: List of drift statuses for regular workflows
     """
     drift_results = []
-    
-    # Cache of workflow SHAs per repo to avoid redundant API calls
-    repo_sha_cache = {}
-    
-    for repo_name in repo_names:
-        if "/" not in repo_name:
-            continue
-            
-        owner, repo = repo_name.split("/", 1)
-        
-        try:
-            # Get default branch for this repo
-            headers = {
-                "Authorization": f"token {token}",
-                "Accept": ACCEPT_HEADER,
-                "X-GitHub-Api-Version": X_API_VERSION
-            }
-            default_branch = get_default_branch(owner, repo, headers)
-            
-            # Fetch all workflow SHAs in one API call using Git Trees API
-            all_workflow_shas = get_all_workflow_shas(owner, repo, default_branch, token)
-            repo_sha_cache[repo_name] = all_workflow_shas
-            
-            print(f"🔍 Fetched {len(all_workflow_shas)} workflow file SHAs from {repo_name} using Trees API")
-            
-        except Exception as e:
-            print(f"⚠️ Error fetching workflow SHAs from {repo_name}: {e}")
-            repo_sha_cache[repo_name] = {}
-    
+
+    if not regular_workflows:
+        return drift_results
+
+    repo_sha_cache = _prefetch_workflow_shas_per_repo(repo_names, token, db, project, user)
+
     # Now process each workflow
     for workflow in regular_workflows:
         # Skip workflows with empty or null names
@@ -1385,88 +1754,20 @@ def _process_regular_workflows(db: Session, regular_workflows: List, repo_names:
 
         formatted_workflow_name = format_workflow_name(workflow.workflow_name, project_code, use_prefix)
 
-        # Check each repo for this workflow
-        for repo_name in repo_names:
-            if "/" not in repo_name:
+        # Check each (repo, branch) this project delivers to
+        for (repo_name, branch), workflow_shas in repo_sha_cache.items():
+            if "/" not in repo_name or repo_name not in repo_names:
                 continue
-                
+
             owner, repo = repo_name.split("/", 1)
 
-            # Resolve the expected content for this repo: prefer a repo-specific
-            # override when one exists, otherwise fall back to the shared
-            # project workflow.  This is the core of the design-level drift
-            # fix: a repo with an override compares against the override, not
-            # the project workflow, so it doesn't constantly re-report drift.
-            override = _get_repo_workflow_override(db, project_id, repo_name, workflow.workflow_id)
-            expected = _WorkflowExpectedView(workflow, override)
+            drift_status = _check_regular_workflow_in_repo(
+                db, workflow, repo_name, owner, repo, formatted_workflow_name,
+                workflow_shas, project_code, token, project_id, branch
+            )
+            if drift_status:
+                drift_results.append(drift_status)
 
-            try:
-                # Get the SHA map for this repo
-                workflow_shas = repo_sha_cache.get(repo_name, {})
-                github_sha = workflow_shas.get(formatted_workflow_name)
-                
-                # Check if we need to fetch full content
-                if github_sha is None:
-                    # Workflow doesn't exist in GitHub
-                    github_data = None
-                elif expected.workflow_git_hash == github_sha:
-                    # SHAs match - no drift, skip fetching full content
-                    sha_display = github_sha[:7] if github_sha else 'None'
-                    print(f"⚪ No drift for workflow '{workflow.workflow_name}' in {repo_name} (SHA match: {sha_display})")
-                    
-                    # Create a no-drift status without fetching content
-                    drift_status = _create_drift_status(
-                        workflow_name=workflow.workflow_name,
-                        has_drift=False,
-                        github_content=expected.workflow_yaml,  # Use local as proxy since they match
-                        local_content=expected.workflow_yaml,
-                        github_sha=github_sha,
-                        local_sha=expected.workflow_git_hash,
-                        message=f"Workflow synchronized with {repo_name}",
-                        drift_type="workflow"
-                    )
-                    drift_results.append(drift_status)
-                    continue
-                else:
-                    # SHA differs or workflow was never synced - fetch full content
-                    print(f"🔍 SHA mismatch for workflow '{workflow.workflow_name}' in {repo_name} - fetching full content")
-                    print(f"  Local SHA: {expected.workflow_git_hash}")
-                    print(f"  GitHub SHA: {github_sha}")
-                    github_data = get_workflow_from_github(owner, repo, formatted_workflow_name, token)
-                
-                # Compare workflow content (against override-aware expected view)
-                drift_status = _compare_workflow_content(expected, github_data, repo_name, project_code, "workflow",
-                                                         db=db, project_id=project_id)
-                if drift_status:
-                    drift_results.append(drift_status)
-
-                    # Update git hash if content matches (no drift) even though SHA differed
-                    if not drift_status.has_drift and github_data:
-                        new_github_sha = github_data["sha"]
-                        if expected.workflow_git_hash != new_github_sha:
-                            if override is not None:
-                                # Refresh the override hash, not the shared workflow hash
-                                override.workflow_git_hash = new_github_sha
-                                db.commit()
-                                print(f"✅ Updated git hash for repo override '{workflow.workflow_name}' in {repo_name}: {new_github_sha} (content matched despite SHA difference)")
-                            else:
-                                workflow.workflow_git_hash = new_github_sha
-                                db.commit()
-                                print(f"✅ Updated git hash for workflow '{workflow.workflow_name}' in {repo_name}: {new_github_sha} (content matched despite SHA difference)")
-                        
-            except Exception as e:
-                print(f"⚠️ Error checking workflow {workflow.workflow_name} in {repo_name}: {e}")
-                drift_results.append(_create_drift_status(
-                    workflow_name=workflow.workflow_name,
-                    has_drift=False,  # Mark as no drift if we can't check
-                    github_content=None,
-                    local_content=workflow.workflow_yaml,
-                    github_sha=None,
-                    local_sha=workflow.workflow_git_hash,
-                    message=f"Error checking {repo_name}: {str(e)}",
-                    drift_type="workflow"
-                ))
-    
     return drift_results
 
 
@@ -1491,7 +1792,9 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
         return drift_results
         
     owner, repo = reusable_repo_name.split("/", 1)
-    
+
+    default_branch = ""
+    prefetch_error = None
     try:
         # Get default branch for the reusable workflow repo
         headers = {
@@ -1500,16 +1803,40 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
             "X-GitHub-Api-Version": X_API_VERSION
         }
         default_branch = get_default_branch(owner, repo, headers)
-        
+
         # Fetch all workflow SHAs in one API call using Git Trees API
         all_workflow_shas = get_all_workflow_shas(owner, repo, default_branch, token)
-        
+
         print(f"🔍 Fetched {len(all_workflow_shas)} reusable workflow file SHAs from {reusable_repo_name} using Trees API")
-        
+
     except Exception as e:
+        # None, not {} — same distinction _prefetch_workflow_shas_per_repo makes.
+        # An empty mapping means "this repo has no workflow files", which made a
+        # rate limit or revoked token report every reusable workflow as deleted
+        # from GitHub, and that now drives the Delete Everywhere flow.
         print(f"⚠️ Error fetching workflow SHAs from {reusable_repo_name}: {e}")
-        all_workflow_shas = {}
-    
+        all_workflow_shas = None
+        prefetch_error = str(e)
+
+    if all_workflow_shas is None:
+        return [
+            _create_drift_status(
+                workflow_name=w.workflow_name,
+                has_drift=False,
+                github_content=None,
+                local_content=w.workflow_yaml,
+                github_sha=None,
+                local_sha=w.workflow_git_hash,
+                message=f"Could not check {reusable_repo_name}: {prefetch_error}",
+                drift_type="reusable_workflow",
+                check_failed=True,
+                repo=reusable_repo_name,
+                branch=default_branch,
+            )
+            for w in reusable_workflows
+            if w.workflow_name and w.workflow_name.strip()
+        ]
+
     for workflow in reusable_workflows:
         # Skip workflows with empty or null names
         if not workflow.workflow_name or not workflow.workflow_name.strip():
@@ -1540,7 +1867,9 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
                     github_sha=github_sha,
                     local_sha=workflow.workflow_git_hash,
                     message=f"Reusable workflow synchronized with {reusable_repo_name}",
-                    drift_type="reusable_workflow"
+                    drift_type="reusable_workflow",
+                    repo=reusable_repo_name,
+                    branch=default_branch,
                 )
                 drift_results.append(drift_status)
                 continue
@@ -1549,10 +1878,10 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
                 print(f"🔍 SHA mismatch for reusable workflow '{workflow.workflow_name}' in {reusable_repo_name} - fetching full content")
                 print(f"  Local SHA: {workflow.workflow_git_hash}")
                 print(f"  GitHub SHA: {github_sha}")
-                github_data = get_workflow_from_github(owner, repo, formatted_workflow_name, token)
+                github_data = get_workflow_from_github(owner, repo, formatted_workflow_name, token, default_branch=default_branch)
 
             drift_status = _compare_workflow_content(workflow, github_data, reusable_repo_name, project_code, "reusable_workflow",
-                                                     db=db, project_id=project_id)
+                                                     db=db, project_id=project_id, branch=default_branch)
             if drift_status:
                 drift_results.append(drift_status)
 
@@ -1568,13 +1897,18 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
             print(f"⚠️ Error checking reusable workflow {workflow.workflow_name} in {reusable_repo_name}: {e}")
             drift_results.append(_create_drift_status(
                 workflow_name=workflow.workflow_name,
-                has_drift=False,  # Mark as no drift if we can't check
+                # Not a clean result: an unchecked workflow used to be recorded
+                # as resolved, silently clearing genuine drift.
+                has_drift=False,
                 github_content=None,
                 local_content=workflow.workflow_yaml,
                 github_sha=None,
                 local_sha=workflow.workflow_git_hash,
-                message=f"Error checking {reusable_repo_name}: {str(e)}",
-                drift_type="reusable_workflow"
+                message=f"Could not check {reusable_repo_name}: {str(e)}",
+                drift_type="reusable_workflow",
+                check_failed=True,
+                repo=reusable_repo_name,
+                branch=default_branch,
             ))
     
     return drift_results
@@ -1631,7 +1965,10 @@ def detect_workflow_drift(db: Session, user: str, project_name: str, repo_names:
     
     # Process all workflow types and collect drift results
     drift_results = []
-    drift_results.extend(_process_regular_workflows(db, regular_workflows, repo_names, project_code, token, use_prefix, project_id=project.project_id))
+    drift_results.extend(_process_regular_workflows(
+        db, regular_workflows, repo_names, project_code, token, use_prefix,
+        project_id=project.project_id, project=project, user=user,
+    ))
     drift_results.extend(_process_reusable_workflows(
         db, reusable_workflows, user, project_code, token, use_prefix,
         reusable_repo_name=_get_reusable_workflow_repo(project, user, db),
@@ -1790,10 +2127,14 @@ def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modifi
             print(f"⚠️ Original workflow '{original_name}' not found; treating as new workflow '{new_name}'")
 
     if existing_workflow is None:
-        # 🔧 FIX: Search for existing workflow within the current project only
+        # Search for an existing workflow within the current project only.
+        # Case-insensitive *equality*, not ILIKE: workflow names commonly
+        # contain '_', which is a single-character wildcard in SQL LIKE, so
+        # saving "ci_build" could match and overwrite an unrelated "ciXbuild".
+        # Same reasoning as the reusable duplicate sweep in projects.py.
         existing_workflow = db.query(Workflow).join(ProjectWorkflow).filter(
             ProjectWorkflow.project_id == project_id,
-            Workflow.workflow_name.ilike(new_name),
+            func.lower(Workflow.workflow_name) == (new_name or "").lower(),
             Workflow.reusable_workflow == is_reusable
         ).first()
 
@@ -2412,6 +2753,8 @@ def _drift_status_to_detail(
         github_sha=drift_status.github_sha,
         last_checked=now_iso,
         message=drift_status.message,
+        check_failed=drift_status.check_failed,
+        deleted_in_github=drift_status.deleted_in_github,
         project_id=project_id,
         repo_id=repo_id,
         is_shared_workflow=is_shared_workflow,
@@ -2420,6 +2763,89 @@ def _drift_status_to_detail(
         affected_repo_count=len(affected),
         affected_repos=affected,
         source_repo_name=repo_name,
+    )
+
+
+def _match_repo_for_status(status, candidate_repo_names: List[str]) -> Optional[str]:
+    """Associate a drift status with a specific repo.
+
+    Producers set ``status.repo`` directly; that is authoritative. The
+    message-parsing below is only a fallback for statuses that predate the
+    field (or aren't tied to a repo), and cannot express a branch at all —
+    which is why the repo/branch pair is carried as data now.
+    """
+    if getattr(status, "repo", ""):
+        return status.repo
+
+    # Longest name first: one repo's name can be a prefix of another's
+    # ("acme/api" vs "acme/api-gateway"), and a plain substring scan in
+    # arbitrary order would attribute the longer repo's drift to the shorter one.
+    for rn in sorted(candidate_repo_names, key=len, reverse=True):
+        if rn and rn in (status.message or ""):
+            return rn
+    if len(candidate_repo_names) == 1:
+        return candidate_repo_names[0]
+    return None
+
+
+def _affected_repos_for(workflow_id: int, repo_for_status: str, project_repo_names: List[str],
+                         repo_id_by_name: dict, overrides_by_key: dict) -> list:
+    """Other repos sharing this workflow with no per-repo override — they'll drift too if the
+    project workflow changes without syncing them. Skips repos we couldn't map to a repo_id
+    (defensive — should not happen)."""
+    affected = []
+    for rn in project_repo_names:
+        if rn == repo_for_status:
+            continue
+        other_repo_id = repo_id_by_name.get(rn)
+        if other_repo_id is None:
+            continue
+        if overrides_by_key.get((workflow_id, other_repo_id)):
+            continue
+        affected.append(rn)
+    return affected
+
+
+def _build_drift_detail_for_status(status, workflows_by_name: dict, only_workflow_id: Optional[int],
+                                    candidate_repo_names: List[str], repo_id_by_name: dict,
+                                    project_repo_names: List[str], overrides_by_key: dict, project: Project,
+                                    now_iso: str) -> Optional[WorkflowDriftDetail]:
+    """Turn one legacy DriftStatus into a spec-shaped WorkflowDriftDetail, or None if it should be skipped."""
+    wf = workflows_by_name.get(status.workflow_name)
+    if not wf:
+        return None
+    if only_workflow_id is not None and wf.workflow_id != only_workflow_id:
+        return None
+
+    repo_for_status = _match_repo_for_status(status, candidate_repo_names)
+    if repo_for_status is None:
+        # Skip statuses we cannot pin to a repo
+        return None
+
+    repo_id = repo_id_by_name.get(repo_for_status)
+    is_shared = len(project_repo_names) > 1
+    override = overrides_by_key.get((wf.workflow_id, repo_id)) if repo_id else None
+    affected = _affected_repos_for(wf.workflow_id, repo_for_status, project_repo_names, repo_id_by_name, overrides_by_key)
+
+    return _drift_status_to_detail(
+        wf,
+        status,
+        repo_for_status,
+        # The branch the check actually used. This used to be an independent
+        # default-branch lookup, so the branch shown could differ from the one
+        # compared against.
+        # The branch the check actually used — no second, independent lookup
+        # that could disagree with what was compared.
+        status.branch,
+        project.project_code or "",
+        project.use_prefix,
+        now_iso,
+        project_id=project.project_id,
+        repo_id=repo_id,
+        is_shared_workflow=is_shared,
+        has_repo_override=override is not None,
+        override_id=(override.id if override else None),
+        affected_repos=affected,
     )
 
 
@@ -2460,30 +2886,7 @@ def _collect_project_drift_details(
         ).all()
     }
 
-    token = user_tokens.get(user)
-    # Cache default branch lookups per repo (best-effort; fall back to "main")
-    default_branch_cache: dict[str, str] = {}
-
-    def _branch_for(repo_name: str) -> str:
-        if repo_name in default_branch_cache:
-            return default_branch_cache[repo_name]
-        branch = "main"
-        if token and "/" in repo_name:
-            try:
-                owner, repo = repo_name.split("/", 1)
-                headers = {
-                    "Authorization": f"token {token}",
-                    "Accept": ACCEPT_HEADER,
-                    "X-GitHub-Api-Version": X_API_VERSION,
-                }
-                branch = get_default_branch(owner, repo, headers, user, db)
-            except Exception:
-                branch = "main"
-        default_branch_cache[repo_name] = branch
-        return branch
-
     now_iso = datetime.now(timezone.utc).isoformat()
-    details: List[WorkflowDriftDetail] = []
 
     # Pre-compute repo metadata used to enrich each drift detail with
     # scope-aware fields (is_shared_workflow / affected_repos / etc).
@@ -2501,65 +2904,113 @@ def _collect_project_drift_details(
     )
     overrides_by_key = {(o.workflow_id, o.repo_id): o for o in override_rows}
 
+    details: List[WorkflowDriftDetail] = []
     for status in statuses:
-        wf = workflows_by_name.get(status.workflow_name)
-        if not wf:
-            continue
-        if only_workflow_id is not None and wf.workflow_id != only_workflow_id:
-            continue
-
-        # Attempt to associate the status with a specific repo: parse from the
-        # human-readable message ("…with owner/repo" or "…from owner/repo").
-        repo_for_status = None
-        for rn in candidate_repo_names:
-            if rn and rn in (status.message or ""):
-                repo_for_status = rn
-                break
-        if repo_for_status is None and len(candidate_repo_names) == 1:
-            repo_for_status = candidate_repo_names[0]
-        if repo_for_status is None:
-            # Skip statuses we cannot pin to a repo
-            continue
-
-        repo_id = repo_id_by_name.get(repo_for_status)
-        is_shared = len(project_repo_names) > 1
-        override = overrides_by_key.get((wf.workflow_id, repo_id)) if repo_id else None
-        # Affected repos = other repos in the project that share this workflow
-        # and do NOT have a per-repo override (they will become drifted if the
-        # project workflow changes without syncing them). Skip any project
-        # repo we couldn't map to a repo_id (defensive — should not happen).
-        affected = []
-        for rn in project_repo_names:
-            if rn == repo_for_status:
-                continue
-            other_repo_id = repo_id_by_name.get(rn)
-            if other_repo_id is None:
-                continue
-            if overrides_by_key.get((wf.workflow_id, other_repo_id)):
-                continue
-            affected.append(rn)
-
-        details.append(_drift_status_to_detail(
-            wf,
-            status,
-            repo_for_status,
-            _branch_for(repo_for_status),
-            project.project_code or "",
-            project.use_prefix,
-            now_iso,
-            project_id=project.project_id,
-            repo_id=repo_id,
-            is_shared_workflow=is_shared,
-            has_repo_override=override is not None,
-            override_id=(override.id if override else None),
-            affected_repos=affected,
-        ))
+        detail = _build_drift_detail_for_status(
+            status, workflows_by_name, only_workflow_id, candidate_repo_names,
+            repo_id_by_name, project_repo_names, overrides_by_key, project,
+            now_iso
+        )
+        if detail:
+            details.append(detail)
 
     return details
 
 
 NOT_AUTHORIZED_PROJECT_DETAIL = "Not authorized for this project"
 DELIVERY_MODE_ERROR_DETAIL = "delivery_mode must be 'pr' or 'direct'"
+_ERR_INSUFFICIENT_PROJECT_ROLE = "Insufficient project permissions. Required: project_editor"
+_ERR_REPO_NOT_IN_PROJECT = "Repository is not part of this project"
+
+
+def _require_drift_editor(db: Session, github_user: str, project: Project) -> None:
+    """Require at least project_editor to resolve drift.
+
+    Resolving drift writes to GitHub — "Restore Directly" force-pushes over the
+    default branch — so read-only access must not be enough. The endpoints
+    previously only proved the caller could *see* the project, because
+    _find_project_by_name never reads ProjectMembership.project_role.
+
+    Project owners and admin workspace members always pass; everyone else needs
+    an explicit project_editor membership.
+    """
+    account = db.query(Account).filter_by(github_user=github_user).first()
+    if not account:
+        raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
+
+    # Owning the project is full rights, and owners need no membership row.
+    if project.user_id == account.user_id:
+        return
+
+    member = (
+        db.query(WorkspaceMember)
+        .filter(WorkspaceMember.user_id == account.user_id)
+        .first()
+    )
+    if member and is_project_admin(member):
+        return
+    if not member:
+        raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
+
+    effective_role = check_project_access(db, member, project.project_id)
+    if effective_role is None:
+        raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
+    if effective_role not in ("project_editor", "project_admin"):
+        raise HTTPException(status_code=403, detail=_ERR_INSUFFICIENT_PROJECT_ROLE)
+
+
+def _require_repo_in_project(db: Session, project: Project, repo_name: str, github_user: str) -> None:
+    """Require that *repo_name* is a repository this project may write to.
+
+    Without this the resolve endpoints accept any caller-supplied repo and
+    commit to it, so the target was effectively attacker-chosen. Mirrors the
+    check _resolve_source_repo already performs for adopt-github-version.
+
+    Reusable workflows are the exception: _collect_project_drift_details
+    deliberately surfaces drift against the reusable-workflow repo, which for a
+    standard project is the *linked RWX project's* repo and so is not in this
+    project's project_repos. Rejecting it would make every reusable-workflow
+    drift unresolvable from the UI. That repo is derived from the project's own
+    links (or the authenticated user), never from the request, so accepting it
+    keeps the target out of the caller's control.
+    """
+    if not repo_name or "/" not in repo_name:
+        raise HTTPException(status_code=400, detail="repo must be in 'owner/repo' format")
+
+    normalized = repo_name.strip()
+
+    repo = db.query(Repo).filter(Repo.repo_name == normalized).first()
+    if repo:
+        in_project = db.query(ProjectRepo).filter_by(
+            project_id=project.project_id, repo_id=repo.repo_id
+        ).first()
+        if in_project:
+            return
+
+    if normalized == _get_reusable_workflow_repo(project, github_user, db):
+        return
+
+    raise HTTPException(status_code=400, detail=_ERR_REPO_NOT_IN_PROJECT)
+
+
+def _record_drift_check_failure(db: Session, project: Project, message: str) -> None:
+    """Best-effort: persist that this project's drift check could not complete."""
+    try:
+        _cache_project_drift_summary(db, project, "check_failed", 0, message)
+        record_drift_check_failed(db, project, message)
+    except Exception:
+        db.rollback()
+
+
+def _determine_drift_summary_status(drifted: List[WorkflowDriftDetail], unchecked: List[WorkflowDriftDetail]) -> str:
+    if drifted:
+        return "drifted"
+    if unchecked:
+        # Some repos could not be reached, so "clean" would be a claim we
+        # cannot support — the project list must not show a green badge
+        # just because GitHub was rate-limiting.
+        return "check_failed"
+    return "clean"
 
 
 def _resolve_workflow_owner_project(db: Session, workflow_id: int):
@@ -2574,6 +3025,115 @@ def _resolve_workflow_owner_project(db: Session, workflow_id: int):
     return wf, project
 
 
+def _stored_project_drift_details(db: Session, project: Project) -> List[WorkflowDriftDetail]:
+    """Rebuild the drifted-workflow list from persisted state, calling nothing.
+
+    Everything here is either stored on the drift-state row or already local:
+    the managed YAML and its hash come from the project's own workflow (or its
+    per-repo override), and the rest is what the last check recorded.
+
+    ``github_yaml`` is deliberately left unset. A diff is only meaningful
+    against GitHub's *current* content, so the UI fetches it when the user
+    opens one rather than replaying a snapshot that may already be stale.
+    """
+    states = (
+        db.query(WorkflowDriftState)
+        .filter(
+            WorkflowDriftState.project_id == project.project_id,
+            WorkflowDriftState.has_drift.is_(True),
+        )
+        .all()
+    )
+    if not states:
+        return []
+
+    repo_name_by_id = {r.repo_id: r.repo_name for r in db.query(Repo).all()}
+    project_repo_rows = (
+        db.query(Repo).join(ProjectRepo).filter(ProjectRepo.project_id == project.project_id).all()
+    )
+    project_repo_names = [r.repo_name for r in project_repo_rows]
+    repo_id_by_name = {r.repo_name: r.repo_id for r in project_repo_rows}
+    overrides_by_key = {
+        (o.workflow_id, o.repo_id): o
+        for o in db.query(RepoWorkflowOverride).filter_by(project_id=project.project_id).all()
+    }
+
+    details: List[WorkflowDriftDetail] = []
+    for state in states:
+        workflow = db.query(Workflow).filter_by(workflow_id=state.workflow_id).first()
+        repo_name = repo_name_by_id.get(state.repo_id)
+        if not workflow or not repo_name:
+            continue
+
+        override = overrides_by_key.get((state.workflow_id, state.repo_id))
+        expected = _WorkflowExpectedView(workflow, override)
+        filename = format_workflow_name(workflow.workflow_name, project.project_code or "", project.use_prefix)
+        affected = _affected_repos_for(
+            workflow.workflow_id, repo_name, project_repo_names, repo_id_by_name, overrides_by_key
+        )
+
+        details.append(WorkflowDriftDetail(
+            workflow_id=workflow.workflow_id,
+            workflow_name=workflow.workflow_name,
+            workflow_filename=filename,
+            repo=repo_name,
+            branch=state.branch or "",
+            has_drift=True,
+            actionsmanager_yaml=expected.workflow_yaml,
+            github_yaml=None,          # fetched on demand — see docstring
+            actionsmanager_sha=expected.workflow_git_hash,
+            github_sha=state.github_sha,
+            last_checked=(state.last_checked_at.isoformat() if state.last_checked_at else ""),
+            message=(
+                f"Workflow was deleted from {repo_name}" if state.deleted_in_github
+                else f"Workflow content differs between local and {repo_name}"
+            ),
+            project_id=project.project_id,
+            repo_id=state.repo_id,
+            is_shared_workflow=len(project_repo_names) > 1,
+            has_repo_override=override is not None,
+            override_id=(override.id if override else None),
+            affected_repos=affected,
+            affected_repo_count=len(affected),
+            source_repo_name=repo_name,
+            deleted_in_github=bool(state.deleted_in_github),
+        ))
+    return details
+
+
+def run_project_drift_check(db: Session, user: str, project: Project):
+    """Check one project for drift, persist the result, return (drifted, unchecked).
+
+    The single place a live drift check happens. Both "Check now" and the
+    background sweep call this, so an automatic check can never diverge from
+    the one a user asks for.
+    """
+    try:
+        details = _collect_project_drift_details(db, user, project)
+    except HTTPException:
+        _record_drift_check_failure(db, project, "Drift detection request failed")
+        raise
+    except Exception as e:
+        _record_drift_check_failure(db, project, str(e))
+        raise
+
+    drifted = [d for d in details if d.has_drift and not d.check_failed]
+    unchecked = [d for d in details if d.check_failed]
+    try:
+        _cache_project_drift_summary(
+            db,
+            project,
+            _determine_drift_summary_status(drifted, unchecked),
+            len(drifted),
+            f"{len(unchecked)} workflow/repo pair(s) could not be checked" if unchecked else None,
+        )
+        record_drift_transitions(db, project, details)
+    except Exception:
+        db.rollback()
+
+    return drifted, unchecked
+
+
 @router.get(
     "/api/projects/{project_id}/drift",
     response_model=ProjectDriftSummary,
@@ -2583,8 +3143,18 @@ def get_project_drift(
     project_id: int,
     github_user: str,
     db: Annotated[Session, Depends(get_db)],
+    refresh: bool = False,
 ):
-    """Project-level drift summary — returns all drifted workflows/repos/branches."""
+    """Project-level drift summary — all drifted workflows/repos/branches.
+
+    Serves the last known state by default, which costs no GitHub API calls, so
+    opening a project is free however often it is done. ``refresh=true`` runs a
+    live check and updates that state.
+
+    ``last_checked`` is the time the state was actually established, not the
+    time of this request — otherwise "clean" would look freshly verified when
+    nothing had been checked in days.
+    """
     if github_user not in user_tokens:
         raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
@@ -2598,31 +3168,27 @@ def get_project_drift(
     if not accessible or accessible.project_id != project_id:
         raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
 
+    if not refresh:
+        drifted = _stored_project_drift_details(db, project)
+        return ProjectDriftSummary(
+            project_id=project.project_id,
+            project_name=project.project_name,
+            drift_count=len(drifted),
+            drifted_workflows=drifted,
+            # None when no check has ever run — the UI must say "not checked
+            # yet" rather than implying a clean result.
+            last_checked=(project.last_drift_check_at.isoformat()
+                          if project.last_drift_check_at else None),
+            unchecked_count=0,
+            stale_reason=project.drift_error_summary,
+        )
+
     try:
-        details = _collect_project_drift_details(db, github_user, project)
+        drifted, unchecked = run_project_drift_check(db, github_user, project)
     except HTTPException:
-        try:
-            _cache_project_drift_summary(db, project, "check_failed", 0, "Drift detection request failed")
-        except Exception:
-            db.rollback()
         raise
     except Exception as e:
-        try:
-            _cache_project_drift_summary(db, project, "check_failed", 0, str(e))
-        except Exception:
-            db.rollback()
         raise HTTPException(status_code=500, detail=f"Drift detection failed: {e}")
-
-    drifted = [d for d in details if d.has_drift]
-    try:
-        _cache_project_drift_summary(
-            db,
-            project,
-            "drifted" if drifted else "clean",
-            len(drifted),
-        )
-    except Exception:
-        db.rollback()
 
     return ProjectDriftSummary(
         project_id=project.project_id,
@@ -2630,6 +3196,7 @@ def get_project_drift(
         drift_count=len(drifted),
         drifted_workflows=drifted,
         last_checked=datetime.now(timezone.utc).isoformat(),
+        unchecked_count=len(unchecked),
     )
 
 
@@ -2680,14 +3247,40 @@ def _direct_push_workflow_to_branch(
     headers: dict,
     user: str,
     db: Session,
+    expected_sha: Optional[str] = None,
 ) -> dict:
     """Push a single workflow file directly to a branch via the Contents API.
+
+    ``expected_sha`` is the blob SHA the caller's decision was based on. When
+    given and GitHub has moved on, the push is refused rather than overwriting
+    whatever landed in between — otherwise a stale drift view silently reverts
+    someone else's fix. Passing None keeps the previous last-write-wins
+    behaviour for callers that have no expectation to assert.
 
     Returns a dict with keys: ``status_code`` (int) and, on success, ``sha`` (str).
     """
     encoded_content = base64.b64encode(content_str.encode()).decode()
     file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}?ref={branch}"
-    sha, _unchanged = _check_existing_workflow_content(file_url, encoded_content, headers, user, db)
+    sha, unchanged = _check_existing_workflow_content(file_url, encoded_content, headers, user, db)
+
+    if expected_sha and sha and sha != expected_sha:
+        # Reported through the existing {status_code, error} contract rather than
+        # raised: this is a low-level push helper, and callers already branch on
+        # status_code. Bulk turns it into a per-item failure for free, and the
+        # resolve endpoint converts it to a 409 at the HTTP layer where that
+        # response is documented.
+        return {
+            "status_code": 409,
+            "error": (
+                f"{path} in {owner}/{repo}@{branch} changed since drift was checked. "
+                "Re-run the drift check and review the current difference before resolving."
+            ),
+        }
+
+    if unchanged:
+        # Identical content — pushing would create an empty commit, and a
+        # double-submit would create two. Report the existing blob as success.
+        return {"status_code": 200, "sha": sha, "unchanged": True}
 
     payload = {
         "message": commit_message,
@@ -2716,6 +3309,7 @@ def _apply_use_github_resolution(
     formatted_name: str,
     token: str,
     default_branch: Optional[str] = None,
+    expected_sha: Optional[str] = None,
 ) -> dict:
     """Overwrite ``wf``'s local YAML with the current GitHub version for one repo/branch.
 
@@ -2729,7 +3323,13 @@ def _apply_use_github_resolution(
     ``get_workflow_from_github`` to skip its repo-metadata lookup - pass it
     when resolving several items in the same repo in one request.
 
-    Returns {"success": bool, "github_sha": str|None, "error": str|None}.
+    ``expected_sha`` is the blob SHA the user's decision was based on. Adopting
+    GitHub's version discards the managed YAML, so if GitHub moved on since the
+    drift was shown the user would be accepting content they never saw — the
+    mirror image of the stale overwrite the restore path guards against.
+
+    Returns {"success": bool, "github_sha": str|None, "error": str|None,
+    "conflict": bool}.
     """
     owner, repo_short = repo.split("/", 1)
     github_data = get_workflow_from_github(owner, repo_short, formatted_name, token, default_branch=default_branch)
@@ -2743,6 +3343,17 @@ def _apply_use_github_resolution(
     github_content = (github_data.get("content") or "").strip()
     github_sha = github_data.get("sha")
 
+    if expected_sha and github_sha and github_sha != expected_sha:
+        return {
+            "success": False,
+            "conflict": True,
+            "github_sha": github_sha,
+            "error": (
+                f"{formatted_name} in {repo} changed since drift was checked. "
+                "Re-run the drift check and review the current difference before resolving."
+            ),
+        }
+
     wf.workflow_yaml = github_content
     wf.workflow_git_hash = github_sha
     wf.last_modified_by = github_user
@@ -2752,11 +3363,227 @@ def _apply_use_github_resolution(
     return {"success": True, "github_sha": github_sha, "error": None}
 
 
+def _resolve_use_github_drift(db: Session, github_user: str, wf, project, payload: ResolveWorkflowDriftRequest,
+                               branch: str, workflow_id: int, formatted_name: str, token: str) -> dict:
+    """Overwrite local YAML with GitHub's version, then re-check drift to confirm resolution."""
+    print(f"🔄 Resolving drift for workflow {workflow_id} (use_github): {payload.repo}@{payload.branch}")
+    print(f"  Old local SHA: {wf.workflow_git_hash}")
+    print(f"  Old local content length: {len(wf.workflow_yaml or '')}")
+
+    resolution = _apply_use_github_resolution(
+        db, github_user, wf, payload.repo, formatted_name, token,
+        expected_sha=payload.expected_github_sha,
+    )
+    if not resolution["success"]:
+        if resolution.get("conflict"):
+            raise HTTPException(status_code=409, detail=resolution["error"])
+        raise HTTPException(status_code=404, detail=resolution["error"])
+    github_sha = resolution["github_sha"]
+
+    print(f"  New GitHub SHA: {github_sha}")
+    print("  ✅ Database updated and committed")
+
+    # Refresh the workflow from database to ensure we have the latest state
+    db.refresh(wf)
+
+    # Re-check drift with the updated workflow to confirm resolution
+    print("  🔍 Re-checking drift after resolution...")
+    try:
+        drift_details = _collect_project_drift_details(
+            db, github_user, project, only_workflow_id=workflow_id
+        )
+
+        # This re-check is authoritative, so persist it instead of leaving the
+        # caches claiming drift that was just resolved. record_drift_transitions
+        # only touches the rows it is given, and only_workflow_id scopes those
+        # to this workflow.
+        record_drift_transitions(db, project, drift_details)
+        recompute_project_drift_summary(db, project)
+
+        # Find the specific drift detail for this repo/branch
+        matching_drift = None
+        for detail in drift_details:
+            if detail.repo == payload.repo and detail.branch == branch:
+                matching_drift = detail
+                break
+
+        if not matching_drift:
+            # No drift detail found for this repo/branch after resolution
+            print("  ✅ No drift detail found - assuming synced")
+            return {
+                "message": f"Workflow '{wf.workflow_name}' updated from GitHub version",
+                "action": "use_github",
+                "workflow_id": wf.workflow_id,
+                "repo": payload.repo,
+                "branch": branch,
+                "state": "synced",
+                "stored_hash": wf.workflow_git_hash,
+                "github_hash": github_sha,
+                "content_matches": True,
+            }
+
+        has_drift_after = matching_drift.has_drift
+        print(f"  Drift state after resolution: {'drifted' if has_drift_after else 'synced'}")
+
+        if has_drift_after:
+            # Drift still exists - something went wrong
+            print("  ⚠️ WARNING: Drift was not resolved!")
+            print(f"    Local content length: {len(wf.workflow_yaml or '')}")
+            print(f"    GitHub content length: {len(matching_drift.github_yaml or '')}")
+            print(f"    Message: {matching_drift.message}")
+
+            return {
+                "message": f"Drift resolution failed: {matching_drift.message}",
+                "action": "use_github",
+                "workflow_id": wf.workflow_id,
+                "repo": payload.repo,
+                "branch": branch,
+                "state": "drifted",
+                "stored_hash": wf.workflow_git_hash,
+                "github_hash": matching_drift.github_sha,
+                "content_matches": False,
+            }
+
+        print("  ✅ Drift successfully resolved")
+        return {
+            "message": f"GitHub version kept. Workflow '{wf.workflow_name}' is now synced.",
+            "action": "use_github",
+            "workflow_id": wf.workflow_id,
+            "repo": payload.repo,
+            "branch": branch,
+            "state": "synced",
+            "stored_hash": wf.workflow_git_hash,
+            "github_hash": matching_drift.github_sha,
+            "content_matches": True,
+        }
+    except Exception as drift_check_error:
+        print(f"  ⚠️ Error re-checking drift: {drift_check_error}")
+        # Database was updated, so return success but note drift check failed
+        return {
+            "message": f"Workflow '{wf.workflow_name}' updated from GitHub version (drift check failed: {str(drift_check_error)})",
+            "action": "use_github",
+            "workflow_id": wf.workflow_id,
+            "repo": payload.repo,
+            "branch": branch,
+            "state": "unknown",
+            "stored_hash": wf.workflow_git_hash,
+            "github_hash": github_sha,
+        }
+
+
+def _resolve_restore_actionsmanager_drift(db: Session, github_user: str, wf, project,
+                                           payload: ResolveWorkflowDriftRequest, branch: str, workflow_id: int,
+                                           owner: str, repo: str, formatted_name: str, headers: dict) -> dict:
+    """Push local YAML back to GitHub via direct commit or the PR pipeline."""
+    delivery_mode = (payload.delivery_mode or "pr").lower()
+    print(f"🔄 Resolving drift for workflow {workflow_id} (restore_actionsmanager, {delivery_mode}): {payload.repo}@{payload.branch}")
+
+    try:
+        if delivery_mode == "direct":
+            path = f".github/workflows/{formatted_name}"
+            commit_msg = (
+                f"Restore {formatted_name} from ActionsManager for "
+                f"{project.project_code} [skip ci]"
+            )
+            result = _direct_push_workflow_to_branch(
+                owner, repo, branch, path, wf.workflow_yaml or "",
+                commit_msg, headers, github_user, db,
+                expected_sha=payload.expected_github_sha,
+            )
+            if result.get("status_code") in (200, 201):
+                if result.get("sha"):
+                    wf.workflow_git_hash = result["sha"]
+                wf.last_modified_by = github_user
+                wf.workflow_status = "synced_with_github"
+                project.pr_state = "synced"
+                db.commit()
+                # GitHub now matches the managed version, so any persisted drift
+                # for this workflow/repo is stale.
+                clear_workflow_drift(db, project, wf.workflow_id, payload.repo, branch)
+
+                print(f"  ✅ Direct push successful, new SHA: {result.get('sha')}")
+
+                return {
+                    "message": f"Workflow '{wf.workflow_name}' restored to {payload.repo}@{branch} (direct commit)",
+                    "action": "restore_actionsmanager",
+                    "delivery_mode": "direct",
+                    "workflow_id": wf.workflow_id,
+                    "repo": payload.repo,
+                    "branch": branch,
+                    "state": "synced",
+                    "github_sha": result.get("sha"),
+                }
+            if result.get("status_code") == 409:
+                # The file moved on since drift was computed — surface the
+                # conflict rather than reporting it as a GitHub push failure.
+                raise HTTPException(status_code=409, detail=result.get("error", ""))
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Failed to push workflow to GitHub: {result.get('status_code')} "
+                    f"{result.get('error', '')}"
+                ),
+            )
+
+        if delivery_mode == "pr":
+            # Reuse the create-pull-requests pipeline scoped to this one
+            # workflow + repo. create_pull_requests is a route function
+            # whose signature is (payload, background_tasks, db, ...) - when
+            # called directly (not via FastAPI routing) db has no injected
+            # default, so background_tasks must be supplied positionally and
+            # db passed explicitly. async_mode defaults False, so the
+            # BackgroundTasks instance is never used.
+            pr_payload = CreatePullRequestsRequest(
+                github_user=github_user,
+                project_name=project.project_name,
+                selected_repos=[payload.repo],
+                selected_workflows=[wf.workflow_name],
+            )
+            pr_result = create_pull_requests(
+                pr_payload, BackgroundTasks(), db, github_user=github_user
+            )
+
+            print("  ✅ PR created for restoring workflow")
+
+            return {
+                "message": f"PR opened to restore '{wf.workflow_name}' in {payload.repo}",
+                "action": "restore_actionsmanager",
+                "delivery_mode": "pr",
+                "workflow_id": wf.workflow_id,
+                "repo": payload.repo,
+                "branch": branch,
+                "state": "pr_pending",
+                "pr_result": pr_result,
+            }
+
+        raise HTTPException(status_code=400, detail=DELIVERY_MODE_ERROR_DETAIL)
+    except HTTPException:
+        # Already-shaped errors (GitHub 502, pipeline failures, bad input)
+        # carry a useful status + detail - let them through unchanged.
+        raise
+    except Exception as e:  # noqa: BLE001 - convert unexpected errors to a safe 500
+        import traceback
+        traceback.print_exc()
+        db.rollback()
+        # Server-side context for diagnosis - never logs the token/headers.
+        print(
+            f"❌ Drift restore failed (workflow_id={workflow_id}, "
+            f"repo={payload.repo}, branch={branch}, delivery_mode={delivery_mode}): "
+            f"{type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to restore workflow via {delivery_mode}: {e}",
+        )
+
+
 @router.post(
     "/api/workflows/{workflow_id}/resolve-drift",
     responses={
         400: {"description": "resolution or delivery_mode is invalid"},
+        403: {"description": "Not authorized for this workflow, or caller lacks project_editor rights"},
         404: {"description": "Workflow, project, or GitHub file not found"},
+        409: {"description": "The file on GitHub changed since drift was checked"},
         500: {"description": "Unexpected error during drift restoration"},
     },
 )
@@ -2787,10 +3614,19 @@ def resolve_workflow_drift(
     if not accessible or accessible.project_id != project.project_id:
         raise HTTPException(status_code=403, detail="Not authorized for this workflow")
 
-    if "/" not in payload.repo:
-        raise HTTPException(status_code=400, detail="repo must be in 'owner/repo' format")
-    owner, repo = payload.repo.split("/", 1)
-    branch = payload.branch or "main"
+    # Resolving drift writes to GitHub, so seeing the project is not enough.
+    _require_drift_editor(db, github_user, project)
+    # And the target must be one of the project's own repos, not any repo the
+    # caller's token happens to be able to write to.
+    _require_repo_in_project(db, project, payload.repo, github_user)
+
+    owner, repo = payload.repo.strip().split("/", 1)
+    # No silent fallback: this force-pushes over the named branch, and
+    # defaulting to "main" because the caller omitted one would overwrite a
+    # branch the user never chose.
+    branch = (payload.branch or "").strip()
+    if not branch:
+        raise HTTPException(status_code=400, detail="branch is required to restore a workflow")
     token = user_tokens[github_user]
     headers = {
         "Authorization": f"token {token}",
@@ -2800,194 +3636,12 @@ def resolve_workflow_drift(
     formatted_name = format_workflow_name(wf.workflow_name, project.project_code or "", project.use_prefix)
 
     if payload.resolution == "use_github":
-        # Fetch the current GitHub content and overwrite local
-        print(f"🔄 Resolving drift for workflow {workflow_id} (use_github): {payload.repo}@{payload.branch}")
-        print(f"  Old local SHA: {wf.workflow_git_hash}")
-        print(f"  Old local content length: {len(wf.workflow_yaml or '')}")
-
-        resolution = _apply_use_github_resolution(
-            db, github_user, wf, payload.repo, formatted_name, token,
-        )
-        if not resolution["success"]:
-            raise HTTPException(status_code=404, detail=resolution["error"])
-        github_sha = resolution["github_sha"]
-
-        print(f"  New GitHub SHA: {github_sha}")
-        print("  ✅ Database updated and committed")
-
-        # Refresh the workflow from database to ensure we have the latest state
-        db.refresh(wf)
-
-        # Re-check drift with the updated workflow to confirm resolution
-        print("  🔍 Re-checking drift after resolution...")
-        try:
-            drift_details = _collect_project_drift_details(
-                db, github_user, project, only_workflow_id=workflow_id
-            )
-
-            # Find the specific drift detail for this repo/branch
-            matching_drift = None
-            for detail in drift_details:
-                if detail.repo == payload.repo and detail.branch == branch:
-                    matching_drift = detail
-                    break
-
-            if matching_drift:
-                has_drift_after = matching_drift.has_drift
-                print(f"  Drift state after resolution: {'drifted' if has_drift_after else 'synced'}")
-
-                if has_drift_after:
-                    # Drift still exists - something went wrong
-                    print("  ⚠️ WARNING: Drift was not resolved!")
-                    print(f"    Local content length: {len(wf.workflow_yaml or '')}")
-                    print(f"    GitHub content length: {len(matching_drift.github_yaml or '')}")
-                    print(f"    Message: {matching_drift.message}")
-
-                    return {
-                        "message": f"Drift resolution failed: {matching_drift.message}",
-                        "action": "use_github",
-                        "workflow_id": wf.workflow_id,
-                        "repo": payload.repo,
-                        "branch": branch,
-                        "state": "drifted",
-                        "stored_hash": wf.workflow_git_hash,
-                        "github_hash": matching_drift.github_sha,
-                        "content_matches": False,
-                    }
-                else:
-                    print("  ✅ Drift successfully resolved")
-                    return {
-                        "message": f"GitHub version kept. Workflow '{wf.workflow_name}' is now synced.",
-                        "action": "use_github",
-                        "workflow_id": wf.workflow_id,
-                        "repo": payload.repo,
-                        "branch": branch,
-                        "state": "synced",
-                        "stored_hash": wf.workflow_git_hash,
-                        "github_hash": matching_drift.github_sha,
-                        "content_matches": True,
-                    }
-            else:
-                # No drift detail found for this repo/branch after resolution
-                print("  ✅ No drift detail found - assuming synced")
-                return {
-                    "message": f"Workflow '{wf.workflow_name}' updated from GitHub version",
-                    "action": "use_github",
-                    "workflow_id": wf.workflow_id,
-                    "repo": payload.repo,
-                    "branch": branch,
-                    "state": "synced",
-                    "stored_hash": wf.workflow_git_hash,
-                    "github_hash": github_sha,
-                    "content_matches": True,
-                }
-        except Exception as drift_check_error:
-            print(f"  ⚠️ Error re-checking drift: {drift_check_error}")
-            # Database was updated, so return success but note drift check failed
-            return {
-                "message": f"Workflow '{wf.workflow_name}' updated from GitHub version (drift check failed: {str(drift_check_error)})",
-                "action": "use_github",
-                "workflow_id": wf.workflow_id,
-                "repo": payload.repo,
-                "branch": branch,
-                "state": "unknown",
-                "stored_hash": wf.workflow_git_hash,
-                "github_hash": github_sha,
-            }
+        return _resolve_use_github_drift(db, github_user, wf, project, payload, branch, workflow_id, formatted_name, token)
 
     if payload.resolution == "restore_actionsmanager":
-        delivery_mode = (payload.delivery_mode or "pr").lower()
-        print(f"🔄 Resolving drift for workflow {workflow_id} (restore_actionsmanager, {delivery_mode}): {payload.repo}@{payload.branch}")
-
-        try:
-            if delivery_mode == "direct":
-                path = f".github/workflows/{formatted_name}"
-                commit_msg = (
-                    f"Restore {formatted_name} from ActionsManager for "
-                    f"{project.project_code} [skip ci]"
-                )
-                result = _direct_push_workflow_to_branch(
-                    owner, repo, branch, path, wf.workflow_yaml or "",
-                    commit_msg, headers, github_user, db,
-                )
-                if result.get("status_code") in (200, 201):
-                    if result.get("sha"):
-                        wf.workflow_git_hash = result["sha"]
-                    wf.last_modified_by = github_user
-                    wf.workflow_status = "synced_with_github"
-                    project.pr_state = "synced"
-                    db.commit()
-
-                    print(f"  ✅ Direct push successful, new SHA: {result.get('sha')}")
-
-                    return {
-                        "message": f"Workflow '{wf.workflow_name}' restored to {payload.repo}@{branch} (direct commit)",
-                        "action": "restore_actionsmanager",
-                        "delivery_mode": "direct",
-                        "workflow_id": wf.workflow_id,
-                        "repo": payload.repo,
-                        "branch": branch,
-                        "state": "synced",
-                        "github_sha": result.get("sha"),
-                    }
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        f"Failed to push workflow to GitHub: {result.get('status_code')} "
-                        f"{result.get('error', '')}"
-                    ),
-                )
-
-            if delivery_mode == "pr":
-                # Reuse the create-pull-requests pipeline scoped to this one
-                # workflow + repo. create_pull_requests is a route function
-                # whose signature is (payload, background_tasks, db, ...) - when
-                # called directly (not via FastAPI routing) db has no injected
-                # default, so background_tasks must be supplied positionally and
-                # db passed explicitly. async_mode defaults False, so the
-                # BackgroundTasks instance is never used.
-                pr_payload = CreatePullRequestsRequest(
-                    github_user=github_user,
-                    project_name=project.project_name,
-                    selected_repos=[payload.repo],
-                    selected_workflows=[wf.workflow_name],
-                )
-                pr_result = create_pull_requests(
-                    pr_payload, BackgroundTasks(), db, github_user=github_user
-                )
-
-                print("  ✅ PR created for restoring workflow")
-
-                return {
-                    "message": f"PR opened to restore '{wf.workflow_name}' in {payload.repo}",
-                    "action": "restore_actionsmanager",
-                    "delivery_mode": "pr",
-                    "workflow_id": wf.workflow_id,
-                    "repo": payload.repo,
-                    "branch": branch,
-                    "state": "pr_pending",
-                    "pr_result": pr_result,
-                }
-
-            raise HTTPException(status_code=400, detail=DELIVERY_MODE_ERROR_DETAIL)
-        except HTTPException:
-            # Already-shaped errors (GitHub 502, pipeline failures, bad input)
-            # carry a useful status + detail - let them through unchanged.
-            raise
-        except Exception as e:  # noqa: BLE001 - convert unexpected errors to a safe 500
-            import traceback
-            traceback.print_exc()
-            db.rollback()
-            # Server-side context for diagnosis - never logs the token/headers.
-            print(
-                f"❌ Drift restore failed (workflow_id={workflow_id}, "
-                f"repo={payload.repo}, branch={branch}, delivery_mode={delivery_mode}): "
-                f"{type(e).__name__}: {e}"
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to restore workflow via {delivery_mode}: {e}",
-            )
+        return _resolve_restore_actionsmanager_drift(
+            db, github_user, wf, project, payload, branch, workflow_id, owner, repo, formatted_name, headers
+        )
 
     raise HTTPException(
         status_code=400,
@@ -3026,20 +3680,29 @@ def _bulk_resolve_use_github(
         "X-GitHub-Api-Version": X_API_VERSION,
     }
     # Cache each repo's default branch across items so N drifted workflows in
-    # the same repo cost one repo-metadata lookup, not N.
+    # the same repo cost one repo-metadata lookup, not N. Only consulted for
+    # items that somehow arrive without a branch — normally the item names the
+    # branch the user was looking at, and adopting from any other branch would
+    # import a different file than the one they were shown.
     default_branch_cache: dict = {}
     results: List[BulkResolveDriftItemResult] = []
     for item, wf in resolved_items:
         formatted_name = format_workflow_name(wf.workflow_name, project.project_code or "", project.use_prefix)
         try:
-            if item.repo not in default_branch_cache:
-                owner, repo_short = item.repo.split("/", 1)
-                default_branch_cache[item.repo] = get_default_branch(owner, repo_short, headers, github_user, db)
+            source_branch = item.branch
+            if not source_branch:
+                if item.repo not in default_branch_cache:
+                    owner, repo_short = item.repo.split("/", 1)
+                    default_branch_cache[item.repo] = get_default_branch(owner, repo_short, headers, github_user, db)
+                source_branch = default_branch_cache[item.repo]
 
             outcome = _apply_use_github_resolution(
                 db, github_user, wf, item.repo, formatted_name, token,
-                default_branch=default_branch_cache[item.repo],
+                default_branch=source_branch,
+                expected_sha=item.expected_github_sha,
             )
+            if outcome["success"]:
+                clear_workflow_drift(db, project, wf.workflow_id, item.repo, source_branch)
             results.append(BulkResolveDriftItemResult(
                 workflow_id=item.workflow_id,
                 repo=item.repo,
@@ -3056,6 +3719,68 @@ def _bulk_resolve_use_github(
     return results
 
 
+def _bulk_resolve_restore_direct_push_result(
+    item, wf, push_result: dict, project: Project, github_user: str, db: Session, branch: str,
+) -> BulkResolveDriftItemResult:
+    status_code = push_result.get("status_code")
+    if status_code in (200, 201):
+        if push_result.get("sha"):
+            wf.workflow_git_hash = push_result["sha"]
+        wf.last_modified_by = github_user
+        wf.workflow_status = "synced_with_github"
+        db.commit()
+        clear_workflow_drift(db, project, wf.workflow_id, item.repo, branch)
+        return BulkResolveDriftItemResult(
+            workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+            success=True,
+            message=f"Workflow '{wf.workflow_name}' restored to {item.repo}@{branch} (direct commit)",
+        )
+    if status_code == 409:
+        # Stale item: reported on its own row so the rest of the batch
+        # still applies, and not dressed up as a push failure.
+        return BulkResolveDriftItemResult(
+            workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+            success=False, message=push_result.get("error", ""),
+        )
+    return BulkResolveDriftItemResult(
+        workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+        success=False,
+        message=(
+            f"Failed to push workflow to GitHub: "
+            f"{status_code} {push_result.get('error', '')}"
+        ),
+    )
+
+
+def _bulk_resolve_restore_direct_item(
+    db: Session, github_user: str, project: Project, item, wf, headers: dict,
+) -> BulkResolveDriftItemResult:
+    owner, repo_short = item.repo.split("/", 1)
+    branch = (item.branch or "").strip()
+    formatted_name = format_workflow_name(wf.workflow_name, project.project_code or "", project.use_prefix)
+    if not branch:
+        # Fail this item rather than force-pushing over "main" by default.
+        return BulkResolveDriftItemResult(
+            workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+            success=False, message="branch is required to restore a workflow",
+        )
+    path = f".github/workflows/{formatted_name}"
+    commit_msg = f"Restore {formatted_name} from ActionsManager for {project.project_code} [skip ci]"
+    try:
+        push_result = _direct_push_workflow_to_branch(
+            owner, repo_short, branch, path, wf.workflow_yaml or "",
+            commit_msg, headers, github_user, db,
+            expected_sha=item.expected_github_sha,
+        )
+        return _bulk_resolve_restore_direct_push_result(item, wf, push_result, project, github_user, db, branch)
+    except Exception as e:  # noqa: BLE001 - convert unexpected errors to a per-item failure
+        db.rollback()
+        return BulkResolveDriftItemResult(
+            workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
+            success=False, message=f"Failed to restore workflow directly: {e}",
+        )
+
+
 def _bulk_resolve_restore_direct(
     db: Session, github_user: str, project: Project, resolved_items: list, token: str
 ) -> List[BulkResolveDriftItemResult]:
@@ -3064,44 +3789,10 @@ def _bulk_resolve_restore_direct(
         "Accept": ACCEPT_HEADER,
         "X-GitHub-Api-Version": X_API_VERSION,
     }
-    results: List[BulkResolveDriftItemResult] = []
-    for item, wf in resolved_items:
-        owner, repo_short = item.repo.split("/", 1)
-        branch = item.branch or "main"
-        formatted_name = format_workflow_name(wf.workflow_name, project.project_code or "", project.use_prefix)
-        path = f".github/workflows/{formatted_name}"
-        commit_msg = f"Restore {formatted_name} from ActionsManager for {project.project_code} [skip ci]"
-        try:
-            push_result = _direct_push_workflow_to_branch(
-                owner, repo_short, branch, path, wf.workflow_yaml or "",
-                commit_msg, headers, github_user, db,
-            )
-            if push_result.get("status_code") in (200, 201):
-                if push_result.get("sha"):
-                    wf.workflow_git_hash = push_result["sha"]
-                wf.last_modified_by = github_user
-                wf.workflow_status = "synced_with_github"
-                db.commit()
-                results.append(BulkResolveDriftItemResult(
-                    workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
-                    success=True,
-                    message=f"Workflow '{wf.workflow_name}' restored to {item.repo}@{branch} (direct commit)",
-                ))
-            else:
-                results.append(BulkResolveDriftItemResult(
-                    workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
-                    success=False,
-                    message=(
-                        f"Failed to push workflow to GitHub: "
-                        f"{push_result.get('status_code')} {push_result.get('error', '')}"
-                    ),
-                ))
-        except Exception as e:  # noqa: BLE001 - convert unexpected errors to a per-item failure
-            db.rollback()
-            results.append(BulkResolveDriftItemResult(
-                workflow_id=item.workflow_id, repo=item.repo, branch=item.branch,
-                success=False, message=f"Failed to restore workflow directly: {e}",
-            ))
+    results: List[BulkResolveDriftItemResult] = [
+        _bulk_resolve_restore_direct_item(db, github_user, project, item, wf, headers)
+        for item, wf in resolved_items
+    ]
 
     # Mirrors _handle_sync_direct_push's all_ok aggregate pattern for
     # the equivalent "push local content out to GitHub directly"
@@ -3236,7 +3927,14 @@ def bulk_resolve_project_drift(
     if not accessible or accessible.project_id != project_id:
         raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
 
+    # Bulk resolve writes to GitHub for every item, so require editor rights.
+    _require_drift_editor(db, github_user, project)
+
     resolved_items = _validate_bulk_resolve_items(db, project_id, payload.items)
+    # Validate every target repo up front — the batch is rejected whole rather
+    # than pushing to the valid repos and failing partway.
+    for item, _wf in resolved_items:
+        _require_repo_in_project(db, project, item.repo, github_user)
     token = user_tokens[github_user]
 
     if payload.resolution == "use_github":
@@ -3294,6 +3992,10 @@ def _validate_adopt_github_request(
     accessible = _find_project_by_name(db, github_user, project.project_name)
     if not accessible or accessible.project_id != project.project_id:
         raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
+
+    # Adopting can push to every project repo, so require editor rights.
+    # (_resolve_source_repo below already checks the repo belongs to the project.)
+    _require_drift_editor(db, github_user, project)
 
     workflow = db.query(Workflow).filter_by(workflow_id=payload.workflow_id).first()
     if not workflow:
@@ -3353,8 +4055,12 @@ def _fetch_github_content_and_affected_repos(
     owner: str,
     repo: str,
     token: str,
+    branch: Optional[str] = None,
 ) -> tuple:
     """Fetch GitHub workflow content and identify affected repos.
+
+    ``branch`` is the branch whose drift is being resolved. Falling back to the
+    repo default would adopt a different file than the one the user was shown.
 
     Returns:
         tuple: (github_content, github_sha, affected_repos)
@@ -3362,11 +4068,12 @@ def _fetch_github_content_and_affected_repos(
     Raises:
         HTTPException: If workflow not found on GitHub
     """
-    github_data = get_workflow_from_github(owner, repo, formatted_name, token)
+    github_data = get_workflow_from_github(owner, repo, formatted_name, token, default_branch=branch)
     if not github_data:
+        where = f"{source_repo.repo_name}@{branch}" if branch else source_repo.repo_name
         raise HTTPException(
             status_code=404,
-            detail=f"Workflow '{formatted_name}' not found in {source_repo.repo_name}",
+            detail=f"Workflow '{formatted_name}' not found in {where}",
         )
     github_content = (github_data.get("content") or "").strip()
     github_sha = github_data.get("sha")
@@ -3526,6 +4233,7 @@ def _get_target_repos_for_sync(
 def _handle_sync_direct_push(
     db: Session,
     project: Project,
+    workflow: Workflow,
     source_repo: Repo,
     target_repos: list,
     formatted_name: str,
@@ -3555,8 +4263,17 @@ def _handle_sync_direct_push(
         t_owner, t_repo = r.repo_name.split("/", 1)
         try:
             t_branch = get_default_branch(t_owner, t_repo, headers, github_user, db)
-        except Exception:
-            t_branch = "main"
+        except Exception as e:
+            # Report the failure for this repo instead of pushing to "main" —
+            # if we could not read the repo's metadata we do not know that
+            # "main" even exists, let alone that it is the right target.
+            all_ok = False
+            sync_results["repos"].append({
+                "repo": r.repo_name,
+                "success": False,
+                "error": f"Could not resolve target branch: {e}",
+            })
+            continue
 
         result = _direct_push_workflow_to_branch(
             t_owner, t_repo, t_branch, path, github_content,
@@ -3570,7 +4287,9 @@ def _handle_sync_direct_push(
             "github_sha": result.get("sha"),
             "error": None if ok else result.get("error"),
         })
-        if not ok:
+        if ok:
+            clear_workflow_drift(db, project, workflow.workflow_id, r.repo_name, t_branch)
+        else:
             all_ok = False
 
     project.pr_state = "synced" if all_ok else "draft"
@@ -3688,7 +4407,7 @@ def _handle_adopt_project_and_sync(
 
     if delivery_mode == "direct":
         return _handle_sync_direct_push(
-            db, project, source_repo, target_repos, formatted_name,
+            db, project, workflow, source_repo, target_repos, formatted_name,
             github_content, token, github_user,
         )
 
@@ -3733,7 +4452,7 @@ def adopt_github_version(
 
     # Fetch GitHub content and identify affected repos
     github_content, github_sha, affected_repos = _fetch_github_content_and_affected_repos(
-        db, project, workflow, source_repo, formatted_name, owner, repo, token,
+        db, project, workflow, source_repo, formatted_name, owner, repo, token, payload.branch,
     )
 
     # Handle CREATE_REPO_OVERRIDE mode
@@ -3745,6 +4464,10 @@ def adopt_github_version(
 
     # Update project workflow for ADOPT_LOCAL_ONLY and ADOPT_PROJECT_AND_SYNC
     _update_project_workflow(db, workflow, github_content, github_sha, github_user)
+    # The managed version now matches GitHub in the source repo, so its
+    # persisted drift is resolved. Other repos are left alone — they may
+    # legitimately still drift against the newly adopted content.
+    clear_workflow_drift(db, project, workflow.workflow_id, source_repo.repo_name, payload.branch)
 
     # Handle ADOPT_LOCAL_ONLY mode
     if payload.resolution_mode == ADOPT_LOCAL_ONLY:
@@ -4327,6 +5050,12 @@ def _save_prs_and_update_status(results: dict, project: Project, selected_workfl
 
     if pr_count == 0:
         return 0, None
+    if campaign_id:
+        try:
+            record_campaign_opened(db, project, campaign, results)
+        except Exception as exc:
+            print(f"⚠️ Error recording campaign.opened notification: {exc}")
+            db.rollback()
     _update_project_pr_state(db, project.project_id, "open")
     if all_selected:
         _update_linked_workflow_statuses(db, project.project_id, all_selected)
@@ -5315,6 +6044,15 @@ def _fetch_pr_state_from_github(pr, github_user: str, token: str, db: Session) -
                 pr.pr_state = original_state
                 return original_state
 
+            # Separate try/except from the commit above: the PR-state write is
+            # already durable at this point, so a notification failure here must
+            # never be mistaken for (or trigger a rollback of) that commit.
+            try:
+                record_campaign_pr_transition(db, pr, original_state, pr_state)
+            except Exception as notify_err:
+                print(f"⚠️ Error recording campaign PR transition notification: {notify_err}")
+                db.rollback()
+
         return pr_state
 
     except Exception as e:
@@ -5829,7 +6567,7 @@ def _delete_actions_manager_branch(
             "X-GitHub-Api-Version": "2022-11-28",
             "Authorization": f"token {token}",
         }
-        del_response = requests.delete(delete_url, headers=headers)
+        del_response = requests.delete(delete_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
         if del_response.status_code == 204:
             print(f"✅ Deleted ActionsManager branch '{branch_name}' in {owner}/{repo}")
@@ -5909,6 +6647,26 @@ def _create_pr_merged_version_entries(db, project, pr_number, repo_name):
         db.rollback()
 
 
+def _clear_drift_for_merged_pr(db, project, pr_record) -> None:
+    """Clear persisted drift for the workflows a merged PR restored.
+
+    Scoped to the PR's own workflows and repo: a merge only proves those files
+    now match GitHub, so clearing project-wide would hide real drift elsewhere.
+    """
+    if not pr_record or not pr_record.workflow_names:
+        return
+    names = [n.strip() for n in pr_record.workflow_names.split(",") if n.strip()]
+    if not names:
+        return
+    workflows = db.query(Workflow).join(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project.project_id,
+        Workflow.workflow_name.in_(names),
+    ).all()
+    for wf in workflows:
+        clear_workflow_drift(db, project, wf.workflow_id, pr_record.repo_name,
+                             pr_record.target_branch)
+
+
 def _handle_merged_pull_request(*, response, project, repo_name, pr_number, owner, repo, github_user, db, merge_method):
     """Persist database state and clean up after a successful PR merge; returns the response dict."""
     merge_data = response.json()
@@ -5926,6 +6684,7 @@ def _handle_merged_pull_request(*, response, project, repo_name, pr_number, owne
         pr_record.merged_at = datetime.now(timezone.utc)
         db.commit()
         print(f"✅ Updated PR #{pr_number} state to merged in database")
+        _clear_drift_for_merged_pr(db, project, pr_record)
 
     # Only mark project/workflows as synced when no PRs remain open.
     # Use pr_state='open' (not != 'merged') so a mix of merged + closed PRs
@@ -6471,6 +7230,16 @@ def get_project_pr_campaigns(
                 else None
             )
             if campaign_record is not None:
+                try:
+                    record_campaign_status_transition(
+                        db, campaign_project_id, project_id_map.get(campaign_project_id, project.project_name),
+                        campaign_record, status, open_count, merged_count, closed_count,
+                    )
+                except Exception as exc:
+                    # Never let a notification race (e.g. a concurrent duplicate
+                    # dedup_key insert) turn this read endpoint into a 500.
+                    print(f"⚠️ Error recording campaign.completed notification: {exc}")
+                    db.rollback()
                 campaign_id_str = f"campaign-{campaign_record.campaign_id}"
                 created_by = campaign_record.created_by or next(
                     (pr.author for pr in campaign_prs if pr.author), github_user
@@ -6516,6 +7285,18 @@ def get_project_pr_campaigns(
         campaigns.sort(key=lambda campaign: campaign.updated_at or campaign.created_at, reverse=True)
         pr_items.sort(key=lambda pr: pr.updated_at or pr.created_at, reverse=True)
 
+        # One deferred commit for every campaign.last_known_status update /
+        # notification event queued above, instead of one commit per campaign —
+        # avoids expire_on_commit re-fetching objects still needed by the
+        # response we just built, and keeps this read endpoint resilient to a
+        # notification-write failure (falls back to returning what was already
+        # computed in memory).
+        try:
+            db.commit()
+        except Exception as exc:
+            print(f"⚠️ Error committing campaign notification state: {exc}")
+            db.rollback()
+
         return PRCampaignsResponse(
             campaigns=campaigns,
             pull_requests=pr_items,
@@ -6546,7 +7327,9 @@ def _verify_pr_webhook_signature(payload: bytes, signature: str) -> bool:
         signature: X-Hub-Signature-256 header value
 
     Returns:
-        bool: True if signature is valid (or no secret configured), False otherwise
+        bool: True only if the signature is valid. An unset
+        GITHUB_PR_WEBHOOK_SECRET rejects every request rather than accepting
+        it, so an exposed endpoint with no secret configured is inert.
     """
     if not GITHUB_PR_WEBHOOK_SECRET:
         print("❌ GITHUB_PR_WEBHOOK_SECRET is not set — rejecting webhook to prevent unauthenticated state changes.")
@@ -6576,6 +7359,12 @@ def _handle_pr_merged(db: Session, pr_record, pr_number: int, repo_full_name: st
     pr_record.pr_state = "merged"
     db.commit()
     print(f"✅ Updated PR #{pr_number} state to merged in database")
+
+    # No UI drives this path, so without clearing here the caches keep
+    # reporting drift the merge already fixed until someone opens the project.
+    merged_project = db.query(Project).filter(Project.project_id == project_id).first()
+    if merged_project:
+        _clear_drift_for_merged_pr(db, merged_project, pr_record)
 
     # Only mark project/workflows as synced if ALL remaining PRs are also merged
     remaining_non_merged = db.query(ProjectPullRequest).filter(
@@ -6645,6 +7434,87 @@ def _handle_pr_closed_without_merge(db: Session, pr_record, pr_number: int, repo
     return {"status": "processed", "action": "closed", "pr_number": pr_number, "repo_name": repo_full_name}
 
 
+WEBHOOK_DOCS_URL = "https://actionsmanager.io/guides/WEBHOOK_ENDPOINT.html"
+
+
+def _describe_webhook_reachability(app_url: str) -> Optional[str]:
+    """Why GitHub probably cannot reach ``app_url``, or None if it looks fine.
+
+    Deliberately a heuristic on the configured URL rather than a probe: we
+    cannot ask GitHub to try, and an outbound self-request would succeed from
+    inside the network even when the instance is unreachable from outside —
+    which is exactly the case this is meant to catch.
+    """
+    parsed = urlsplit(app_url)
+    hostname = (parsed.hostname or "").strip("[]")
+
+    if not hostname:
+        return "No APP_URL is configured, so there is no address to give GitHub."
+
+    if _host_is_loopback(hostname):
+        return (
+            f"APP_URL is {app_url}, which only resolves on the machine running "
+            f"ActionsManager. GitHub cannot deliver to it."
+        )
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        # A hostname — could well be public; DNS resolution here would only
+        # tell us what *this* network sees, so treat it as plausible.
+        return None
+
+    if ip.is_private or ip.is_link_local or ip.is_reserved:
+        return (
+            f"APP_URL is {app_url}, a private address. It is reachable on your "
+            f"network but not from GitHub."
+        )
+    return None
+
+
+def get_webhook_readiness() -> dict:
+    """Whether this instance can receive GitHub webhooks, and what is missing.
+
+    Webhooks are optional — delivery and drift detection call out to GitHub and
+    need no inbound access — so this reports status rather than failing
+    anything. It exists so the UI can explain *why* an event-driven feature is
+    unavailable and link to the setup guide, instead of appearing broken.
+    """
+    app_url = resolve_app_url()
+    unreachable_reason = _describe_webhook_reachability(app_url)
+    secret_configured = bool(GITHUB_PR_WEBHOOK_SECRET)
+
+    blockers = []
+    if unreachable_reason:
+        blockers.append(unreachable_reason)
+    if not secret_configured:
+        blockers.append(
+            "GITHUB_PR_WEBHOOK_SECRET is not set. Until it is, every inbound "
+            "webhook is rejected — nothing is exposed, the feature is simply off."
+        )
+
+    return {
+        "ready": not blockers,
+        "public_url_configured": unreachable_reason is None,
+        "secret_configured": secret_configured,
+        "app_url": app_url,
+        "webhook_url": f"{app_url}/webhooks/github" if not unreachable_reason else None,
+        "blockers": blockers,
+        "docs_url": WEBHOOK_DOCS_URL,
+    }
+
+
+@router.get("/api/webhooks/readiness")
+def webhook_readiness():
+    """Report whether GitHub can deliver webhooks to this instance.
+
+    Unauthenticated on purpose: it returns only this instance's own
+    configuration shape — never the secret itself — and the UI needs it to
+    explain an unavailable feature before a user has done anything.
+    """
+    return get_webhook_readiness()
+
+
 @router.post("/webhooks/github")
 async def github_pr_webhook(request: Request, db: Annotated[Session, Depends(get_db)]):
     """
@@ -6707,32 +7577,129 @@ async def github_pr_webhook(request: Request, db: Annotated[Session, Depends(get
     return _handle_pr_closed_without_merge(db, pr_record, pr_number, repo_full_name)
 
 
+def _fetch_branches_page(branches_url: str, headers: dict, params: dict,
+                          owner: str, repo: str, page: int,
+                          user: str = None, db: Session = None):
+    """Fetch a single page of the branches listing. Returns None on API failure."""
+    try:
+        if user and db:
+            return github_get(branches_url, user, db, headers=headers, params=params)
+        return requests.get(branches_url, headers=headers, params=params, timeout=GITHUB_TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        print(f"⚠️ Failed to fetch branches for {owner}/{repo} (page {page}): {e}")
+        return None
+
+
+def _collect_head_shas(payload: list, head_shas: dict) -> None:
+    # The listing already carries each branch's head commit. Capturing
+    # it here is free and lets the recency cache invalidate exactly:
+    # if the head has not moved, the branch has not moved.
+    for b in payload:
+        head_shas[b["name"]] = (b.get("commit") or {}).get("sha")
+
+
+# Reserved cache key for a repo's branch *listing*, as opposed to one branch.
+# '*' is not a legal character in a git ref name, so it can never collide with
+# a real branch stored in the same table.
+BRANCH_LIST_CACHE_KEY = "*"
+
+# ponytail: not a branch-count limit — real repos exit on page 1. This only
+# bounds an upstream that ignores `page` and returns the same page forever,
+# which would otherwise consume all host memory.
+MAX_BRANCH_PAGES = 50
+
+
+def _cached_branch_listing(db: Session, repo_name: str, owner: str, repo: str,
+                           headers: dict, head_shas: Optional[dict]) -> Optional[List[str]]:
+    """Branch listing for a repo, conditional on a stored ETag.
+
+    This was the last chargeable call in a warm drift check: the per-branch
+    Trees reads answer 304 and the recency answers are cached, but the listing
+    itself was fetched in full every time. It supports ETags (verified against
+    the live API), so an unchanged repo now costs nothing at all.
+
+    Returns None when the caller should fall back to the normal paginated
+    fetch — no cache available, a multi-page repo, or any failure.
+    """
+    if db is None or not repo_name:
+        return None
+
+    row = _get_tree_cache_row(db, repo_name, BRANCH_LIST_CACHE_KEY)
+    request_headers = dict(headers)
+    if row and row.etag:
+        request_headers["If-None-Match"] = row.etag
+
+    try:
+        response = requests.get(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/branches",
+            headers=request_headers, params={"per_page": 100, "page": 1},
+            timeout=GITHUB_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code == 304 and row and row.sha_map_json:
+        cached = json.loads(row.sha_map_json)
+        if head_shas is not None:
+            head_shas.update(cached)
+        print(f"🟢 {repo_name} branch listing unchanged (304, no rate-limit cost)")
+        return list(cached.keys())
+
+    if response.status_code != 200:
+        return None
+
+    payload = response.json()
+    if len(payload) >= 100:
+        # Paginated: the stored ETag only covers page 1, so caching it would
+        # replay an incomplete list. Rare enough to just not cache.
+        return None
+
+    listing = {b["name"]: (b.get("commit") or {}).get("sha") for b in payload}
+    if head_shas is not None:
+        head_shas.update(listing)
+    _store_tree_cache(db, repo_name, BRANCH_LIST_CACHE_KEY, listing, response.headers.get("ETag"))
+    return list(listing.keys())
+
+
 def _fetch_all_branches(owner: str, repo: str, headers: dict,
-                        user: str = None, db: Session = None) -> Optional[List[str]]:
-    """Fetch all branch names for a repository using pagination. Returns None on API failure."""
+                        user: str = None, db: Session = None,
+                        head_shas: Optional[dict] = None,
+                        repo_name: str = None) -> Optional[List[str]]:
+    """Fetch all branch names for a repository using pagination. Returns None on API failure.
+
+    Pass a dict as ``head_shas`` to also collect {branch: head_commit_sha} from
+    the same response — the return type stays a plain name list so existing
+    callers and their mocks are unaffected.
+
+    Pass ``repo_name`` to allow a conditional request against a stored ETag,
+    which the drift path does; delivery leaves it unset and always fetches.
+    """
+    if repo_name:
+        cached = _cached_branch_listing(db, repo_name, owner, repo, headers, head_shas)
+        if cached is not None:
+            return cached
+
     branches_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/branches"
     all_branches: List[str] = []
     page = 1
 
-    while True:
+    while page <= MAX_BRANCH_PAGES:
         params = {"per_page": 100, "page": page}
-        try:
-            if user and db:
-                response = github_get(branches_url, user, db, headers=headers, params=params)
-            else:
-                response = requests.get(branches_url, headers=headers, params=params, timeout=30)
-        except requests.RequestException as e:
-            print(f"⚠️ Failed to fetch branches for {owner}/{repo} (page {page}): {e}")
+        response = _fetch_branches_page(branches_url, headers, params, owner, repo, page, user, db)
+        if response is None or response.status_code != 200:
             return None
 
-        if response.status_code != 200:
-            return None
-
-        page_branches = [b["name"] for b in response.json()]
+        payload = response.json()
+        page_branches = [b["name"] for b in payload]
+        if head_shas is not None:
+            _collect_head_shas(payload, head_shas)
         all_branches.extend(page_branches)
         if len(page_branches) < 100:
             break
         page += 1
+    else:
+        print(f"⚠️ {owner}/{repo} branch listing hit the {MAX_BRANCH_PAGES}-page cap; "
+              f"using the first {len(all_branches)} branches")
 
     return all_branches
 
@@ -6756,7 +7723,7 @@ def _is_branch_recent(owner: str, repo: str, branch_name: str, cutoff_date: date
         if user and db:
             response = github_get(commits_url, user, db, headers=headers, params=params)
         else:
-            response = requests.get(commits_url, headers=headers, params=params, timeout=30)
+            response = requests.get(commits_url, headers=headers, params=params, timeout=GITHUB_TIMEOUT_SECONDS)
     except requests.RequestException as e:
         print(f"⚠️ Failed to fetch commits for branch '{branch_name}' in {owner}/{repo}: {e}")
         return False
@@ -6775,15 +7742,67 @@ def _is_branch_recent(owner: str, repo: str, branch_name: str, cutoff_date: date
     return False
 
 
+def _cached_branch_recency(db: Session, repo_name: str, branch: str, head_sha: Optional[str]):
+    """The stored "is this branch recent" answer, if it still applies.
+
+    Only reusable while the branch head is unchanged — then the answer provably
+    cannot have changed, so this never wrongly skips a branch that just became
+    active (which a time-based cache would).
+    """
+    if db is None or not repo_name or not head_sha:
+        return None
+    row = _get_tree_cache_row(db, repo_name, branch)
+    if row is None or row.branch_is_recent is None:
+        return None
+    if row.branch_head_sha != head_sha:
+        return None
+    return row.branch_is_recent
+
+
+def _store_branch_recency(db: Session, repo_name: str, branch: str,
+                          head_sha: Optional[str], is_recent: bool) -> None:
+    if db is None or not repo_name or not head_sha:
+        return
+    repo = db.query(Repo).filter(Repo.repo_name == repo_name).first()
+    if repo is None:
+        return
+    row = _get_tree_cache_row(db, repo_name, branch)
+    if row is None:
+        row = WorkflowTreeCache(repo_id=repo.repo_id, branch=branch)
+        db.add(row)
+    row.branch_is_recent = is_recent
+    row.branch_head_sha = head_sha
+    db.commit()
+
+
 def _filter_branches_by_recency(owner: str, repo: str, matched_branches: List[str],
                                 branch_max_age_days: int, headers: dict,
-                                user: str = None, db: Session = None) -> List[str]:
-    """Filter branches to those with a recent commit; returns matched_branches unchanged when no age limit."""
+                                user: str = None, db: Session = None,
+                                repo_name: str = None, head_shas: Optional[dict] = None) -> List[str]:
+    """Filter branches to those with a recent commit; returns matched_branches unchanged when no age limit.
+
+    ``repo_name``/``head_shas`` enable the recency cache, which the drift path
+    uses: this otherwise costs one API call per matched branch on every check.
+    Delivery leaves them unset and always asks GitHub, since it decides where
+    we actually write.
+    """
     if not branch_max_age_days or branch_max_age_days <= 0:
         return matched_branches
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=branch_max_age_days)
-    recent = [b for b in matched_branches if _is_branch_recent(owner, repo, b, cutoff_date, headers, user, db)]
+    head_shas = head_shas or {}
+    recent = []
+    for b in matched_branches:
+        head_sha = head_shas.get(b)
+        cached = _cached_branch_recency(db, repo_name, b, head_sha)
+        if cached is not None:
+            if cached:
+                recent.append(b)
+            continue
+        is_recent = _is_branch_recent(owner, repo, b, cutoff_date, headers, user, db)
+        _store_branch_recency(db, repo_name, b, head_sha, is_recent)
+        if is_recent:
+            recent.append(b)
     if not recent:
         print(f"⚠️ No branches with commits in last {branch_max_age_days} days, falling back to default branch")
     return recent
@@ -6870,7 +7889,8 @@ def resolve_branch_config_for_repo(db: Session, project: "Project", repo_name: s
 
 def _resolve_branches_for_repo(owner: str, repo: str, branch_option: str,
                                regex_pattern: str, branch_max_age_days: int,
-                               headers: dict, user: str = None, db: Session = None) -> List[str]:
+                               headers: dict, user: str = None, db: Session = None,
+                               recency_cache_repo: str = None) -> List[str]:
     """
     Resolve which branches to update based on the branch option.
 
@@ -6883,6 +7903,10 @@ def _resolve_branches_for_repo(owner: str, repo: str, branch_option: str,
         headers: GitHub API headers
         user: GitHub username (optional, for API tracking)
         db: Database session (optional, for API tracking)
+        recency_cache_repo: "owner/name" to enable the branch-recency cache.
+            Drift passes it (the per-branch commit lookup is its dominant cost);
+            delivery leaves it unset and always asks GitHub, since it decides
+            where we actually write.
 
     Returns:
         List[str]: List of branch names to update
@@ -6890,7 +7914,10 @@ def _resolve_branches_for_repo(owner: str, repo: str, branch_option: str,
     if branch_option != "pattern" or not regex_pattern:
         return [get_default_branch(owner, repo, headers, user, db)]
 
-    all_branches = _fetch_all_branches(owner, repo, headers, user, db)
+    head_shas: dict = {}
+    all_branches = _fetch_all_branches(
+        owner, repo, headers, user, db, head_shas=head_shas, repo_name=recency_cache_repo,
+    )
     if all_branches is None:
         return [get_default_branch(owner, repo, headers, user, db)]
 
@@ -6898,7 +7925,10 @@ def _resolve_branches_for_repo(owner: str, repo: str, branch_option: str,
     if not matched_branches:
         return [get_default_branch(owner, repo, headers, user, db)]
 
-    recent_branches = _filter_branches_by_recency(owner, repo, matched_branches, branch_max_age_days, headers, user, db)
+    recent_branches = _filter_branches_by_recency(
+        owner, repo, matched_branches, branch_max_age_days, headers, user, db,
+        repo_name=recency_cache_repo, head_shas=head_shas,
+    )
     if not recent_branches:
         return [get_default_branch(owner, repo, headers, user, db)]
 
@@ -6920,7 +7950,7 @@ def _ensure_workflows_directory_exists(owner: str, repo: str, branch: str,
     if user and db:
         check_response = github_get(dir_check_url, user, db, headers=headers)
     else:
-        check_response = requests.get(dir_check_url, headers=headers)
+        check_response = requests.get(dir_check_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     # If directory exists (200) or is empty (200 with empty array), we're good
     if check_response.status_code == 200:
@@ -6944,7 +7974,7 @@ def _ensure_workflows_directory_exists(owner: str, repo: str, branch: str,
         if user and db:
             create_response = github_put(gitkeep_url, user, db, json=payload, headers=headers)
         else:
-            create_response = requests.put(gitkeep_url, json=payload, headers=headers)
+            create_response = requests.put(gitkeep_url, json=payload, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if create_response.status_code in [200, 201]:
             print(f"✅ Successfully created .github/workflows directory in {owner}/{repo} on {branch}")
@@ -6969,7 +7999,7 @@ def _check_existing_workflow_content(file_url: str, encoded_content: str, header
     if user and db:
         response = github_get(file_url, user, db, headers=headers)
     else:
-        response = requests.get(file_url, headers=headers)
+        response = requests.get(file_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     if response.status_code == 200:
         github_data = response.json()
@@ -6977,7 +8007,12 @@ def _check_existing_workflow_content(file_url: str, encoded_content: str, header
         existing_content = github_data.get("content", "")
         
         # Compare the content - if it's the same, skip the update
-        content_unchanged = existing_content == encoded_content
+        # GitHub returns base64 wrapped at 60 chars with a trailing newline,
+        # while b64encode produces one unwrapped line — comparing them verbatim
+        # was never equal for a file over ~45 bytes, so "unchanged" never fired.
+        content_unchanged = (
+            "".join(existing_content.split()) == "".join(encoded_content.split())
+        )
         return sha, content_unchanged
     
     return None, False  # File doesn't exist, will be created
@@ -7062,7 +8097,7 @@ def _ensure_reusable_repo_exists(owner: str, repo: str, auth_headers: dict,
         tuple: (True, None) on success, or (False, error_msg) on failure
     """
     repo_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}"
-    check_response = requests.get(repo_url, headers=auth_headers)
+    check_response = requests.get(repo_url, headers=auth_headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
     if check_response.status_code == 200:
         print(f"✅ Repository '{owner}/{repo}' already exists")
@@ -7094,7 +8129,7 @@ def _ensure_reusable_repo_exists(owner: str, repo: str, auth_headers: dict,
         "private": True,
         "auto_init": False,  # branches are initialized later via the Contents API
     }
-    create_response = requests.post(create_url, json=create_payload, headers=auth_headers)
+    create_response = requests.post(create_url, json=create_payload, headers=auth_headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
     if create_response.status_code == 201:
         print(f"✅ Created repository '{owner}/{repo}'")
@@ -7150,7 +8185,7 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
         "message": f"Initialize repository for Actions Manager (project: {project_code})",
         "content": base64.b64encode(readme_content.encode()).decode(),
     }
-    contents_response = requests.put(contents_url, json=contents_payload, headers=auth_headers)
+    contents_response = requests.put(contents_url, json=contents_payload, headers=auth_headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
     if contents_response.status_code in (200, 201):
         commit_sha = contents_response.json()["commit"]["sha"]
@@ -7160,7 +8195,7 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
         # the target branch SHA instead.
         print(f"⚠️ README.md already exists in '{owner}/{repo}', fetching target branch SHA...")
         ref_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/refs/heads/{target_branch}"
-        ref_response = requests.get(ref_url, headers=auth_headers)
+        ref_response = requests.get(ref_url, headers=auth_headers, timeout=GITHUB_TIMEOUT_SECONDS)
         if ref_response.status_code == 200:
             commit_sha = ref_response.json()["object"]["sha"]
             print(f"✅ Got target branch '{target_branch}' SHA: {commit_sha[:8]}")
@@ -7184,7 +8219,7 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
         "ref": f"refs/heads/{target_branch}",
         "sha": commit_sha,
     }
-    target_ref_response = requests.post(ref_url, json=target_ref_payload, headers=auth_headers)
+    target_ref_response = requests.post(ref_url, json=target_ref_payload, headers=auth_headers, timeout=GITHUB_TIMEOUT_SECONDS)
     if target_ref_response.status_code == 201:
         print(f"✅ Created target branch '{target_branch}' in '{owner}/{repo}'")
     elif target_ref_response.status_code == 422:
@@ -7199,7 +8234,7 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
         "ref": f"refs/heads/{am_branch_name}",
         "sha": commit_sha,
     }
-    am_ref_response = requests.post(ref_url, json=am_ref_payload, headers=auth_headers)
+    am_ref_response = requests.post(ref_url, json=am_ref_payload, headers=auth_headers, timeout=GITHUB_TIMEOUT_SECONDS)
     if am_ref_response.status_code == 201:
         print(f"✅ Initialized empty repo '{owner}/{repo}' with AM branch '{am_branch_name}'")
         return am_branch_name, True, None
@@ -7250,7 +8285,7 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
     if user and db:
         target_response = github_get(target_ref_url, user, db, headers=headers)
     else:
-        target_response = requests.get(target_ref_url, headers=headers)
+        target_response = requests.get(target_ref_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     if target_response.status_code != 200:
         if target_response.status_code == 409:
@@ -7268,7 +8303,7 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
             if user and db:
                 commits_response = github_get(commits_url, user, db, headers=headers)
             else:
-                commits_response = requests.get(commits_url, headers=headers)
+                commits_response = requests.get(commits_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
             if commits_response.status_code == 200:
                 try:
@@ -7311,9 +8346,9 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
         headers_with_auth = _get_authenticated_headers(user, headers)
         if not headers_with_auth:
             return None, False, f"User {user} not authenticated"
-        create_response = requests.post(create_ref_url, json=create_payload, headers=headers_with_auth)
+        create_response = requests.post(create_ref_url, json=create_payload, headers=headers_with_auth, timeout=GITHUB_TIMEOUT_SECONDS)
     else:
-        create_response = requests.post(create_ref_url, json=create_payload, headers=headers)
+        create_response = requests.post(create_ref_url, json=create_payload, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     if create_response.status_code == 201:
         print(f"✅ Created Actions Manager branch '{am_branch_name}' in {owner}/{repo}")
@@ -7371,7 +8406,7 @@ def _check_existing_pr(owner: str, repo: str, am_branch: str,
         url_with_params = f"{pulls_url}?head={head_param}&base={target_branch}&state=open"
         response = github_get(url_with_params, user, db, headers=headers)
     else:
-        response = requests.get(pulls_url, params=params, headers=headers)
+        response = requests.get(pulls_url, params=params, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     if response.status_code == 200:
         prs = response.json()
@@ -7430,9 +8465,9 @@ def _create_pull_request(owner: str, repo: str, am_branch: str,
         if not headers_with_auth:
             print(f"❌ User {user} not authenticated")
             return None
-        response = requests.post(pr_url, json=pr_payload, headers=headers_with_auth)
+        response = requests.post(pr_url, json=pr_payload, headers=headers_with_auth, timeout=GITHUB_TIMEOUT_SECONDS)
     else:
-        response = requests.post(pr_url, json=pr_payload, headers=headers)
+        response = requests.post(pr_url, json=pr_payload, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     
     if response.status_code == 201:
         pr_data = response.json()
@@ -7510,7 +8545,7 @@ def _update_workflow_to_github(owner: str, repo: str, workflow: dict,
         if user and db:
             branch_response = github_get(branch_check_url, user, db, headers=headers)
         else:
-            branch_response = requests.get(branch_check_url, headers=headers)
+            branch_response = requests.get(branch_check_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if branch_response.status_code == 404:
             print(f"❌ Branch '{am_branch}' does not exist in {owner}/{repo}")
@@ -7549,7 +8584,7 @@ def _update_workflow_to_github(owner: str, repo: str, workflow: dict,
             put_response = github_put(put_url, user, db, json=payload, headers=headers)
         else:
             print(f"🔍 Using requests.put directly")
-            put_response = requests.put(put_url, json=payload, headers=headers)
+            put_response = requests.put(put_url, json=payload, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
             
         print(f"🔍 PUT response status: {put_response.status_code}")
         if put_response.status_code not in [200, 201]:
@@ -7585,14 +8620,38 @@ def _update_workflow_to_github(owner: str, repo: str, workflow: dict,
     return put_response.status_code, new_sha
 
 
-def _update_workflow_git_hash(db: Session, workflow_name: str, new_sha: str) -> None:
-    """Update the workflow's git hash in the database."""
-    if new_sha:
-        db_workflow = db.query(Workflow).filter_by(workflow_name=workflow_name).first()
-        if db_workflow:
-            db_workflow.workflow_git_hash = new_sha
-            db.commit()
-            print(f"✅ Updated git hash for workflow '{workflow_name}': {new_sha}")
+def _update_workflow_git_hash(db: Session, workflow_name: str, new_sha: str,
+                              project_code: str, is_reusable: bool = False) -> None:
+    """Update the workflow's git hash in the database, scoped to one project.
+
+    Workflow names are deliberately not globally unique — two projects may each
+    own a workflow called "ci". This previously did an unscoped
+    ``filter_by(workflow_name=...).first()``, so committing project A's workflow
+    could stamp A's GitHub blob SHA onto project B's row, corrupting B's drift
+    baseline and making real drift read as "synchronized".
+
+    Note the name arrives unprefixed in both naming modes: ``use_prefix`` is
+    applied only when building the GitHub path, so prefixing does not protect
+    against this collision.
+    """
+    if not new_sha:
+        return
+
+    db_workflow = (
+        db.query(Workflow)
+        .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+        .join(Project, Project.project_id == ProjectWorkflow.project_id)
+        .filter(
+            Project.project_code == project_code,
+            Workflow.workflow_name == workflow_name,
+            Workflow.reusable_workflow == is_reusable,
+        )
+        .first()
+    )
+    if db_workflow:
+        db_workflow.workflow_git_hash = new_sha
+        db.commit()
+        print(f"✅ Updated git hash for workflow '{workflow_name}' in {project_code}: {new_sha}")
 
 
 def _db_update_custom_file_sha(db: Session, file_id: int, new_sha: Optional[str]) -> None:
@@ -7603,6 +8662,315 @@ def _db_update_custom_file_sha(db: Session, file_id: int, new_sha: Optional[str]
     if cf:
         cf.git_hash = new_sha
         db.commit()
+
+
+def _resolve_effective_target_branches(repo_name: str, owner: str, repo: str, project: "Project", db: Session,
+                                        branch_option: str, regex_pattern: str, branch_max_age_days: int,
+                                        headers: dict, user: str) -> tuple:
+    """Resolve target branches for a repo, honoring a project's per-repo branch override when given.
+
+    Returns (target_branches, error_result) — error_result is non-None (and target_branches is
+    None) when branch resolution fails; the caller should return error_result immediately.
+    """
+    if project is not None:
+        cfg = resolve_branch_config_for_repo(db, project, repo_name)
+        eff_option = cfg["branch_option"]
+        eff_regex = cfg["branch_regex"]
+        eff_max_age = cfg["branch_max_age_days"]
+        if not cfg["using_project_default"]:
+            print(
+                f"   🔧 Using repo override for {repo_name}: "
+                f"option={eff_option}, regex={eff_regex!r}, max_age={eff_max_age}"
+            )
+    else:
+        eff_option, eff_regex, eff_max_age = branch_option, regex_pattern, branch_max_age_days
+
+    try:
+        target_branches = _resolve_branches_for_repo(
+            owner, repo, eff_option, eff_regex, eff_max_age, headers, user, db
+        )
+        print(f"🔍 Resolved target branches for {repo_name}: {target_branches}")
+        return target_branches, None
+    except ValueError as e:
+        print(f"❌ Error resolving branches: {str(e)}")
+        return None, {"error": str(e), "status": 400}
+    except Exception as e:
+        print(f"❌ Unexpected error resolving branches: {str(e)}")
+        return None, {"error": f"Failed to resolve branches: {str(e)}", "status": 500}
+
+
+def _commit_workflows_to_branch(workflows: List[dict], owner: str, repo: str, project_code: str, am_branch: str,
+                                 headers: dict, repo_name: str, user: str, db: Session, use_prefix: bool) -> tuple:
+    """Commit each workflow to the AM branch. Returns (workflows_committed, workflow_errors)."""
+    workflows_committed = []
+    workflow_errors = []
+    for workflow in workflows:
+        workflow_name = workflow.get('name', 'unknown')
+        print(f"\n🔍 Committing workflow '{workflow_name}' to {am_branch}")
+        try:
+            status_code, new_sha = _update_workflow_to_github(
+                owner, repo, workflow, project_code, am_branch,
+                headers, repo_name, user, db, use_prefix
+            )
+            if status_code in [200, 201]:
+                workflows_committed.append(workflow_name)
+                print(f"✅ Committed workflow '{workflow_name}' (status: {status_code})")
+                _update_workflow_git_hash(db, workflow_name, new_sha, project_code, is_reusable=False)
+            elif status_code == 204:
+                workflows_committed.append(workflow_name)
+                print(f"📌 Workflow '{workflow_name}' unchanged (status: 204)")
+            else:
+                workflow_errors.append(f"{workflow_name}: HTTP {status_code}")
+                print(f"❌ Failed to commit workflow '{workflow_name}': {status_code}")
+        except Exception as e:
+            workflow_errors.append(f"{workflow_name}: {str(e)}")
+            print(f"❌ Exception committing workflow '{workflow_name}': {str(e)}")
+            import traceback
+            traceback.print_exc()
+    return workflows_committed, workflow_errors
+
+
+def _commit_reusable_workflows_to_branch(rxworkflows: List[dict], owner: str, repo: str, project_code: str,
+                                          am_branch: str, headers: dict, reusable_repo: str, user: str,
+                                          db: Session, use_prefix: bool) -> tuple:
+    """Commit each reusable workflow to the AM branch. Returns (workflows_committed, workflow_errors)."""
+    workflows_committed = []
+    workflow_errors = []
+    for workflow in rxworkflows:
+        workflow_name = workflow.get('name', '').strip()
+        if not workflow_name:
+            print("❌ Reusable workflow name cannot be empty")
+            workflow_errors.append("<empty-name>: Empty workflow name")
+            continue
+
+        print(f"\n🔍 Committing reusable workflow '{workflow_name}' to {am_branch}")
+        try:
+            status_code, new_sha = _update_workflow_to_github(
+                owner, repo, workflow, project_code, am_branch,
+                headers, reusable_repo, user, db, use_prefix
+            )
+            if status_code in [200, 201]:
+                workflows_committed.append(workflow_name)
+                print(f"✅ Committed reusable workflow '{workflow_name}' (status: {status_code})")
+                _update_workflow_git_hash(db, workflow_name, new_sha, project_code, is_reusable=True)
+            elif status_code == 204:
+                workflows_committed.append(workflow_name)
+                print(f"📌 Reusable workflow '{workflow_name}' unchanged (status: 204)")
+            else:
+                workflow_errors.append(f"{workflow_name}: HTTP {status_code}")
+                print(f"❌ Failed to commit reusable workflow '{workflow_name}': {status_code}")
+        except Exception as e:
+            workflow_errors.append(f"{workflow_name}: {str(e)}")
+            print(f"❌ Exception committing reusable workflow '{workflow_name}': {str(e)}")
+            import traceback
+            traceback.print_exc()
+    return workflows_committed, workflow_errors
+
+
+def _delete_custom_file_from_am_branch(owner: str, repo: str, cf_path: str, am_branch: str, project_code: str,
+                                        user: str, db: Session, headers: dict) -> tuple:
+    """Returns (success, error_message)."""
+    sha_resp = github_get(
+        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+        user, db,
+        headers={**headers, "params": {"ref": am_branch}},
+        params={"ref": am_branch},
+    )
+    if sha_resp.status_code == 200:
+        current_sha = sha_resp.json().get("sha")
+        del_resp = requests.delete(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+            headers=headers,
+            json={
+                "message": f"Delete {cf_path} via ActionsManager [{project_code}] [skip ci]",
+                "sha": current_sha,
+                "branch": am_branch,
+            },
+            timeout=GITHUB_TIMEOUT_SECONDS,
+        )
+        if del_resp.status_code in (200, 201):
+            print(f"✅ Deleted custom file '{cf_path}' from {am_branch}")
+            return True, None
+        print(f"❌ Failed to delete custom file '{cf_path}': {del_resp.status_code}")
+        return False, f"{cf_path}: HTTP {del_resp.status_code}"
+    if sha_resp.status_code == 404:
+        print(f"📌 Custom file '{cf_path}' already absent from {am_branch}")
+        return True, None
+    return False, f"{cf_path}: HTTP {sha_resp.status_code} fetching SHA"
+
+
+def _upsert_custom_file_to_am_branch(owner: str, repo: str, cf: dict, am_branch: str, project_code: str,
+                                      user: str, db: Session, headers: dict) -> tuple:
+    """Returns (success, error_message)."""
+    cf_path = cf.get("file_path", "")
+    sha_resp = github_get(
+        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+        user, db,
+        headers=headers,
+        params={"ref": am_branch},
+    )
+    existing_sha = sha_resp.json().get("sha") if sha_resp.status_code == 200 else None
+    put_body: dict = {
+        "message": f"Update {cf_path} via ActionsManager [{project_code}] [skip ci]",
+        "content": base64.b64encode(cf["file_content"].encode()).decode(),
+        "branch": am_branch,
+    }
+    if existing_sha:
+        put_body["sha"] = existing_sha
+    put_resp = requests.put(
+        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+        headers=headers,
+        json=put_body,
+        timeout=GITHUB_TIMEOUT_SECONDS,
+    )
+    if put_resp.status_code in (200, 201):
+        new_sha = put_resp.json().get("content", {}).get("sha")
+        _db_update_custom_file_sha(db, cf["id"], new_sha)
+        print(f"✅ Committed custom file '{cf_path}' (SHA: {new_sha})")
+        return True, None
+    print(f"❌ Failed to commit custom file '{cf_path}': {put_resp.status_code}")
+    return False, f"{cf_path}: HTTP {put_resp.status_code}"
+
+
+def _commit_custom_files_to_branch(custom_files: List[dict], owner: str, repo: str, am_branch: str,
+                                    project_code: str, user: str, db: Session, headers: dict) -> tuple:
+    """Delete or upsert each custom file on the AM branch. Returns (custom_files_committed, custom_file_errors)."""
+    custom_files_committed = []
+    custom_file_errors = []
+    for cf in custom_files:
+        cf_path = cf.get("file_path", "")
+        try:
+            if cf.get("pending_delete"):
+                success, error = _delete_custom_file_from_am_branch(
+                    owner, repo, cf_path, am_branch, project_code, user, db, headers
+                )
+            else:
+                success, error = _upsert_custom_file_to_am_branch(
+                    owner, repo, cf, am_branch, project_code, user, db, headers
+                )
+            if success:
+                custom_files_committed.append(cf_path)
+            else:
+                custom_file_errors.append(error)
+        except Exception as e:
+            custom_file_errors.append(f"{cf_path}: {str(e)}")
+            print(f"❌ Exception committing custom file '{cf_path}': {str(e)}")
+    return custom_files_committed, custom_file_errors
+
+
+def _commit_codeowners_to_branch(codeowners_for_repo: Optional[dict], owner: str, repo: str, am_branch: str,
+                                  project_code: str, user: str, db: Session, headers: dict) -> tuple:
+    """Commit CODEOWNERS to the same AM branch as workflows/custom files, so it rides the same PR.
+
+    Returns (codeowners_committed_path, error_message) — both empty/None when there's nothing to commit.
+    """
+    if not codeowners_for_repo:
+        return "", None
+    co_path = codeowners_for_repo["file_path"]
+    try:
+        sha_resp = github_get(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_path}",
+            user, db,
+            headers=headers,
+            params={"ref": am_branch},
+        )
+        existing_sha = sha_resp.json().get("sha") if sha_resp.status_code == 200 else None
+        put_body = {
+            "message": f"Update {co_path} via ActionsManager [{project_code}] [skip ci]",
+            "content": base64.b64encode(codeowners_for_repo["content"].encode()).decode(),
+            "branch": am_branch,
+        }
+        if existing_sha:
+            put_body["sha"] = existing_sha
+        put_resp = requests.put(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_path}",
+            headers=headers,
+            json=put_body,
+            timeout=GITHUB_TIMEOUT_SECONDS,
+        )
+        if put_resp.status_code in (200, 201):
+            new_co_sha = put_resp.json().get("content", {}).get("sha")
+            _mark_codeowners_committed(
+                db, codeowners_for_repo["project_id"], codeowners_for_repo["repo_id"], new_co_sha
+            )
+            print(f"✅ Committed CODEOWNERS '{co_path}' to {am_branch}")
+            return co_path, None
+        print(f"❌ Failed to commit CODEOWNERS '{co_path}': {put_resp.status_code}")
+        return "", f"{co_path}: HTTP {put_resp.status_code}"
+    except Exception as e:
+        print(f"❌ Exception committing CODEOWNERS '{co_path}': {str(e)}")
+        return "", f"{co_path}: {str(e)}"
+
+
+def _build_pr_error_result(workflows_committed: list, workflow_errors: list, custom_files_result: Optional[dict],
+                            am_branch: str, target_branch: str, progress_callback, result_key: str) -> dict:
+    print(f"❌ Failed to create PR for {am_branch} -> {target_branch}")
+    result = {
+        "status": "error",
+        "error": PR_CREATION_FAILED,
+        "workflows_committed": workflows_committed,
+        "workflow_errors": workflow_errors,
+    }
+    if custom_files_result is not None:
+        result["custom_files_committed"] = custom_files_result.get("custom_files_committed")
+        result["custom_file_errors"] = custom_files_result.get("custom_file_errors")
+    if progress_callback:
+        progress_callback(result_key, PROGRESS_OPENING_PR, "error", PR_CREATION_FAILED)
+    return result
+
+
+def _build_pr_success_result(pr: dict, existing_pr: Optional[dict], am_branch: str, workflows_committed: list,
+                              workflow_errors: list, custom_files_result: Optional[dict],
+                              progress_callback, result_key: str) -> dict:
+    print(f"✅ {'Updated existing' if existing_pr else 'Created new'} PR #{pr['number']}: {pr['html_url']}")
+    result = {
+        "status": "pr_updated" if existing_pr else "pr_created",
+        "pr_url": pr['html_url'],
+        "pr_number": pr['number'],
+        "pr_title": pr.get('title'),
+        "pr_author": (pr.get('user') or {}).get('login'),
+        "pr_body": pr.get('body'),
+        "branch_name": am_branch,
+        "workflows_committed": workflows_committed,
+    }
+    if custom_files_result is not None:
+        result["custom_files_committed"] = custom_files_result.get("custom_files_committed")
+        result["codeowners_committed"] = custom_files_result.get("codeowners_committed")
+    if workflow_errors:
+        result["workflow_errors"] = workflow_errors
+    if custom_files_result is not None and custom_files_result.get("custom_file_errors"):
+        result["custom_file_errors"] = custom_files_result.get("custom_file_errors")
+    if progress_callback:
+        progress_callback(result_key, PROGRESS_OPENING_PR, "completed")
+    return result
+
+
+def _finalize_pr_result(owner: str, repo: str, am_branch: str, target_branch: str, headers: dict, user: str,
+                         db: Session, project_code: str, workflows_committed: list, workflow_errors: list,
+                         progress_callback, result_key: str,
+                         custom_files_result: Optional[dict] = None) -> dict:
+    """Resolve existing-PR-update vs new-PR-create and shape the per-branch result dict.
+
+    Shared by the regular and reusable workflow update flows — pass custom_files_result
+    (a dict with custom_files_committed/custom_file_errors/codeowners_committed keys) to
+    include the custom-files/CODEOWNERS keys the regular flow needs; leave it None (the
+    reusable flow's case) to omit them entirely.
+    """
+    existing_pr = _check_existing_pr(owner, repo, am_branch, target_branch, headers, user, db)
+    pr = existing_pr or _create_pull_request(
+        owner, repo, am_branch, target_branch, project_code, workflows_committed, headers, user, db
+    )
+
+    if not pr:
+        return _build_pr_error_result(
+            workflows_committed, workflow_errors, custom_files_result,
+            am_branch, target_branch, progress_callback, result_key
+        )
+
+    return _build_pr_success_result(
+        pr, existing_pr, am_branch, workflows_committed, workflow_errors,
+        custom_files_result, progress_callback, result_key
+    )
 
 
 def _process_regular_workflows_update(repo_names: List[str], workflows: List[dict],
@@ -7648,283 +9016,74 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
         owner, repo = repo_name.split("/")
         codeowners_for_repo = codeowners_files.get(repo_name)
 
-        # Resolve effective per-repo branch config when the caller passed a
-        # project; otherwise fall back to the project-level args supplied.
-        if project is not None:
-            cfg = resolve_branch_config_for_repo(db, project, repo_name)
-            eff_option = cfg["branch_option"]
-            eff_regex = cfg["branch_regex"]
-            eff_max_age = cfg["branch_max_age_days"]
-            if not cfg["using_project_default"]:
-                print(
-                    f"   🔧 Using repo override for {repo_name}: "
-                    f"option={eff_option}, regex={eff_regex!r}, max_age={eff_max_age}"
-                )
-        else:
-            eff_option, eff_regex, eff_max_age = branch_option, regex_pattern, branch_max_age_days
+        target_branches, branch_error = _resolve_effective_target_branches(
+            repo_name, owner, repo, project, db, branch_option, regex_pattern, branch_max_age_days, headers, user
+        )
+        if branch_error:
+            return branch_error
 
-        try:
-            target_branches = _resolve_branches_for_repo(
-                owner, repo, eff_option, eff_regex, eff_max_age, headers, user, db
-            )
-            print(f"🔍 Resolved target branches for {repo_name}: {target_branches}")
-        except ValueError as e:
-            print(f"❌ Error resolving branches: {str(e)}")
-            return {"error": str(e), "status": 400}
-        except Exception as e:
-            print(f"❌ Unexpected error resolving branches: {str(e)}")
-            return {"error": f"Failed to resolve branches: {str(e)}", "status": 500}
-        
         # Process each target branch separately
         for target_branch in target_branches:
             print(f"\n🔍 Processing target branch: {target_branch}")
+            result_key = f"{repo_name} on {target_branch}"
             if progress_callback:
-                progress_callback(f"{repo_name} on {target_branch}", PROGRESS_CREATING_BRANCH, "running")
-            
+                progress_callback(result_key, PROGRESS_CREATING_BRANCH, "running")
+
             # Step 1: Create or get the Actions Manager dedicated branch
             am_branch, branch_created, error_msg = _create_or_get_am_branch(
                 owner, repo, target_branch, project_code, headers, user, db
             )
-            
+
             if not am_branch:
                 print(f"❌ Failed to create/get AM branch: {error_msg}")
-                results[f"{repo_name} on {target_branch}"] = {
-                    "status": "error",
-                    "error": error_msg
-                }
+                results[result_key] = {"status": "error", "error": error_msg}
                 if progress_callback:
-                    progress_callback(f"{repo_name} on {target_branch}", PROGRESS_CREATING_BRANCH, "error", error_msg)
+                    progress_callback(result_key, PROGRESS_CREATING_BRANCH, "error", error_msg)
                 continue
-            
+
             print(f"{'✅ Created' if branch_created else '📌 Using existing'} AM branch: {am_branch}")
             if progress_callback:
-                progress_callback(f"{repo_name} on {target_branch}", PROGRESS_COMMITTING_FILES, "running")
-            
-            # Step 2: Commit all workflows to the AM branch
-            workflows_committed = []
-            workflow_errors = []
-            
-            for workflow in workflows:
-                workflow_name = workflow.get('name', 'unknown')
-                print(f"\n🔍 Committing workflow '{workflow_name}' to {am_branch}")
-                
-                try:
-                    status_code, new_sha = _update_workflow_to_github(
-                        owner, repo, workflow, project_code, am_branch, 
-                        headers, repo_name, user, db, use_prefix
-                    )
-                    
-                    if status_code in [200, 201]:
-                        workflows_committed.append(workflow_name)
-                        print(f"✅ Committed workflow '{workflow_name}' (status: {status_code})")
-                        # Update DB with new SHA
-                        _update_workflow_git_hash(db, workflow_name, new_sha)
-                    elif status_code == 204:
-                        # Content unchanged, still count as committed
-                        workflows_committed.append(workflow_name)
-                        print(f"📌 Workflow '{workflow_name}' unchanged (status: 204)")
-                    else:
-                        workflow_errors.append(f"{workflow_name}: HTTP {status_code}")
-                        print(f"❌ Failed to commit workflow '{workflow_name}': {status_code}")
-                        
-                except Exception as e:
-                    workflow_errors.append(f"{workflow_name}: {str(e)}")
-                    print(f"❌ Exception committing workflow '{workflow_name}': {str(e)}")
-                    import traceback
-                    traceback.print_exc()
-            
-            # Step 2b: Commit custom files to the same AM branch
-            custom_files_committed = []
-            custom_file_errors = []
-            for cf in custom_files:
-                cf_path = cf.get("file_path", "")
-                try:
-                    if cf.get("pending_delete"):
-                        # Fetch current SHA on am_branch then delete
-                        sha_resp = github_get(
-                            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
-                            user, db,
-                            headers={**headers, "params": {"ref": am_branch}},
-                            params={"ref": am_branch},
-                        )
-                        if sha_resp.status_code == 200:
-                            current_sha = sha_resp.json().get("sha")
-                            del_resp = requests.delete(
-                                f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
-                                headers=headers,
-                                json={
-                                    "message": f"Delete {cf_path} via ActionsManager [{project_code}] [skip ci]",
-                                    "sha": current_sha,
-                                    "branch": am_branch,
-                                },
-                                timeout=30,
-                            )
-                            if del_resp.status_code in (200, 201):
-                                custom_files_committed.append(cf_path)
-                                print(f"✅ Deleted custom file '{cf_path}' from {am_branch}")
-                            else:
-                                custom_file_errors.append(f"{cf_path}: HTTP {del_resp.status_code}")
-                                print(f"❌ Failed to delete custom file '{cf_path}': {del_resp.status_code}")
-                        elif sha_resp.status_code == 404:
-                            # File doesn't exist on this branch; treat as already deleted
-                            custom_files_committed.append(cf_path)
-                            print(f"📌 Custom file '{cf_path}' already absent from {am_branch}")
-                        else:
-                            custom_file_errors.append(f"{cf_path}: HTTP {sha_resp.status_code} fetching SHA")
-                    else:
-                        import base64 as _b64
-                        # Fetch existing SHA if the file already exists (required for updates)
-                        sha_resp = github_get(
-                            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
-                            user, db,
-                            headers=headers,
-                            params={"ref": am_branch},
-                        )
-                        existing_sha = sha_resp.json().get("sha") if sha_resp.status_code == 200 else None
-                        put_body: dict = {
-                            "message": f"Update {cf_path} via ActionsManager [{project_code}] [skip ci]",
-                            "content": _b64.b64encode(cf["file_content"].encode()).decode(),
-                            "branch": am_branch,
-                        }
-                        if existing_sha:
-                            put_body["sha"] = existing_sha
-                        put_resp = requests.put(
-                            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
-                            headers=headers,
-                            json=put_body,
-                            timeout=30,
-                        )
-                        if put_resp.status_code in (200, 201):
-                            new_sha = put_resp.json().get("content", {}).get("sha")
-                            custom_files_committed.append(cf_path)
-                            # Update git_hash in DB immediately so drift detection is accurate
-                            _db_update_custom_file_sha(db, cf["id"], new_sha)
-                            print(f"✅ Committed custom file '{cf_path}' (SHA: {new_sha})")
-                        else:
-                            custom_file_errors.append(f"{cf_path}: HTTP {put_resp.status_code}")
-                            print(f"❌ Failed to commit custom file '{cf_path}': {put_resp.status_code}")
-                except Exception as e:
-                    custom_file_errors.append(f"{cf_path}: {str(e)}")
-                    print(f"❌ Exception committing custom file '{cf_path}': {str(e)}")
+                progress_callback(result_key, PROGRESS_COMMITTING_FILES, "running")
 
-            # Step 2c: Commit CODEOWNERS to the same AM branch — keeps it in this
-            # repo's existing PR instead of opening a second, CODEOWNERS-only PR.
-            codeowners_committed = ""
-            if codeowners_for_repo:
-                co_path = codeowners_for_repo["file_path"]
-                try:
-                    sha_resp = github_get(
-                        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_path}",
-                        user, db,
-                        headers=headers,
-                        params={"ref": am_branch},
-                    )
-                    existing_sha = sha_resp.json().get("sha") if sha_resp.status_code == 200 else None
-                    put_body = {
-                        "message": f"Update {co_path} via ActionsManager [{project_code}] [skip ci]",
-                        "content": base64.b64encode(codeowners_for_repo["content"].encode()).decode(),
-                        "branch": am_branch,
-                    }
-                    if existing_sha:
-                        put_body["sha"] = existing_sha
-                    put_resp = requests.put(
-                        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_path}",
-                        headers=headers,
-                        json=put_body,
-                        timeout=30,
-                    )
-                    if put_resp.status_code in (200, 201):
-                        codeowners_committed = co_path
-                        new_co_sha = put_resp.json().get("content", {}).get("sha")
-                        _mark_codeowners_committed(
-                            db, codeowners_for_repo["project_id"], codeowners_for_repo["repo_id"], new_co_sha
-                        )
-                        print(f"✅ Committed CODEOWNERS '{co_path}' to {am_branch}")
-                    else:
-                        custom_file_errors.append(f"{co_path}: HTTP {put_resp.status_code}")
-                        print(f"❌ Failed to commit CODEOWNERS '{co_path}': {put_resp.status_code}")
-                except Exception as e:
-                    custom_file_errors.append(f"{co_path}: {str(e)}")
-                    print(f"❌ Exception committing CODEOWNERS '{co_path}': {str(e)}")
+            # Step 2: commit workflows, custom files, and CODEOWNERS to the AM branch
+            workflows_committed, workflow_errors = _commit_workflows_to_branch(
+                workflows, owner, repo, project_code, am_branch, headers, repo_name, user, db, use_prefix
+            )
+            custom_files_committed, custom_file_errors = _commit_custom_files_to_branch(
+                custom_files, owner, repo, am_branch, project_code, user, db, headers
+            )
+            codeowners_committed, codeowners_error = _commit_codeowners_to_branch(
+                codeowners_for_repo, owner, repo, am_branch, project_code, user, db, headers
+            )
+            if codeowners_error:
+                custom_file_errors.append(codeowners_error)
 
             if not workflows_committed and not custom_files_committed and not codeowners_committed:
                 print(f"❌ No workflows, custom files, or CODEOWNERS were successfully committed to {am_branch}")
-                results[f"{repo_name} on {target_branch}"] = {
+                results[result_key] = {
                     "status": "error",
                     "error": NO_WORKFLOWS_COMMITTED,
                     "workflow_errors": workflow_errors,
                     "custom_file_errors": custom_file_errors,
                 }
                 if progress_callback:
-                    progress_callback(f"{repo_name} on {target_branch}", PROGRESS_COMMITTING_FILES, "error", NO_WORKFLOWS_COMMITTED)
+                    progress_callback(result_key, PROGRESS_COMMITTING_FILES, "error", NO_WORKFLOWS_COMMITTED)
                 continue
 
-            # Step 3: Check if PR already exists
+            # Step 3/4: update existing PR, or create a new one
             if progress_callback:
-                progress_callback(f"{repo_name} on {target_branch}", PROGRESS_OPENING_PR, "running")
-            existing_pr = _check_existing_pr(owner, repo, am_branch, target_branch, headers, user, db)
-            
-            if existing_pr:
-                # PR exists, commits are already on the branch so it auto-updates
-                print(f"✅ Updated existing PR #{existing_pr['number']}: {existing_pr['html_url']}")
-                results[f"{repo_name} on {target_branch}"] = {
-                    "status": "pr_updated",
-                    "pr_url": existing_pr['html_url'],
-                    "pr_number": existing_pr['number'],
-                    "pr_title": existing_pr.get('title'),
-                    "pr_author": (existing_pr.get('user') or {}).get('login'),
-                    "pr_body": existing_pr.get('body'),
-                    "branch_name": am_branch,
-                    "workflows_committed": workflows_committed,
+                progress_callback(result_key, PROGRESS_OPENING_PR, "running")
+            results[result_key] = _finalize_pr_result(
+                owner, repo, am_branch, target_branch, headers, user, db,
+                project_code, workflows_committed, workflow_errors,
+                progress_callback, result_key,
+                custom_files_result={
                     "custom_files_committed": custom_files_committed,
+                    "custom_file_errors": custom_file_errors,
                     "codeowners_committed": codeowners_committed,
-                }
-                if workflow_errors:
-                    results[f"{repo_name} on {target_branch}"]["workflow_errors"] = workflow_errors
-                if custom_file_errors:
-                    results[f"{repo_name} on {target_branch}"]["custom_file_errors"] = custom_file_errors
-                if progress_callback:
-                    progress_callback(f"{repo_name} on {target_branch}", PROGRESS_OPENING_PR, "completed")
-            else:
-                # Step 4: Create new PR
-                new_pr = _create_pull_request(
-                    owner, repo, am_branch, target_branch, project_code,
-                    workflows_committed, headers, user, db
-                )
+                },
+            )
 
-                if new_pr:
-                    print(f"✅ Created new PR #{new_pr['number']}: {new_pr['html_url']}")
-                    results[f"{repo_name} on {target_branch}"] = {
-                        "status": "pr_created",
-                        "pr_url": new_pr['html_url'],
-                        "pr_number": new_pr['number'],
-                        "pr_title": new_pr.get('title'),
-                        "pr_author": (new_pr.get('user') or {}).get('login'),
-                        "pr_body": new_pr.get('body'),
-                        "branch_name": am_branch,
-                        "workflows_committed": workflows_committed,
-                        "custom_files_committed": custom_files_committed,
-                        "codeowners_committed": codeowners_committed,
-                    }
-                    if workflow_errors:
-                        results[f"{repo_name} on {target_branch}"]["workflow_errors"] = workflow_errors
-                    if custom_file_errors:
-                        results[f"{repo_name} on {target_branch}"]["custom_file_errors"] = custom_file_errors
-                    if progress_callback:
-                        progress_callback(f"{repo_name} on {target_branch}", PROGRESS_OPENING_PR, "completed")
-                else:
-                    print(f"❌ Failed to create PR for {am_branch} -> {target_branch}")
-                    results[f"{repo_name} on {target_branch}"] = {
-                        "status": "error",
-                        "error": PR_CREATION_FAILED,
-                        "workflows_committed": workflows_committed,
-                        "workflow_errors": workflow_errors,
-                        "custom_files_committed": custom_files_committed,
-                        "custom_file_errors": custom_file_errors,
-                    }
-                    if progress_callback:
-                        progress_callback(f"{repo_name} on {target_branch}", PROGRESS_OPENING_PR, "error", PR_CREATION_FAILED)
-    
     print(f"\n🔍 _process_regular_workflows_update complete. Results: {results}")
     return results
 
@@ -7969,134 +9128,51 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
     # Process each target branch separately
     for target_branch in target_branches:
         print(f"\n🔍 Processing target branch: {target_branch}")
+        result_key = f"{reusable_repo} on {target_branch}"
         if progress_callback:
-            progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_CREATING_BRANCH, "running")
-            
+            progress_callback(result_key, PROGRESS_CREATING_BRANCH, "running")
+
         # Step 1: Create or get the Actions Manager dedicated branch
         am_branch, branch_created, error_msg = _create_or_get_am_branch(
             owner, repo, target_branch, project_code, headers, user, db
         )
-        
+
         if not am_branch:
             print(f"❌ Failed to create/get AM branch: {error_msg}")
-            results[f"{reusable_repo} on {target_branch}"] = {
-                "status": "error",
-                "error": error_msg
-            }
+            results[result_key] = {"status": "error", "error": error_msg}
             if progress_callback:
-                progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_CREATING_BRANCH, "error", error_msg)
+                progress_callback(result_key, PROGRESS_CREATING_BRANCH, "error", error_msg)
             continue
-        
+
         print(f"{'✅ Created' if branch_created else '📌 Using existing'} AM branch: {am_branch}")
         if progress_callback:
-            progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_COMMITTING_FILES, "running")
-        
+            progress_callback(result_key, PROGRESS_COMMITTING_FILES, "running")
+
         # Step 2: Commit all reusable workflows to the AM branch
-        workflows_committed = []
-        workflow_errors = []
-        
-        for workflow in rxworkflows:
-            workflow_name = workflow.get('name', '').strip()
-            
-            if not workflow_name:
-                print(f"❌ Reusable workflow name cannot be empty")
-                workflow_errors.append("<empty-name>: Empty workflow name")
-                continue
-            
-            print(f"\n🔍 Committing reusable workflow '{workflow_name}' to {am_branch}")
-            
-            try:
-                status_code, new_sha = _update_workflow_to_github(
-                    owner, repo, workflow, project_code, am_branch,
-                    headers, reusable_repo, user, db, use_prefix
-                )
-                
-                if status_code in [200, 201]:
-                    workflows_committed.append(workflow_name)
-                    print(f"✅ Committed reusable workflow '{workflow_name}' (status: {status_code})")
-                    # Update DB with new SHA
-                    _update_workflow_git_hash(db, workflow_name, new_sha)
-                elif status_code == 204:
-                    # Content unchanged, still count as committed
-                    workflows_committed.append(workflow_name)
-                    print(f"📌 Reusable workflow '{workflow_name}' unchanged (status: 204)")
-                else:
-                    workflow_errors.append(f"{workflow_name}: HTTP {status_code}")
-                    print(f"❌ Failed to commit reusable workflow '{workflow_name}': {status_code}")
-                    
-            except Exception as e:
-                workflow_errors.append(f"{workflow_name}: {str(e)}")
-                print(f"❌ Exception committing reusable workflow '{workflow_name}': {str(e)}")
-                import traceback
-                traceback.print_exc()
-        
+        workflows_committed, workflow_errors = _commit_reusable_workflows_to_branch(
+            rxworkflows, owner, repo, project_code, am_branch, headers, reusable_repo, user, db, use_prefix
+        )
+
         if not workflows_committed:
             print(f"❌ No reusable workflows were successfully committed to {am_branch}")
-            results[f"{reusable_repo} on {target_branch}"] = {
+            results[result_key] = {
                 "status": "error",
                 "error": NO_WORKFLOWS_COMMITTED,
                 "workflow_errors": workflow_errors
             }
             if progress_callback:
-                progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_COMMITTING_FILES, "error", NO_WORKFLOWS_COMMITTED)
+                progress_callback(result_key, PROGRESS_COMMITTING_FILES, "error", NO_WORKFLOWS_COMMITTED)
             continue
-        
-        # Step 3: Check if PR already exists
+
+        # Step 3/4: update existing PR, or create a new one
         if progress_callback:
-            progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_OPENING_PR, "running")
-        existing_pr = _check_existing_pr(owner, repo, am_branch, target_branch, headers, user, db)
-        
-        if existing_pr:
-            # PR exists, commits are already on the branch so it auto-updates
-            print(f"✅ Updated existing PR #{existing_pr['number']}: {existing_pr['html_url']}")
-            results[f"{reusable_repo} on {target_branch}"] = {
-                "status": "pr_updated",
-                "pr_url": existing_pr['html_url'],
-                "pr_number": existing_pr['number'],
-                "pr_title": existing_pr.get('title'),
-                "pr_author": (existing_pr.get('user') or {}).get('login'),
-                "pr_body": existing_pr.get('body'),
-                "branch_name": am_branch,
-                "workflows_committed": workflows_committed
-            }
-            if workflow_errors:
-                results[f"{reusable_repo} on {target_branch}"]["workflow_errors"] = workflow_errors
-            if progress_callback:
-                progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_OPENING_PR, "completed")
-        else:
-            # Step 4: Create new PR
-            new_pr = _create_pull_request(
-                owner, repo, am_branch, target_branch, project_code,
-                workflows_committed, headers, user, db
-            )
-            
-            if new_pr:
-                print(f"✅ Created new PR #{new_pr['number']}: {new_pr['html_url']}")
-                results[f"{reusable_repo} on {target_branch}"] = {
-                    "status": "pr_created",
-                    "pr_url": new_pr['html_url'],
-                    "pr_number": new_pr['number'],
-                    "pr_title": new_pr.get('title'),
-                    "pr_author": (new_pr.get('user') or {}).get('login'),
-                    "pr_body": new_pr.get('body'),
-                    "branch_name": am_branch,
-                    "workflows_committed": workflows_committed
-                }
-                if workflow_errors:
-                    results[f"{reusable_repo} on {target_branch}"]["workflow_errors"] = workflow_errors
-                if progress_callback:
-                    progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_OPENING_PR, "completed")
-            else:
-                print(f"❌ Failed to create PR for {am_branch} -> {target_branch}")
-                results[f"{reusable_repo} on {target_branch}"] = {
-                    "status": "error",
-                    "error": PR_CREATION_FAILED,
-                    "workflows_committed": workflows_committed,
-                    "workflow_errors": workflow_errors
-                }
-                if progress_callback:
-                    progress_callback(f"{reusable_repo} on {target_branch}", PROGRESS_OPENING_PR, "error", PR_CREATION_FAILED)
-    
+            progress_callback(result_key, PROGRESS_OPENING_PR, "running")
+        results[result_key] = _finalize_pr_result(
+            owner, repo, am_branch, target_branch, headers, user, db,
+            project_code, workflows_committed, workflow_errors,
+            progress_callback, result_key,
+        )
+
     print(f"\n🔍 _process_reusable_workflows_update complete. Results: {results}")
     return results
 
@@ -8369,6 +9445,22 @@ async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_d
                     client, repo_name, formatted_workflow_name, workflow_name, headers
                 )
 
+        # Persisted drift compares the managed version against a file that no
+        # longer exists in these repos, so it is stale. Scoped to repos the
+        # delete actually succeeded in - a failed one may still be drifted.
+        deleted_repos = [
+            name for name, outcome in results.items()
+            if isinstance(outcome, dict) and outcome.get("deleted")
+        ]
+        if deleted_repos:
+            deleted_wf = db.query(Workflow).join(ProjectWorkflow).filter(
+                ProjectWorkflow.project_id == project.project_id,
+                Workflow.workflow_name.ilike(workflow_name),
+            ).first()
+            if deleted_wf:
+                for repo_name in deleted_repos:
+                    clear_workflow_drift(db, project, deleted_wf.workflow_id, repo_name)
+
         return {"message": "✅ Workflow deletions completed!", "results": results}
 
     except HTTPException:
@@ -8587,6 +9679,9 @@ async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(ge
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found in project '{project_name}'")
 
         print(f"📌 Debug: Found Workflow '{workflow_name}' with ID {workflow.workflow_id}")
+        # Captured up front: the instance is detached after the commit below
+        # when the workflow itself gets deleted.
+        deleted_workflow_id = workflow.workflow_id
 
         # ✅ Remove association from current project
         deleted_associations = db.query(ProjectWorkflow).filter(
@@ -8595,19 +9690,14 @@ async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(ge
         ).delete()
         print(f"📌 Removed {deleted_associations} associations from project '{project_name}'")
 
-        # 🔧 FIX: Only delete workflow if no other projects are using it
-        remaining_associations = db.query(ProjectWorkflow).filter(
-            ProjectWorkflow.workflow_id == workflow.workflow_id
-        ).count()
-        
-        if remaining_associations == 0:
-            print(f"📌 No other projects use workflow '{workflow_name}' - deleting completely")
-            db.delete(workflow)
-        else:
-            print(f"📌 Workflow '{workflow_name}' is used by {remaining_associations} other project(s) - keeping it")
+        # A workflow belongs to exactly one project (unique index on
+        # project_workflows.workflow_id), so removing the association above
+        # always leaves it orphaned — there is no other project to keep it for.
+        db.delete(workflow)
 
         # ✅ Commit changes
         db.commit()
+        drop_workflow_drift(db, project, deleted_workflow_id)
         print(f"✅ Successfully removed workflow '{workflow_name}' from project '{project_name}'")
 
         return {"message": f"✅ Workflow '{workflow_name}' removed from project '{project_name}'!"}

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from database import get_db
 from auth import user_tokens
-from models import Project, Account, Repo, Workflow, ProjectRepo, ProjectWorkflow, ProjectSecret, ProjectEnvVar
+from models import Project, Account, Repo, Workflow, ProjectRepo, ProjectWorkflow, ProjectSecret, ProjectEnvVar, ProjectDisplayOrder
 from workflows import cleanup_orphaned_workflows
 
 router = APIRouter()
@@ -42,6 +42,24 @@ class DeleteProjectRequest(BaseModel):
     delete_deployment_environments: bool = True
 
 
+def _tracked_names_for_project(project: Optional[Project], db: Optional[Session], model, name_attr: str) -> Optional[Set[str]]:
+    """DB-tracked names for a no-prefix project, or None to signal prefix matching should be used instead."""
+    if not (project and db and not project.use_prefix):
+        return None
+    print(_DEBUG_NO_PREFIX_LOOKUP)
+    rows = db.query(model).filter(model.project_id == project.project_id).all()
+    tracked_names = {getattr(row, name_attr) for row in rows}
+    print(f"🔍 Debug: Tracked names in database: {tracked_names}")
+    return tracked_names
+
+
+def _belongs_to_project(name: str, tracked_names: Optional[Set[str]], project_prefix: str) -> bool:
+    """Whether a GitHub secret/variable name belongs to the project, per tracked-names-or-prefix rule shared by every fetch/delete function below."""
+    if tracked_names is not None:
+        return name in tracked_names
+    return bool(project_prefix) and name.startswith(project_prefix)
+
+
 def _fetch_repository_secrets(repo_name: str, headers: Dict[str, str], project_prefix: str, project: Project = None, db: Session = None) -> List[Dict[str, Any]]:
     """Fetch repository secrets that match the project prefix or are tracked in database."""
     secrets = []
@@ -58,24 +76,10 @@ def _fetch_repository_secrets(repo_name: str, headers: Dict[str, str], project_p
             
             if all_secrets:
                 print(f"🔍 Debug: All secret names: {[s['name'] for s in all_secrets]}")
-                
-                # For no_prefix projects, use database to identify project secrets
-                if project and db and not project.use_prefix:
-                    print(_DEBUG_NO_PREFIX_LOOKUP)
-                    db_secrets = db.query(ProjectSecret).filter(
-                        ProjectSecret.project_id == project.project_id
-                    ).all()
-                    tracked_names = {s.secret_name for s in db_secrets}
-                    print(f"🔍 Debug: Tracked secret names in database: {tracked_names}")
-                    matching_secrets = [s for s in all_secrets if s["name"] in tracked_names]
-                else:
-                    # For prefix projects, use prefix matching (but prevent empty prefix from matching everything)
-                    if not project_prefix:
-                        print("⚠️  Warning: Empty project_prefix with use_prefix=True - skipping to prevent matching all secrets")
-                        matching_secrets = []
-                    else:
-                        matching_secrets = [s for s in all_secrets if s["name"].startswith(project_prefix)]
-                
+
+                tracked_names = _tracked_names_for_project(project, db, ProjectSecret, "secret_name")
+                matching_secrets = [s for s in all_secrets if _belongs_to_project(s["name"], tracked_names, project_prefix)]
+
                 print(f"🔍 Debug: Secrets matching project: {len(matching_secrets)}")
                 
                 if matching_secrets:
@@ -115,24 +119,10 @@ def _fetch_repository_variables(repo_name: str, headers: Dict[str, str], project
             
             if all_variables:
                 print(f"🔍 Debug: All repository variable names: {[v['name'] for v in all_variables]}")
-                
-                # For no_prefix projects, use database to identify project variables
-                if project and db and not project.use_prefix:
-                    print(_DEBUG_NO_PREFIX_LOOKUP)
-                    db_vars = db.query(ProjectEnvVar).filter(
-                        ProjectEnvVar.project_id == project.project_id
-                    ).all()
-                    tracked_names = {v.env_var_name for v in db_vars}
-                    print(f"🔍 Debug: Tracked variable names in database: {tracked_names}")
-                    matching_variables = [v for v in all_variables if v["name"] in tracked_names]
-                else:
-                    # For prefix projects, use prefix matching (but prevent empty prefix from matching everything)
-                    if not project_prefix:
-                        print("⚠️  Warning: Empty project_prefix with use_prefix=True - skipping to prevent matching all variables")
-                        matching_variables = []
-                    else:
-                        matching_variables = [v for v in all_variables if v["name"].startswith(project_prefix)]
-                
+
+                tracked_names = _tracked_names_for_project(project, db, ProjectEnvVar, "env_var_name")
+                matching_variables = [v for v in all_variables if _belongs_to_project(v["name"], tracked_names, project_prefix)]
+
                 print(f"🔍 Debug: Repository variables matching project: {len(matching_variables)}")
                 
                 if matching_variables:
@@ -173,48 +163,19 @@ def _fetch_environment_secrets(repo_name: str, env_name: str, headers: Dict[str,
             
             if all_env_secrets:
                 print(f"🔍 Debug: Secret names in '{env_name}': {[s['name'] for s in all_env_secrets]}")
-                
-                # For no_prefix projects, use database to identify project secrets
-                if project and db and not project.use_prefix:
-                    print(_DEBUG_NO_PREFIX_LOOKUP)
-                    db_secrets = db.query(ProjectSecret).filter(
-                        ProjectSecret.project_id == project.project_id
-                    ).all()
-                    tracked_names = {s.secret_name for s in db_secrets}
-                    print(f"🔍 Debug: Tracked secret names in database: {tracked_names}")
-                    
-                    for secret in all_env_secrets:
-                        secret_in_database = secret["name"] in tracked_names
-                        print(f"🔍 Debug: Environment secret '{secret['name']}' in database: {secret_in_database}")
-                        
-                        if secret_in_database:
-                            secrets.append({
-                                "name": secret["name"],
-                                "repository": repo_name,
-                                "environment": env_name,
-                                "created_at": secret.get("created_at"),
-                                "updated_at": secret.get("updated_at")
-                            })
-                            print(f"✅ Added environment secret: {secret['name']} (found in database)")
-                else:
-                    # For prefix projects, use prefix matching (but prevent empty prefix from matching everything)
-                    for secret in all_env_secrets:
-                        if not project_prefix:
-                            print(f"⚠️  Warning: Empty project_prefix - skipping environment secret '{secret['name']}'")
-                            continue
-                            
-                        secret_matches_prefix = secret["name"].startswith(project_prefix)
-                        print(f"🔍 Debug: Environment secret '{secret['name']}' matches prefix '{project_prefix}': {secret_matches_prefix}")
-                        
-                        if secret_matches_prefix:
-                            secrets.append({
-                                "name": secret["name"],
-                                "repository": repo_name,
-                                "environment": env_name,
-                                "created_at": secret.get("created_at"),
-                                "updated_at": secret.get("updated_at")
-                            })
-                            print(f"✅ Added environment secret: {secret['name']} (secret name matches prefix)")
+
+                tracked_names = _tracked_names_for_project(project, db, ProjectSecret, "secret_name")
+                for secret in all_env_secrets:
+                    if not _belongs_to_project(secret["name"], tracked_names, project_prefix):
+                        continue
+                    secrets.append({
+                        "name": secret["name"],
+                        "repository": repo_name,
+                        "environment": env_name,
+                        "created_at": secret.get("created_at"),
+                        "updated_at": secret.get("updated_at")
+                    })
+                    print(f"✅ Added environment secret: {secret['name']}")
         else:
             print(f"❌ Environment secrets API failed for '{env_name}': {response.status_code}")
     except Exception as e:
@@ -238,50 +199,20 @@ def _fetch_environment_variables(repo_name: str, env_name: str, headers: Dict[st
             
             if all_env_vars:
                 print(f"🔍 Debug: Variable names in '{env_name}': {[v['name'] for v in all_env_vars]}")
-                
-                # For no_prefix projects, use database to identify project variables
-                if project and db and not project.use_prefix:
-                    print(_DEBUG_NO_PREFIX_LOOKUP)
-                    db_vars = db.query(ProjectEnvVar).filter(
-                        ProjectEnvVar.project_id == project.project_id
-                    ).all()
-                    tracked_names = {v.env_var_name for v in db_vars}
-                    print(f"🔍 Debug: Tracked variable names in database: {tracked_names}")
-                    
-                    for var in all_env_vars:
-                        var_in_database = var["name"] in tracked_names
-                        print(f"🔍 Debug: Variable '{var['name']}' in database: {var_in_database}")
-                        
-                        if var_in_database:
-                            variables.append({
-                                "name": var["name"],
-                                "value": var["value"],
-                                "repository": repo_name,
-                                "environment": env_name,
-                                "created_at": var.get("created_at"),
-                                "updated_at": var.get("updated_at")
-                            })
-                            print(f"✅ Added environment variable: {var['name']} (found in database)")
-                else:
-                    # For prefix projects, use prefix matching (but prevent empty prefix from matching everything)
-                    for var in all_env_vars:
-                        if not project_prefix:
-                            print(f"⚠️  Warning: Empty project_prefix - skipping environment variable '{var['name']}'")
-                            continue
-                            
-                        var_matches_prefix = var["name"].startswith(project_prefix)
-                        print(f"🔍 Debug: Variable '{var['name']}' matches prefix '{project_prefix}': {var_matches_prefix}")
-                        
-                        if var_matches_prefix:
-                            variables.append({
-                                "name": var["name"],
-                                "value": var["value"],
-                                "repository": repo_name,
-                                "environment": env_name,
-                                "created_at": var.get("created_at"),
-                                "updated_at": var.get("updated_at")
-                            })
-                            print(f"✅ Added environment variable: {var['name']} (variable name matches prefix)")
+
+                tracked_names = _tracked_names_for_project(project, db, ProjectEnvVar, "env_var_name")
+                for var in all_env_vars:
+                    if not _belongs_to_project(var["name"], tracked_names, project_prefix):
+                        continue
+                    variables.append({
+                        "name": var["name"],
+                        "value": var["value"],
+                        "repository": repo_name,
+                        "environment": env_name,
+                        "created_at": var.get("created_at"),
+                        "updated_at": var.get("updated_at")
+                    })
+                    print(f"✅ Added environment variable: {var['name']}")
         else:
             print(f"❌ Environment variables API failed for '{env_name}': {response.status_code}")
     except Exception as e:
@@ -539,34 +470,18 @@ def _delete_repository_secrets(repo_name: str, headers: Dict[str, str], project_
         
         if secrets_response.status_code == 200:
             secrets_data = secrets_response.json()
-            
-            # For no_prefix projects, get secret names from database
-            if project and db and not project.use_prefix:
-                db_secrets = db.query(ProjectSecret).filter(
-                    ProjectSecret.project_id == project.project_id
-                ).all()
-                tracked_names = {s.secret_name for s in db_secrets}
-                
-                for secret in secrets_data.get("secrets", []):
-                    if secret["name"] in tracked_names:
-                        delete_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/secrets/{secret['name']}"
-                        delete_response = requests.delete(delete_secret_url, headers=headers)
-                        
-                        if delete_response.status_code == 204:
-                            deletion_results["github_resources_deleted"].append(f"Repository Secret: {secret['name']} from {repo_name}")
-                        else:
-                            deletion_results["errors"].append(f"Failed to delete repository secret {secret['name']} from {repo_name}")
-            else:
-                # For prefix projects, use prefix matching (but prevent empty prefix from matching everything)
-                for secret in secrets_data.get("secrets", []):
-                    if project_prefix and secret["name"].startswith(project_prefix):
-                        delete_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/secrets/{secret['name']}"
-                        delete_response = requests.delete(delete_secret_url, headers=headers)
-                        
-                        if delete_response.status_code == 204:
-                            deletion_results["github_resources_deleted"].append(f"Repository Secret: {secret['name']} from {repo_name}")
-                        else:
-                            deletion_results["errors"].append(f"Failed to delete repository secret {secret['name']} from {repo_name}")
+            tracked_names = _tracked_names_for_project(project, db, ProjectSecret, "secret_name")
+
+            for secret in secrets_data.get("secrets", []):
+                if not _belongs_to_project(secret["name"], tracked_names, project_prefix):
+                    continue
+                delete_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/secrets/{secret['name']}"
+                delete_response = requests.delete(delete_secret_url, headers=headers)
+
+                if delete_response.status_code == 204:
+                    deletion_results["github_resources_deleted"].append(f"Repository Secret: {secret['name']} from {repo_name}")
+                else:
+                    deletion_results["errors"].append(f"Failed to delete repository secret {secret['name']} from {repo_name}")
     except Exception as e:
         error_msg = f"Error deleting repository secrets from {repo_name}: {str(e)}"
         deletion_results["errors"].append(error_msg)
@@ -582,34 +497,18 @@ def _delete_repository_variables(repo_name: str, headers: Dict[str, str], projec
         
         if variables_response.status_code == 200:
             variables_data = variables_response.json()
-            
-            # For no_prefix projects, get variable names from database
-            if project and db and not project.use_prefix:
-                db_vars = db.query(ProjectEnvVar).filter(
-                    ProjectEnvVar.project_id == project.project_id
-                ).all()
-                tracked_names = {v.env_var_name for v in db_vars}
-                
-                for variable in variables_data.get("variables", []):
-                    if variable["name"] in tracked_names:
-                        delete_variable_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/variables/{variable['name']}"
-                        delete_response = requests.delete(delete_variable_url, headers=headers)
-                        
-                        if delete_response.status_code == 204:
-                            deletion_results["github_resources_deleted"].append(f"Repository Variable: {variable['name']} from {repo_name}")
-                        else:
-                            deletion_results["errors"].append(f"Failed to delete repository variable {variable['name']} from {repo_name}")
-            else:
-                # For prefix projects, use prefix matching (but prevent empty prefix from matching everything)
-                for variable in variables_data.get("variables", []):
-                    if project_prefix and variable["name"].startswith(project_prefix):
-                        delete_variable_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/variables/{variable['name']}"
-                        delete_response = requests.delete(delete_variable_url, headers=headers)
-                        
-                        if delete_response.status_code == 204:
-                            deletion_results["github_resources_deleted"].append(f"Repository Variable: {variable['name']} from {repo_name}")
-                        else:
-                            deletion_results["errors"].append(f"Failed to delete repository variable {variable['name']} from {repo_name}")
+            tracked_names = _tracked_names_for_project(project, db, ProjectEnvVar, "env_var_name")
+
+            for variable in variables_data.get("variables", []):
+                if not _belongs_to_project(variable["name"], tracked_names, project_prefix):
+                    continue
+                delete_variable_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/variables/{variable['name']}"
+                delete_response = requests.delete(delete_variable_url, headers=headers)
+
+                if delete_response.status_code == 204:
+                    deletion_results["github_resources_deleted"].append(f"Repository Variable: {variable['name']} from {repo_name}")
+                else:
+                    deletion_results["errors"].append(f"Failed to delete repository variable {variable['name']} from {repo_name}")
     except Exception as e:
         error_msg = f"Error deleting repository variables from {repo_name}: {str(e)}"
         deletion_results["errors"].append(error_msg)
@@ -648,37 +547,26 @@ def _delete_environment_secrets(repo_name: str, headers: Dict[str, str], project
         
         if env_response.status_code == 200:
             environments_data = env_response.json()
-            
-            # For no_prefix projects, get secret names from database
-            tracked_names = set()
-            if project and db and not project.use_prefix:
-                db_secrets = db.query(ProjectSecret).filter(
-                    ProjectSecret.project_id == project.project_id
-                ).all()
-                tracked_names = {s.secret_name for s in db_secrets}
-            
+            tracked_names = _tracked_names_for_project(project, db, ProjectSecret, "secret_name")
+
             for env in environments_data.get("environments", []):
                 env_secrets_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env['name']}/secrets"
                 env_secrets_response = requests.get(env_secrets_url, headers=headers)
-                
-                if env_secrets_response.status_code == 200:
-                    env_secrets_data = env_secrets_response.json()
-                    for secret in env_secrets_data.get("secrets", []):
-                        # Check if secret belongs to project
-                        belongs_to_project = False
-                        if project and db and not project.use_prefix:
-                            belongs_to_project = secret["name"] in tracked_names
-                        else:
-                            belongs_to_project = project_prefix and secret["name"].startswith(project_prefix)
-                        
-                        if belongs_to_project:
-                            delete_env_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env['name']}/secrets/{secret['name']}"
-                            delete_response = requests.delete(delete_env_secret_url, headers=headers)
-                            
-                            if delete_response.status_code == 204:
-                                deletion_results["github_resources_deleted"].append(f"Environment Secret: {secret['name']} from {repo_name}/{env['name']}")
-                            else:
-                                deletion_results["errors"].append(f"Failed to delete environment secret {secret['name']} from {repo_name}/{env['name']}")
+
+                if env_secrets_response.status_code != 200:
+                    continue
+
+                env_secrets_data = env_secrets_response.json()
+                for secret in env_secrets_data.get("secrets", []):
+                    if not _belongs_to_project(secret["name"], tracked_names, project_prefix):
+                        continue
+                    delete_env_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env['name']}/secrets/{secret['name']}"
+                    delete_response = requests.delete(delete_env_secret_url, headers=headers)
+
+                    if delete_response.status_code == 204:
+                        deletion_results["github_resources_deleted"].append(f"Environment Secret: {secret['name']} from {repo_name}/{env['name']}")
+                    else:
+                        deletion_results["errors"].append(f"Failed to delete environment secret {secret['name']} from {repo_name}/{env['name']}")
     except Exception as e:
         error_msg = f"Error deleting environment secrets from {repo_name}: {str(e)}"
         deletion_results["errors"].append(error_msg)
@@ -803,6 +691,55 @@ def _get_project_workflows(project: Project, db: Session) -> tuple[List[Dict[str
     return workflows, reusable_workflows
 
 
+def _log_missing_repos_debug(project: Project, db: Session) -> None:
+    """Diagnostic output when a project has no repositories, to help debug data-association issues."""
+    print("⚠️ DEBUG: No repositories found for this project - GitHub API calls will be skipped")
+    print("🔍 DEBUG: Checking project-repository associations...")
+    project_repos = db.query(ProjectRepo).filter(ProjectRepo.project_id == project.project_id).all()
+    print(f"🔍 DEBUG: Found {len(project_repos)} project-repo associations")
+    for pr in project_repos:
+        repo = db.query(Repo).filter(Repo.repo_id == pr.repo_id).first()
+        print(f"🔍 DEBUG: Repo ID {pr.repo_id} -> {repo.repo_name if repo else 'NOT FOUND'}")
+
+
+def _collect_github_resources_for_deletion_summary(
+    project: Project, github_user: str, repo_names: List[str], db: Session
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Fetch GitHub secrets/env vars/environments across every project repo, tolerating per-repo failures."""
+    github_secrets: List[Dict[str, Any]] = []
+    github_env_vars: List[Dict[str, Any]] = []
+    github_environments: List[Dict[str, Any]] = []
+
+    if not (github_user in user_tokens and repo_names):
+        print("🔍 Debug: Skipping GitHub API calls - Missing token or repos")
+        print(f"  - github_user in user_tokens: {github_user in user_tokens if github_user else False}")
+        print(f"  - repo_names: {repo_names}")
+        return github_secrets, github_env_vars, github_environments
+
+    token = user_tokens[github_user]
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    project_prefix = f"AM_{project.project_code}_" if project.use_prefix else ""
+    print(f"🔍 Debug: Starting GitHub API calls, use_prefix={project.use_prefix}, prefix='{project_prefix}'")
+
+    for repo_name in repo_names:
+        try:
+            repo_secrets, repo_env_vars, repo_environments = _process_repository_resources(
+                repo_name, headers, project_prefix, project, db
+            )
+            github_secrets.extend(repo_secrets)
+            github_env_vars.extend(repo_env_vars)
+            github_environments.extend(repo_environments)
+        except Exception as e:
+            print(f"Warning: Could not fetch GitHub resources for {repo_name}: {str(e)}")
+
+    _debug_resource_summary(github_secrets, github_env_vars, github_environments, project_prefix)
+    return github_secrets, github_env_vars, github_environments
+
+
 @router.get("/projects/{project_name}/deletion-summary")
 async def get_project_deletion_summary(
     project_name: str,
@@ -817,74 +754,18 @@ async def get_project_deletion_summary(
         # Get user and project from database
         user, project = _get_project_and_user(project_name, github_user, db)
 
-        # Get repositories and workflows from database  
+        # Get repositories and workflows from database
         repo_names = _get_project_repositories(project, db)
         workflows, reusable_workflows = _get_project_workflows(project, db)
 
-        # Initialize GitHub resource collections
-        github_secrets = []
-        github_env_vars = []
-        github_environments = []
+        print(f"🔍 Debug: github_user='{github_user}', repo_names={repo_names}, project_code='{project.project_code}'")
 
-        # Debug authentication and repository status
-        print(f"🔍 Debug: Authentication check:")
-        print(f"  - github_user: '{github_user}'")
-        print(f"  - github_user in user_tokens: {github_user in user_tokens if github_user else 'No github_user'}")
-        print(f"  - active credential cache entries: {len(list(user_tokens.keys()))}")
-        print(f"🔍 Debug: Repository check:")
-        print(f"  - repo_names: {repo_names}")
-        print(f"  - repo_count: {len(repo_names) if repo_names else 0}")
-        print(f"🔍 Debug: Project details:")
-        print(f"  - project_code: '{project.project_code}'")
-        print(f"  - expected_prefix: 'AM_{project.project_code}_'")
-
-        # Handle case where no repositories are found
         if not repo_names:
-            print("⚠️ DEBUG: No repositories found for this project - GitHub API calls will be skipped")
-            print("🔍 DEBUG: Checking project-repository associations...")
-            project_repos = db.query(ProjectRepo).filter(ProjectRepo.project_id == project.project_id).all()
-            print(f"🔍 DEBUG: Found {len(project_repos)} project-repo associations")
-            for pr in project_repos:
-                repo = db.query(Repo).filter(Repo.repo_id == pr.repo_id).first()
-                print(f"🔍 DEBUG: Repo ID {pr.repo_id} -> {repo.repo_name if repo else 'NOT FOUND'}")
+            _log_missing_repos_debug(project, db)
 
-        # Fetch GitHub resources if authenticated and repositories exist
-        if github_user in user_tokens and repo_names:
-            token = user_tokens[github_user]
-            headers = {
-                "Authorization": f"token {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28"
-            }
-            # Only use prefix if project.use_prefix is True
-            project_prefix = f"AM_{project.project_code}_" if project.use_prefix else ""
-            
-            print(f"🔍 Debug: Starting GitHub API calls")
-            print(f"🔍 Debug: Project use_prefix setting: {project.use_prefix}")
-            print(f"🔍 Debug: Project prefix for filtering: '{project_prefix}'")
-            print(f"🔍 Debug: Authentication token available: {bool(token)}")
-
-            # Process each repository to collect GitHub resources
-            for repo_name in repo_names:
-                try:
-                    repo_secrets, repo_env_vars, repo_environments = _process_repository_resources(
-                        repo_name, headers, project_prefix, project, db
-                    )
-                    
-                    github_secrets.extend(repo_secrets)
-                    github_env_vars.extend(repo_env_vars)
-                    github_environments.extend(repo_environments)
-                    
-                except Exception as e:
-                    print(f"Warning: Could not fetch GitHub resources for {repo_name}: {str(e)}")
-                    # Continue with other repositories even if one fails
-
-            # Log resource discovery summary
-            _debug_resource_summary(github_secrets, github_env_vars, github_environments, project_prefix)
-        else:
-            print(f"🔍 Debug: Skipping GitHub API calls - Missing token or repos")
-            print(f"  - github_user in user_tokens: {github_user in user_tokens if github_user else False}")
-            print(f"  - repo_names: {repo_names}")
+        github_secrets, github_env_vars, github_environments = _collect_github_resources_for_deletion_summary(
+            project, github_user, repo_names, db
+        )
 
         # Build and return the deletion summary
         return _build_deletion_summary(
@@ -932,6 +813,11 @@ async def delete_project_enhanced(
             _delete_all_github_resources(repo_names, headers, project.project_code, deletion_results, project, db, request.delete_deployment_environments)
 
         # Delete the project from the database (this will cascade to related records)
+        # Cascade covers this now that SQLite foreign keys are enforced
+        # (issue #1811); kept explicit so the cleanup is visible at the call site.
+        db.query(ProjectDisplayOrder).filter(
+            ProjectDisplayOrder.project_id == project.project_id
+        ).delete(synchronize_session=False)
         db.delete(project)
         db.commit()
         deletion_results["project_deleted"] = True

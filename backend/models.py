@@ -57,6 +57,14 @@ def generate_project_key_from_name(project_name):
     return key
 
 
+# Reserved github_user for the internal account that owns seeded rows nobody
+# authored (the default Actions Projects catalog). It is not a person: it can't
+# log in, must never hold a workspace role, and must never be counted when
+# deciding who the workspace admin is. Matched on the reserved name rather than
+# account_type, which is really the billing plan column.
+SEED_ACCOUNT_GITHUB_USER = "__actionsmanager_seed__"
+
+
 class Account(Base):
     """User accounts table with GitHub OAuth integration"""
     __tablename__ = "accounts"
@@ -217,7 +225,8 @@ class Project(Base):
     drift_count = Column(Integer, nullable=False, default=0)
     last_drift_check_at = Column(DateTime, nullable=True)
     drift_error_summary = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=func.now())  
+    drift_check_failure_count = Column(Integer, nullable=False, default=0)  # Consecutive check_failed results, for sweep backoff; reset on clean/drifted
+    created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now()) 
 
     # Audit: track who last modified this project
@@ -274,11 +283,28 @@ class ActionGroupMembership(Base):
 
 
 class ProjectWorkflow(Base):
-    """Many-to-many relationship table between Projects and Workflows"""
+    """Association between a Project and its Workflows.
+
+    Despite the composite key, this is **one project per workflow**: a Workflow
+    row belongs to exactly one Project, enforced by the unique index below.
+    Every code path that creates an association also creates a fresh Workflow,
+    so sharing was never reachable — the index makes that explicit rather than
+    incidental, and stops one project's changes reaching another's row.
+
+    Reusable workflows are shared through ``LinkedReusableWorkflow`` instead,
+    which does not create an association here for the borrowing project.
+    """
     __tablename__ = "project_workflows"
 
     project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), primary_key=True)
     workflow_id = Column(Integer, ForeignKey(_FK_WORKFLOWS_WORKFLOW_ID, ondelete="CASCADE"), primary_key=True)
+
+    # A unique *index* rather than a UniqueConstraint: SQLite cannot add a
+    # constraint to an existing table, so a constraint would force a full table
+    # rebuild on upgrade, while CREATE UNIQUE INDEX works on both backends.
+    __table_args__ = (
+        Index("uq_project_workflows_workflow_id", "workflow_id", unique=True),
+    )
 
 
 class ProjectRepo(Base):
@@ -339,6 +365,10 @@ class ProjectPRCampaign(Base):
     project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     created_by = Column(String(255), nullable=True)  # GitHub login of the user who opened the campaign
     created_at = Column(DateTime, default=func.now())
+    # Last computed campaign_status (open/completed/partially_completed/cancelled), used to
+    # detect the one-time open -> terminal transition for campaign.completed notifications.
+    # campaign_status itself is otherwise computed live on every read, never persisted.
+    last_known_status = Column(String(20), nullable=False, default="open")
 
 
 class ProjectPullRequest(Base):
@@ -454,6 +484,33 @@ class ProjectMembership(Base):
     # Each user can only have one membership per project
     __table_args__ = (
         UniqueConstraint('user_id', 'project_id', name='uq_user_project_membership'),
+    )
+
+    user = relationship("Account")
+    project = relationship("Project")
+
+
+class ProjectDisplayOrder(Base):
+    """
+    Per-user ordering of project cards on the Projects grid (issue #1804).
+
+    The grid used to sort by projects.updated_at, so opening or editing a
+    project jumped it to the front. Position is stored per user rather than on
+    the project so one user's arrangement never changes anyone else's view, and
+    reordering never touches projects.updated_at.
+    """
+    __tablename__ = "project_display_order"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey(_FK_ACCOUNTS_USER_ID, ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Each user can only have one position per project
+    __table_args__ = (
+        UniqueConstraint('user_id', 'project_id', name='uq_user_project_display_order'),
     )
 
     user = relationship("Account")
@@ -589,4 +646,137 @@ class LinkedReusableWorkflow(Base):
     # Ensure a workflow is only linked once per standard project
     __table_args__ = (
         UniqueConstraint('standard_project_id', 'workflow_id', name='unique_standard_workflow'),
+    )
+
+
+class NotificationEvent(Base):
+    """Domain events (drift/campaign state transitions) that may trigger a notification."""
+    __tablename__ = "notification_events"
+
+    event_id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
+    event_type = Column(String(100), nullable=False, index=True)  # e.g. drift.detected, campaign.opened
+    dedup_key = Column(String(500), nullable=False, unique=True, index=True)  # stable key preventing duplicate events for the same state transition
+    payload = Column(Text, nullable=False)  # Event-specific details as a JSON string
+    created_at = Column(DateTime, default=func.now(), nullable=False, index=True)
+
+
+class NotificationDelivery(Base):
+    """Outbox row tracking delivery of one notification event to one recipient."""
+    __tablename__ = "notification_deliveries"
+
+    delivery_id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("notification_events.event_id", ondelete="CASCADE"), nullable=False, index=True)
+    recipient_email = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)  # pending, sent, failed
+    attempt_count = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    sent_at = Column(DateTime, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=True, index=True)  # retry/backoff scheduling
+
+
+class NotificationSubscription(Base):
+    """Per-recipient notification preferences: which project(s) and event(s) to notify about."""
+    __tablename__ = "notification_subscriptions"
+
+    subscription_id = Column(Integer, primary_key=True, index=True)
+    recipient_email = Column(String(255), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=True, index=True)  # NULL = all projects
+    event_types = Column(Text, nullable=True)  # comma-separated event_type list; NULL = all event types
+    notify_on_resolved = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class NotificationSettings(Base):
+    """Single-row global notification settings (feature enable/disable)."""
+    __tablename__ = "notification_settings"
+
+    settings_id = Column(Integer, primary_key=True, index=True)
+    notifications_enabled = Column(Boolean, nullable=False, default=True)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class WorkflowDriftState(Base):
+    """Last known per-(workflow, repo, branch) drift check result.
+
+    Exists so drift notifications can diff a newly-computed check against
+    the previous one to detect state transitions — drift is checked
+    on-demand (no scheduler), so this is the only place "previous state"
+    is available to compare against.
+
+    Keyed by branch as well as repo: a project can deliver the same workflow
+    to several branches and each drifts independently. Without the branch in
+    the key, resolving drift on one branch cleared the record for all of them
+    and the project reported clean while other branches were still wrong.
+    """
+    __tablename__ = "workflow_drift_states"
+
+    state_id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
+    workflow_id = Column(Integer, ForeignKey(_FK_WORKFLOWS_WORKFLOW_ID, ondelete="CASCADE"), nullable=False, index=True)
+    repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="CASCADE"), nullable=False, index=True)
+    # Empty string, not NULL: this is part of the unique key, and NULL never
+    # compares equal to NULL, so a nullable column would let duplicate rows
+    # accumulate for any state written without a resolved branch.
+    branch = Column(String(255), nullable=False, default="", server_default="")
+    has_drift = Column(Boolean, nullable=False, default=False)
+    content_hash = Column(String(64), nullable=True)
+    # Enough to render the drift list without calling GitHub. The YAML itself
+    # is deliberately not cached: a diff is only meaningful against GitHub's
+    # current content, so it is fetched when the user opens one rather than
+    # replayed from a snapshot that may already be stale.
+    github_sha = Column(String(255), nullable=True)
+    deleted_in_github = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Incremented on every not-drifted -> drifted transition. Included in the
+    # notification dedup key alongside content_hash so a drift that resolves
+    # and then reoccurs with byte-identical content (e.g. a revert) still
+    # gets its own notification instead of colliding with the stale one.
+    drift_cycle_count = Column(Integer, nullable=False, default=0)
+    last_checked_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('workflow_id', 'repo_id', 'branch',
+                         name='uq_workflow_drift_state_workflow_repo_branch'),
+    )
+
+
+class WorkflowTreeCache(Base):
+    """Cached listing of a (repo, branch)'s workflow files, plus its GitHub ETag.
+
+    Drift has to ask GitHub what is in every branch a project delivers to, and
+    that cost is paid on every check even when nothing has changed. GitHub
+    answers a conditional request (``If-None-Match``) for unchanged content with
+    a 304, and **304 responses do not count against the rate limit** — so a repo
+    nobody has touched becomes free to re-verify however often it is checked.
+
+    ``sha_map_json`` is the {filename: blob_sha} mapping the Trees call returned,
+    replayed on a 304. Without it a 304 would carry no body and there would be
+    nothing to compare against.
+
+    ``branch_is_recent`` caches the separate "has this branch moved lately"
+    lookup, which otherwise costs one API call per matched branch per check.
+    It is invalidated by ``branch_head_sha`` rather than by a timer: the branch
+    listing already tells us each branch's head commit, and if the head has not
+    moved the recency answer cannot have changed. That is exact, so a branch
+    that just became active is never wrongly skipped the way a TTL would allow.
+
+    Purely a cache: dropping a row costs one extra API call and nothing else.
+    """
+    __tablename__ = "workflow_tree_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="CASCADE"), nullable=False, index=True)
+    branch = Column(String(255), nullable=False)
+    etag = Column(String(255), nullable=True)
+    sha_map_json = Column(Text, nullable=True)
+    fetched_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    # Whether the branch had a recent commit, and the head commit that answer
+    # was computed from. Nullable: unknown until something asks.
+    branch_is_recent = Column(Boolean, nullable=True)
+    branch_head_sha = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('repo_id', 'branch', name='uq_workflow_tree_cache_repo_branch'),
     )

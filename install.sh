@@ -406,6 +406,9 @@ EOF
 # Leave commented out for auto-detection (recommended for PAT login).
 # Uncomment and edit only if you use GitHub OAuth login:
 # APP_URL=${DETECTED_BACKEND_URL}
+# Uncomment this too if that APP_URL is plain http:// on a non-loopback
+# address — without it the container refuses to start:
+# ALLOW_INSECURE_HTTP=true
 EOF
     else
         cat >> .env.self-hosted << EOF
@@ -413,6 +416,9 @@ EOF
 # Leave commented out for auto-detection (recommended for PAT login).
 # Uncomment and set only if you use GitHub OAuth login:
 # APP_URL=http://YOUR_SERVER_IP_OR_DOMAIN:${PORT}
+# Uncomment this too if that APP_URL is plain http:// on a non-loopback
+# address — without it the container refuses to start:
+# ALLOW_INSECURE_HTTP=true
 EOF
     fi
 
@@ -659,6 +665,8 @@ print_troubleshooting() {
     echo "   • For PAT login: just open http://YOUR_SERVER_IP:${PORT} — no config needed."
     echo "   • For OAuth login: set APP_URL=http://YOUR_SERVER_IP:${PORT} in .env.self-hosted"
     echo "     and register that URL in your GitHub OAuth App settings."
+    echo "   • A plain http:// APP_URL on a non-loopback address also needs"
+    echo "     ALLOW_INSECURE_HTTP=true, or the container refuses to start."
     echo "   • Ensure your firewall allows port $PORT from remote hosts."
     echo "   • Check if containers are running: $COMPOSE_CMD $(compose_args) ps"
     echo "   • Test locally: curl http://localhost:${PORT}"

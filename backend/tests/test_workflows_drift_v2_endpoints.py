@@ -118,12 +118,12 @@ def db_state():
 # ----------------------------------------------------------------------------
 
 @patch('workflows.get_default_branch', return_value="main")
-@patch('workflows.get_all_workflow_shas', return_value={"AM_P001_ci.yml": "sha-old"})
+@patch('workflows.fetch_workflow_tree', return_value=({"AM_P001_ci.yml": "sha-old"}, None))
 def test_project_drift_no_drift(_shas, _branch, db_state):
     """Same SHA on both sides ⇒ project drift_count == 0."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"},
+        params={"github_user": "alice", "refresh": True},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -143,7 +143,7 @@ def test_project_drift_no_drift(_shas, _branch, db_state):
 
 
 @patch('workflows.get_default_branch', return_value="main")
-@patch('workflows.get_all_workflow_shas', return_value={"AM_P001_ci.yml": "sha-new"})
+@patch('workflows.fetch_workflow_tree', return_value=({"AM_P001_ci.yml": "sha-new"}, None))
 @patch('workflows.get_workflow_from_github', return_value={
     "content": "name: AM_P001_ci\non: pull_request",  # different content
     "sha": "sha-new",
@@ -152,7 +152,7 @@ def test_project_drift_one_workflow_drifted(_g, _shas, _branch, db_state):
     """SHAs differ + content differs ⇒ exactly one drifted workflow returned."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"},
+        params={"github_user": "alice", "refresh": True},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -179,7 +179,7 @@ def test_project_drift_one_workflow_drifted(_g, _shas, _branch, db_state):
 def test_project_drift_check_failure_updates_cached_summary(_collect, db_state):
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"},
+        params={"github_user": "alice", "refresh": True},
     )
     assert resp.status_code == 500
 
@@ -199,7 +199,7 @@ def test_project_drift_unauthenticated(db_state):
     user_tokens.pop("alice", None)
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"},
+        params={"github_user": "alice", "refresh": True},
     )
     assert resp.status_code == 401
 
@@ -237,7 +237,7 @@ def test_projects_list_includes_cached_drift_summary_fields(db_state):
 # ----------------------------------------------------------------------------
 
 @patch('workflows.get_default_branch', return_value="main")
-@patch('workflows.get_all_workflow_shas', return_value={"AM_P001_ci.yml": "sha-new"})
+@patch('workflows.fetch_workflow_tree', return_value=({"AM_P001_ci.yml": "sha-new"}, None))
 @patch('workflows.get_workflow_from_github', return_value={
     "content": "name: AM_P001_ci\non: pull_request",
     "sha": "sha-new",

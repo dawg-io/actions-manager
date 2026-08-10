@@ -12,7 +12,13 @@ vi.mock("../api/drift", () => ({
   adoptGithubVersion: vi.fn(),
 }));
 
+vi.mock("../api/workflows", () => ({
+  deleteWorkflowFromGitHub: vi.fn().mockResolvedValue({ success: true }),
+  deleteWorkflowFromDatabase: vi.fn().mockResolvedValue({ success: true }),
+}));
+
 import { getProjectDrift, resolveWorkflowDrift } from "../api/drift";
+import { deleteWorkflowFromGitHub, deleteWorkflowFromDatabase } from "../api/workflows";
 
 const mockDrift = (overrides: Partial<WorkflowDriftDetail> = {}): WorkflowDriftDetail => ({
   workflow_id: 1,
@@ -30,12 +36,16 @@ const mockDrift = (overrides: Partial<WorkflowDriftDetail> = {}): WorkflowDriftD
   ...overrides,
 });
 
-const mockSummary = (drifted: WorkflowDriftDetail[]): ProjectDriftSummary => ({
+const mockSummary = (
+  drifted: WorkflowDriftDetail[],
+  uncheckedCount = 0,
+): ProjectDriftSummary => ({
   project_id: 1,
   project_name: "proj",
   drift_count: drifted.length,
   drifted_workflows: drifted,
-  last_checked: "2026-01-01T00:00:00Z",
+  last_checked: new Date().toISOString(),
+  unchecked_count: uncheckedCount,
 });
 
 const defaultProps = {
@@ -59,12 +69,255 @@ describe("DriftDetection", () => {
     vi.mocked(resolveWorkflowDrift).mockReset();
   });
 
-  test("does not render the checking banner while the request is pending", () => {
+  test("shows a not-checked-yet status row while the request is pending and there is no seeded drift", () => {
     vi.mocked(getProjectDrift).mockReturnValue(new Promise(() => {}));
-    const { container } = render(<DriftDetection {...defaultProps} />);
+    render(<DriftDetection {...defaultProps} />);
     expect(screen.queryByText(/Checking for workflow drift/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("Not checked yet");
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("❔");
+    expect(screen.queryByTestId("drift-banner")).not.toBeInTheDocument();
+  });
+
+  test("a verified-clean project shows a checkmark, distinct from a never-checked project", async () => {
+    vi.mocked(getProjectDrift).mockResolvedValueOnce(mockSummary([]));
+    render(<DriftDetection {...defaultProps} />);
+
+    await waitFor(() => expect(screen.getByTestId("drift-status-row")).toHaveTextContent("No drift detected"));
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("✅");
+    expect(screen.getByTestId("drift-status-row")).not.toHaveTextContent("❔");
+  });
+
+  test("switching to a project with no repos clears the previous project's drift status instead of showing stale data", async () => {
+    vi.mocked(getProjectDrift).mockResolvedValueOnce(mockSummary([]));
+    const { rerender } = render(<DriftDetection {...defaultProps} />);
+    await waitFor(() => expect(screen.getByTestId("drift-status-row")).toHaveTextContent("No drift detected"));
+
+    rerender(<DriftDetection {...defaultProps} projectId={2} projectName="proj2" selectedRepos={[]} />);
+
+    await waitFor(() => expect(screen.getByTestId("drift-status-row")).toHaveTextContent("Not checked yet"));
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("❔");
+  });
+
+  test("clicking Check Now on a clean project triggers a live refresh", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectDrift).mockResolvedValueOnce(mockSummary([]));
+    render(<DriftDetection {...defaultProps} />);
+    await waitFor(() => expect(screen.getByTestId("drift-status-row")).toBeInTheDocument());
+
+    vi.mocked(getProjectDrift).mockResolvedValueOnce(mockSummary([]));
+    await user.click(screen.getByTestId("drift-inline-check-now-button"));
+
+    await waitFor(() =>
+      expect(vi.mocked(getProjectDrift)).toHaveBeenLastCalledWith(1, "testuser", { refresh: true }),
+    );
+  });
+
+  test("surfaces the stale reason inline on a clean project without needing the modal", async () => {
+    vi.mocked(getProjectDrift).mockResolvedValue({
+      ...mockSummary([]),
+      stale_reason: "Automatic drift checks are paused: no saved GitHub token.",
+    });
+    render(<DriftDetection {...defaultProps} />);
+
+    await waitFor(() => expect(screen.getByTestId("drift-status-row")).toHaveTextContent(
+      /Automatic drift checks are paused/i,
+    ));
+  });
+
+  test("renders the seeded banner synchronously, before the live check resolves", () => {
+    vi.mocked(getProjectDrift).mockReturnValue(new Promise(() => {}));
+    render(<DriftDetection {...defaultProps} seededDriftNames={["Build", "Deploy"]} />);
+
+    // Synchronous assertion (no waitFor): the banner must be in the very first
+    // paint, otherwise it pops in later and shifts the layout.
+    expect(screen.getByTestId("drift-banner")).toBeInTheDocument();
+    expect(screen.getByText("2 workflows changed in GitHub")).toBeInTheDocument();
+  });
+
+  test("disables Review Drift until the live check supplies resolvable rows", async () => {
+    vi.mocked(getProjectDrift).mockReturnValue(new Promise(() => {}));
+    const { rerender } = render(
+      <DriftDetection {...defaultProps} seededDriftNames={["Build"]} refreshSignal={0} />,
+    );
+    expect(screen.getByTestId("review-drift-button")).toBeDisabled();
+
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([mockDrift()]));
+    rerender(<DriftDetection {...defaultProps} seededDriftNames={["Build"]} refreshSignal={1} />);
+
+    await waitFor(() => expect(screen.getByTestId("review-drift-button")).toBeEnabled());
+    expect(screen.getByText("1 workflow changed in GitHub")).toBeInTheDocument();
+  });
+
+  test("live check clears the seeded banner when the drift is already resolved", async () => {
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([]));
+    render(
+      <DriftDetection {...defaultProps} seededDriftNames={["Build"]} />,
+    );
+    expect(screen.getByTestId("drift-banner")).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.queryByTestId("drift-banner")).not.toBeInTheDocument());
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("No drift detected");
+  });
+
+  test("a failed first check keeps the seeded banner instead of blanking it", async () => {
+    vi.mocked(getProjectDrift).mockRejectedValue(new Error("network error"));
+    render(<DriftDetection {...defaultProps} seededDriftNames={["Build"]} />);
+
+    await waitFor(() => expect(vi.mocked(getProjectDrift)).toHaveBeenCalled());
+    expect(screen.getByTestId("drift-banner")).toBeInTheDocument();
+    // Enabled despite no live rows so the failure message stays reachable.
+    await waitFor(() => expect(screen.getByTestId("review-drift-button")).toBeEnabled());
+  });
+
+  test("opening the panel costs no GitHub calls — one cached read, no refresh", async () => {
+    // The background sweep keeps stored state fresh, so re-checking on mount
+    // would spend rate limit re-answering a question already answered.
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([mockDrift()]));
+    render(<DriftDetection {...defaultProps} />);
+
+    await waitFor(() => expect(screen.getByTestId("drift-banner")).toBeInTheDocument());
+    expect(vi.mocked(getProjectDrift)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getProjectDrift)).toHaveBeenCalledWith(1, "testuser", { refresh: undefined });
+  });
+
+  test("a stale-state reason is surfaced instead of the timestamp silently freezing", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectDrift).mockResolvedValue({
+      ...mockSummary([mockDrift()]),
+      stale_reason: "Automatic drift checks are paused: no saved GitHub token.",
+    });
+    render(<DriftDetection {...defaultProps} />);
+    await waitFor(() => expect(screen.getByTestId("drift-banner")).toBeInTheDocument());
+    await user.click(screen.getByTestId("review-drift-button"));
+
+    expect(screen.getByTestId("drift-stale-reason")).toHaveTextContent(
+      /Automatic drift checks are paused/i,
+    );
+  });
+
+  test("no warning is shown when automatic checking is working", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([mockDrift()]));
+    render(<DriftDetection {...defaultProps} />);
+    await waitFor(() => expect(screen.getByTestId("drift-banner")).toBeInTheDocument());
+    await user.click(screen.getByTestId("review-drift-button"));
+
+    expect(screen.queryByTestId("drift-stale-reason")).not.toBeInTheDocument();
+  });
+
+  test("Check Now triggers a live refresh and updates the last-checked time", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectDrift).mockResolvedValueOnce(mockSummary([mockDrift()]));
+    render(<DriftDetection {...defaultProps} />);
+    await waitFor(() => expect(screen.getByTestId("drift-banner")).toBeInTheDocument());
+    await user.click(screen.getByTestId("review-drift-button"));
+
+    vi.mocked(getProjectDrift).mockResolvedValueOnce({
+      ...mockSummary([mockDrift()]),
+      last_checked: "2026-02-02T00:00:00Z",
+    });
+    await user.click(screen.getByTestId("drift-check-now-button"));
+
+    await waitFor(() =>
+      expect(vi.mocked(getProjectDrift)).toHaveBeenLastCalledWith(1, "testuser", { refresh: true }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("drift-last-checked")).toHaveTextContent(
+        new Date("2026-02-02T00:00:00Z").toLocaleString(),
+      ),
+    );
+  });
+
+  test("an unchecked repo is surfaced instead of reading as clean", async () => {
+    // No drift found, but GitHub couldn't be reached for some repos — showing
+    // nothing would imply everything is in sync.
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([], 2));
+    render(<DriftDetection {...defaultProps} />);
+
+    const row = await screen.findByTestId("drift-status-row");
+    expect(row).toHaveTextContent(/Couldn't check 2 workflows/i);
+  });
+
+  test("a fully successful clean check renders the clean status row", async () => {
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([], 0));
+    render(<DriftDetection {...defaultProps} />);
+
+    await waitFor(() => expect(vi.mocked(getProjectDrift)).toHaveBeenCalled());
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("No drift detected");
+    expect(screen.queryByTestId("drift-banner")).not.toBeInTheDocument();
+  });
+
+  describe("Workflow deleted in GitHub", () => {
+    const deletedDrift = () =>
+      mockDrift({
+        deleted_in_github: true,
+        github_yaml: null,
+        github_sha: null,
+        message: "Workflow was deleted from org/repo",
+        affected_repos: ["org/repo2"],
+      });
+
+    async function openDeletedDiff() {
+      const user = userEvent.setup();
+      vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([deletedDrift()]));
+      render(<DriftDetection {...defaultProps} />);
+      await waitFor(() => expect(screen.getByTestId("drift-banner")).toBeInTheDocument());
+      await user.click(screen.getByTestId("review-drift-button"));
+      await user.click(screen.getByRole("button", { name: /View Diff/i }));
+      return user;
+    }
+
+    test("is labelled deleted rather than shown as generic drift", async () => {
+      await openDeletedDiff();
+
+      expect(screen.getByTestId("drift-status-deleted")).toHaveTextContent("Deleted in GitHub");
+    });
+
+    test("explains the deletion instead of rendering a blank diff pane", async () => {
+      await openDeletedDiff();
+
+      // The reported bug: the GitHub column rendered as one empty line.
+      expect(screen.getByTestId("deleted-in-github-panel")).toBeInTheDocument();
+      expect(screen.queryByText("Current GitHub version")).not.toBeInTheDocument();
+      expect(screen.getByText(/no longer exists in org\/repo/i)).toBeInTheDocument();
+    });
+
+    test("does not offer to adopt content that does not exist", async () => {
+      await openDeletedDiff();
+
+      expect(screen.queryByTestId("adopt-github-version-button")).not.toBeInTheDocument();
+      expect(screen.getByTestId("deleted-restore-pr-button")).toBeInTheDocument();
+      expect(screen.getByTestId("delete-everywhere-button")).toBeInTheDocument();
+    });
+
+    test("delete everywhere names every repo before doing anything", async () => {
+      const user = await openDeletedDiff();
+
+      await user.click(screen.getByTestId("delete-everywhere-button"));
+
+      expect(await screen.findByText(/org\/repo, org\/repo2/)).toBeInTheDocument();
+      expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
+      // Nothing deleted until the user confirms.
+      expect(vi.mocked(deleteWorkflowFromGitHub)).not.toHaveBeenCalled();
+    });
+
+    test("confirming removes the file from every repo and from ActionsManager", async () => {
+      const user = await openDeletedDiff();
+
+      await user.click(screen.getByTestId("delete-everywhere-button"));
+      await user.click(await screen.findByRole("button", { name: /Delete everywhere/i }));
+
+      await waitFor(() =>
+        expect(vi.mocked(deleteWorkflowFromGitHub)).toHaveBeenCalledWith(
+          "testuser", ["org/repo", "org/repo2"], "Build", "", "proj",
+        ),
+      );
+      await waitFor(() =>
+        expect(vi.mocked(deleteWorkflowFromDatabase)).toHaveBeenCalledWith(
+          "testuser", "proj", "Build",
+        ),
+      );
+    });
   });
 
   test("shows the drift banner once a drifted response resolves", async () => {
@@ -75,12 +328,13 @@ describe("DriftDetection", () => {
     expect(onDriftLoaded).toHaveBeenCalledWith([mockDrift()]);
   });
 
-  test("stays hidden when the response reports no drift", async () => {
+  test("shows the clean status row instead of the drift banner when the response reports no drift", async () => {
     vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([]));
     const onDriftLoaded = vi.fn();
-    const { container } = render(<DriftDetection {...defaultProps} onDriftLoaded={onDriftLoaded} />);
+    render(<DriftDetection {...defaultProps} onDriftLoaded={onDriftLoaded} />);
     await waitFor(() => expect(onDriftLoaded).toHaveBeenCalledWith([]));
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("drift-banner")).not.toBeInTheDocument();
+    expect(screen.getByTestId("drift-status-row")).toHaveTextContent("No drift detected");
   });
 
   test("a failed check does not clear a previously known drift state", async () => {
@@ -163,9 +417,31 @@ describe("DriftDetection", () => {
       branch: "main",
       resolution: "restore_actionsmanager",
       delivery_mode: "pr",
+      // Sent so the backend can reject a stale resolve (issue: drift hardening).
+      expected_github_sha: "sha-b",
     });
     // Drift refetched after success (initial load + post-resolve refresh).
     await waitFor(() => expect(vi.mocked(getProjectDrift).mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  test("a stale resolve surfaces the conflict instead of silently overwriting", async () => {
+    // The backend 409s when the file changed since drift was checked; the user
+    // must see that rather than believing their resolve succeeded.
+    const user = userEvent.setup();
+    vi.mocked(getProjectDrift).mockResolvedValue(mockSummary([mockDrift()]));
+    vi.mocked(resolveWorkflowDrift).mockRejectedValue({
+      response: {
+        status: 409,
+        data: { detail: "ci.yml in org/repo@main changed since drift was checked." },
+      },
+    });
+    await openDiff(user);
+
+    await user.click(screen.getByRole("button", { name: /Create Fix Pull Request/i }));
+
+    expect(
+      await screen.findByText(/changed since drift was checked/i),
+    ).toBeInTheDocument();
   });
 
   test("disables the actions and prevents duplicate submits while a resolve is in flight", async () => {

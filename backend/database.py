@@ -6,13 +6,34 @@ Supports both PostgreSQL (production) and SQLite (development/self-hosted).
 """
 
 import os
+import sqlite3
 from pathlib import Path
 from urllib.parse import quote_plus
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # Define Base for SQLAlchemy models
 Base = declarative_base()
+
+
+@event.listens_for(Engine, "connect")
+def _sqlite_enable_foreign_keys(dbapi_connection, connection_record):
+    """Turn on SQLite foreign key enforcement for every connection (issue #1811).
+
+    SQLite defaults `foreign_keys` to OFF, which made all 36 ON DELETE CASCADE
+    declarations in models.py silent no-ops — deleting a parent left orphaned
+    children behind with no error. PostgreSQL enforces natively and is skipped.
+
+    Registered against the Engine *class*, not a single engine instance, so it
+    covers every engine in the process — including the ones the test suite
+    builds itself — and so it still resolves when database.py is imported with
+    create_engine patched out (see tests/test_database_persistence.py).
+
+    The pragma is per-connection, hence "connect" rather than a one-off call.
+    """
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
 
 # Load PostgreSQL connection details
 POSTGRES_USER = os.getenv("POSTGRES_USER", "").strip()

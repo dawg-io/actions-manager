@@ -60,6 +60,7 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   -e VITE_BACKEND_URL=http://localhost:8080 \
   -e VITE_FRONTEND_URL=http://localhost:8080 \
   -e VITE_WEBSOCKET_URL=ws://localhost:8080/ws \
@@ -68,10 +69,13 @@ docker run -d \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 
+`ALLOW_INSECURE_HTTP=true` is required because these URLs are plain HTTP; drop it once you register HTTPS URLs and put ActionsManager behind a TLS reverse proxy — see [HTTPS Setup]({% link getting-started/https-setup.md %}).
+
 Or in Docker Compose (using a `.env` file):
 
 ```yaml
 environment:
+  - ALLOW_INSECURE_HTTP=true
   - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
   - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
 ```

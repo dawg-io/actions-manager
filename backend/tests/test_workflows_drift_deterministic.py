@@ -116,10 +116,10 @@ def test_normalize_yaml_for_comparison():
 @pytest.fixture
 def mock_sha_mismatch_content_match(db_state):
     """Mock GitHub API: SHA differs from local, but content matches after normalization."""
-    def mock_get_all_shas(owner, repo, branch, token):
-        return {"AM_P001_ci.yml": "sha-new-456"}  # Different SHA
+    def mock_get_all_shas(owner, repo, branch, token, etag=None):
+        return ({"AM_P001_ci.yml": "sha-new-456"}, None)  # Different SHA
 
-    def mock_get_workflow(owner, repo, filename, token):
+    def mock_get_workflow(owner, repo, filename, token, default_branch=None):
         # Same content as local but with different whitespace (should still match after normalization)
         return {
             "content": "name: AM_P001_ci\non: push  \n",  # Trailing spaces
@@ -129,7 +129,7 @@ def mock_sha_mismatch_content_match(db_state):
     def mock_default_branch(owner, repo, headers, user=None, db=None):
         return "main"
 
-    with patch("workflows.get_all_workflow_shas", side_effect=mock_get_all_shas), \
+    with patch("workflows.fetch_workflow_tree", side_effect=mock_get_all_shas), \
          patch("workflows.get_workflow_from_github", side_effect=mock_get_workflow), \
          patch("workflows.get_default_branch", side_effect=mock_default_branch):
         yield
@@ -139,7 +139,7 @@ def test_sha_mismatch_content_match_no_drift(mock_sha_mismatch_content_match, db
     """When SHA differs but content matches (after normalization), no drift should be reported."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"}
+        params={"github_user": "alice", "refresh": True}
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -152,10 +152,10 @@ def test_sha_mismatch_content_match_no_drift(mock_sha_mismatch_content_match, db
 @pytest.fixture
 def mock_sha_mismatch_content_differs(db_state):
     """Mock GitHub API: SHA differs and content also differs."""
-    def mock_get_all_shas(owner, repo, branch, token):
-        return {"AM_P001_ci.yml": "sha-new-789"}
+    def mock_get_all_shas(owner, repo, branch, token, etag=None):
+        return ({"AM_P001_ci.yml": "sha-new-789"}, None)
 
-    def mock_get_workflow(owner, repo, filename, token):
+    def mock_get_workflow(owner, repo, filename, token, default_branch=None):
         return {
             "content": "name: AM_P001_ci\non: [push, pull_request]\n",  # Different content
             "sha": "sha-new-789"
@@ -164,7 +164,7 @@ def mock_sha_mismatch_content_differs(db_state):
     def mock_default_branch(owner, repo, headers, user=None, db=None):
         return "main"
 
-    with patch("workflows.get_all_workflow_shas", side_effect=mock_get_all_shas), \
+    with patch("workflows.fetch_workflow_tree", side_effect=mock_get_all_shas), \
          patch("workflows.get_workflow_from_github", side_effect=mock_get_workflow), \
          patch("workflows.get_default_branch", side_effect=mock_default_branch):
         yield
@@ -174,7 +174,7 @@ def test_sha_mismatch_content_differs_drift_detected(mock_sha_mismatch_content_d
     """When SHA differs and content also differs, drift should be detected."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"}
+        params={"github_user": "alice", "refresh": True}
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -197,7 +197,7 @@ def test_auto_hash_update_when_content_matches(mock_sha_mismatch_content_match, 
         # Run drift detection
         resp = client.get(
             f"/api/projects/{db_state['project_id']}/drift",
-            params={"github_user": "alice"}
+            params={"github_user": "alice", "refresh": True}
         )
         assert resp.status_code == 200
 
@@ -214,14 +214,14 @@ def test_auto_hash_update_when_content_matches(mock_sha_mismatch_content_match, 
 @pytest.fixture
 def mock_sha_match():
     """Mock GitHub API: SHA matches local (optimization path)."""
-    def mock_get_all_shas(owner, repo, branch, token):
-        return {"AM_P001_ci.yml": "sha-old-123"}  # Same as local
+    def mock_get_all_shas(owner, repo, branch, token, etag=None):
+        return ({"AM_P001_ci.yml": "sha-old-123"}, None)  # Same as local
 
     def mock_default_branch(owner, repo, headers, user=None, db=None):
         return "main"
 
     # When SHAs match, get_workflow_from_github should NOT be called
-    with patch("workflows.get_all_workflow_shas", side_effect=mock_get_all_shas), \
+    with patch("workflows.fetch_workflow_tree", side_effect=mock_get_all_shas), \
          patch("workflows.get_default_branch", side_effect=mock_default_branch):
         yield
 
@@ -231,7 +231,7 @@ def test_sha_match_no_content_fetch(mock_sha_match, db_state):
     with patch("workflows.get_workflow_from_github") as mock_get:
         resp = client.get(
             f"/api/projects/{db_state['project_id']}/drift",
-            params={"github_user": "alice"}
+            params={"github_user": "alice", "refresh": True}
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -261,13 +261,13 @@ def mock_locally_committed_workflow():
 @pytest.fixture
 def mock_no_workflows_on_github():
     """Mock GitHub API: No workflows exist on GitHub yet."""
-    def mock_get_all_shas(owner, repo, branch, token):
-        return {}  # No workflows found
+    def mock_get_all_shas(owner, repo, branch, token, etag=None):
+        return ({}, None)  # No workflows found
 
     def mock_default_branch(owner, repo, headers, user=None, db=None):
         return "main"
 
-    with patch("workflows.get_all_workflow_shas", side_effect=mock_get_all_shas), \
+    with patch("workflows.fetch_workflow_tree", side_effect=mock_get_all_shas), \
          patch("workflows.get_default_branch", side_effect=mock_default_branch):
         yield
 
@@ -276,7 +276,7 @@ def test_locally_committed_workflow_no_drift(mock_locally_committed_workflow, mo
     """Locally committed workflows (hash=0000...) should NOT show drift when missing from GitHub."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"}
+        params={"github_user": "alice", "refresh": True}
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -324,7 +324,7 @@ def test_new_workflow_with_open_pr_no_drift(mock_workflow_with_open_pr, mock_no_
     """New workflows with open PRs should NOT show drift when missing from target branch."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"}
+        params={"github_user": "alice", "refresh": True}
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -414,7 +414,7 @@ def test_locally_modified_previously_synced_workflow_no_drift(
     """
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"}
+        params={"github_user": "alice", "refresh": True}
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -431,7 +431,7 @@ def test_open_pr_workflow_names_with_whitespace_no_drift(mock_workflow_with_open
     """
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"}
+        params={"github_user": "alice", "refresh": True}
     )
     assert resp.status_code == 200
     data = resp.json()

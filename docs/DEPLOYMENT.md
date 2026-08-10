@@ -242,7 +242,7 @@ Actions Manager includes a comprehensive CI/CD pipeline with automated testing, 
 
 Located in `.github/workflows/`:
 
-- `docker-image.yml` - Main build and deploy workflow
+- `docker-build-and-test.yml` - Main build and deploy workflow
 - `security-scan.yml` - Security scanning
 - `tests.yml` - Test suite
 - `lint.yml` - Code quality checks

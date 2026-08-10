@@ -8,12 +8,30 @@ import {
   Folder,
   FolderKanban,
   GitPullRequest,
+  GripVertical,
   type LucideIcon,
   MoreHorizontal,
   PencilLine,
   Plus,
   SlidersHorizontal,
 } from "lucide-react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Project, WorkflowData } from "../api/projects";
 import { PROJECT_COLOR_STYLES, normalizeProjectColorKey } from "../utils/projectColors";
 import { cn } from "../lib/utils";
@@ -50,7 +68,81 @@ interface ProjectListProps {
   projects?: Project[];
   onCreateProject?: () => void;
   isCreateProjectDisabled?: boolean;
+  /**
+   * Persist a manual card order (issue #1804). Receives the complete list of
+   * project IDs in their new order — the backend rejects partial lists, which
+   * is why reordering is disabled while a filter is active.
+   */
+  onReorder?: (orderedIds: number[]) => void;
+  /** Message shown when a reorder failed to save and the order was rolled back. */
+  reorderError?: string | null;
 }
+
+/**
+ * Sortable wrapper around one project card (issue #1804).
+ *
+ * Exists because useSortable is a hook and so cannot be called inside the
+ * projects .map(). It renders the same outer element the card always had, so
+ * the grid remains the card's direct parent.
+ *
+ * The handle is passed back via a render prop because it has to live inside the
+ * card's one `pointer-events-auto` region — the card body is
+ * `pointer-events-none` beneath a full-bleed navigation button, so a handle
+ * anywhere else would be unclickable.
+ */
+const SortableProjectCard: React.FC<{
+  sortId: number;
+  testId: string;
+  disabled: boolean;
+  disabledReason: string;
+  children: (dragHandle: React.ReactNode) => React.ReactNode;
+}> = ({ sortId, testId, disabled, disabledReason, children }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sortId, disabled });
+
+  const dragHandle = (
+    <button
+      type="button"
+      ref={setActivatorNodeRef}
+      {...attributes}
+      {...listeners}
+      disabled={disabled}
+      // Dragging must never open the project sitting underneath.
+      onClick={(e) => e.stopPropagation()}
+      title={disabled ? disabledReason : "Drag to reorder"}
+      aria-label={disabled ? disabledReason : "Reorder project"}
+      data-testid={`project-drag-handle-${testId}`}
+      className={cn(
+        "flex h-8 w-8 items-center justify-center rounded border border-transparent text-slate-400",
+        disabled
+          ? "cursor-not-allowed opacity-40"
+          : "cursor-grab hover:border-slate-300 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing dark:hover:border-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-100",
+      )}
+    >
+      <GripVertical className="h-4 w-4" aria-hidden="true" />
+    </button>
+  );
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      data-testid={`project-row-${testId}`}
+      className={cn("relative", isDragging && "z-10 opacity-80 ring-2 ring-slate-400 rounded-lg")}
+    >
+      {children(dragHandle)}
+    </div>
+  );
+};
+
+const REORDER_DISABLED_REASON = "Clear filters to reorder projects";
 
 const WARNING_STATUS_VALUES = new Set([
   "blocked",
@@ -199,6 +291,17 @@ const getDriftIndicator = (project: Project): { label: string; tone: ProjectStat
   return null;
 };
 
+const getDriftCheckedAtLabel = (project: Project): string | null => {
+  const projectFields = project as Project & Record<string, unknown>;
+  const raw = projectFields.last_drift_check_at;
+  if (typeof raw !== "string" || !raw) return null;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return `Drift checked ${date.toLocaleString()}`;
+};
+
 const getStateBadgeClasses = (tone: ProjectStateTone): string => {
   switch (tone) {
     case "danger":
@@ -281,6 +384,8 @@ const ProjectList: React.FC<ProjectListProps> = ({
     projects = [],
     onCreateProject,
     isCreateProjectDisabled = false,
+    onReorder,
+    reorderError = null,
 }) => {
   const navigate = useNavigate(); // ✅ React Router Navigation
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -308,6 +413,14 @@ const ProjectList: React.FC<ProjectListProps> = ({
     || visibilityFilter !== "all"
     || namingModeFilter !== "all"
     || statusFilter !== "all"
+  );
+
+  // A filtered grid shows a subset, and the backend only accepts a complete
+  // order — saving from here would drop the hidden projects.
+  const sensors = useSensors(
+    // A small distance keeps a click on the handle from registering as a drag.
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   const clearFilters = (): void => {
@@ -358,6 +471,30 @@ const ProjectList: React.FC<ProjectListProps> = ({
       return true;
     });
   }, [projects, searchQuery, projectTypeFilter, visibilityFilter, namingModeFilter, statusFilter, needsAttentionProjectCodes]);
+
+  const sortableIds = useMemo(
+    () => filteredProjects.map((p) => Number(p.project_id ?? p.id)),
+    [filteredProjects],
+  );
+
+  const handleDragEnd = (event: DragEndEvent): void => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || filtersActive) return;
+
+    const oldIndex = sortableIds.indexOf(Number(active.id));
+    const newIndex = sortableIds.indexOf(Number(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    // Reorder the full project list, not the filtered view — the backend
+    // requires every accessible id. Reordering is disabled while filtering, so
+    // filteredProjects and projects hold the same members here.
+    const allIds = projects.map((p) => Number(p.project_id ?? p.id));
+    const fromIndex = allIds.indexOf(Number(active.id));
+    const toIndex = allIds.indexOf(Number(over.id));
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    onReorder?.(arrayMove(allIds, fromIndex, toIndex));
+  };
 
   return (
     <div className="w-full max-w-[1400px] mx-auto px-6 lg:px-8 space-y-6">
@@ -580,11 +717,25 @@ const ProjectList: React.FC<ProjectListProps> = ({
           )}
         </div>
       )}
+      {reorderError && (
+        <div
+          role="alert"
+          data-testid="project-reorder-error"
+          className="mx-1 mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200"
+        >
+          {reorderError}
+        </div>
+      )}
+
       {filteredProjects.length > 0 && (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {filteredProjects
-            .toSorted((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
-            .slice(0, filtersActive ? undefined : 10)
             .map((project) => {
               const projectName = normalizeProjectName(project);
               const projectState = project.pr_state ?? PROJECT_STATE.NEW;
@@ -607,6 +758,7 @@ const ProjectList: React.FC<ProjectListProps> = ({
                 ? "text-slate-500 dark:text-slate-400"
                 : "text-text-secondary dark:text-secondary-dark";
               const driftIndicator = getDriftIndicator(project);
+              const driftCheckedAtLabel = getDriftCheckedAtLabel(project);
               const projectFields = project as Project & Record<string, unknown>;
               const projectColorKey = normalizeProjectColorKey(project.project_color);
               const projectColorStyles = PROJECT_COLOR_STYLES[projectColorKey];
@@ -618,11 +770,15 @@ const ProjectList: React.FC<ProjectListProps> = ({
               const rowId = project.project_id ?? project.id ?? project.project_code;
 
               return (
-                <div
+                <SortableProjectCard
                   key={project.project_id ?? project.id}
-                  data-testid={`project-row-${projectName || project.project_code || String(project.project_id ?? project.id)}`}
-                  className="relative"
+                  sortId={Number(project.project_id ?? project.id)}
+                  testId={projectName || project.project_code || String(project.project_id ?? project.id)}
+                  disabled={filtersActive}
+                  disabledReason={REORDER_DISABLED_REASON}
                 >
+                  {(dragHandle) => (
+                    <>
                   <button
                     type="button"
                     className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
@@ -683,9 +839,18 @@ const ProjectList: React.FC<ProjectListProps> = ({
                             {project.last_modified_by ? ` by ${project.last_modified_by}` : ""}
                             {projectMeta ? ` · ${projectMeta}` : ""}
                           </p>
+                          {driftCheckedAtLabel && (
+                            <p
+                              data-testid={`project-drift-checked-${rowId}`}
+                              className="mt-0.5 text-[11px] text-text-secondary/70 dark:text-secondary-dark/70"
+                            >
+                              {driftCheckedAtLabel}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="pointer-events-auto flex shrink-0 items-center gap-1 self-center">
+                        {dragHandle}
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -738,10 +903,14 @@ const ProjectList: React.FC<ProjectListProps> = ({
                       </div>
                     </CardContent>
                   </Card>
-                </div>
+                    </>
+                  )}
+                </SortableProjectCard>
               );
             })}
         </div>
+          </SortableContext>
+        </DndContext>
       )}
     </div>
   );

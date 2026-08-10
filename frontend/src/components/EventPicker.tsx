@@ -23,12 +23,20 @@ const RELEASE_TYPES = [
 ];
 
 const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
-  const [showAdvanced, setShowAdvanced] = useState<{ [key: number]: boolean }>({});
+  const [showAdvanced, setShowAdvanced] = useState<{ [type: string]: boolean }>({});
 
-  const addEvent = (eventType: WorkflowEvent['type']) => {
+  // A trigger button is a toggle: adding seeds sensible defaults, clicking the
+  // same button again drops that trigger and whatever was configured on it.
+  // Filtering by type rather than index also collapses any duplicate pair left
+  // over from when this button could add the same trigger twice.
+  const toggleEvent = (eventType: WorkflowEvent['type']) => {
+    if (events.some(e => e.type === eventType)) {
+      onChange(events.filter(e => e.type !== eventType));
+      return;
+    }
+
     const newEvent: WorkflowEvent = { type: eventType };
-    
-    // Set default configurations for certain event types
+
     if (eventType === 'pull_request') {
       newEvent.types = ['opened', 'synchronize'];
     } else if (eventType === 'release') {
@@ -36,7 +44,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
     } else if (eventType === 'schedule') {
       newEvent.cron = '0 0 * * *'; // Daily at midnight
     }
-    
+
     onChange([...events, newEvent]);
   };
 
@@ -50,10 +58,12 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
     onChange(newEvents);
   };
 
-  const toggleAdvanced = (index: number) => {
+  // Keyed by event type rather than array position: a type appears at most
+  // once, so removing an event no longer shifts this state onto its neighbour.
+  const toggleAdvanced = (type: WorkflowEvent['type']) => {
     setShowAdvanced(prev => ({
       ...prev,
-      [index]: !prev[index]
+      [type]: !prev[type]
     }));
   };
 
@@ -61,13 +71,13 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
   // can't be used as a React key (it breaks on removal - see S6479). This
   // keeps a stable id per tag, spliced/pushed in lockstep with the tags
   // array itself rather than re-derived by position on every render.
-  const tagKeysRef = useRef<Map<number, string[]>>(new Map());
+  const tagKeysRef = useRef<Map<string, string[]>>(new Map());
 
-  const getTagKeys = (index: number, length: number): string[] => {
-    let keys = tagKeysRef.current.get(index);
+  const getTagKeys = (type: WorkflowEvent['type'], length: number): string[] => {
+    let keys = tagKeysRef.current.get(type);
     if (!keys) {
       keys = Array.from({ length }, () => crypto.randomUUID());
-      tagKeysRef.current.set(index, keys);
+      tagKeysRef.current.set(type, keys);
     }
     return keys;
   };
@@ -81,13 +91,13 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
 
   const addTag = (index: number) => {
     const event = events[index];
-    getTagKeys(index, event.tags?.length || 0).push(crypto.randomUUID());
+    getTagKeys(event.type, event.tags?.length || 0).push(crypto.randomUUID());
     updateEvent(index, { ...event, tags: [...(event.tags || []), ''] });
   };
 
   const removeTag = (index: number, tagIndex: number) => {
     const event = events[index];
-    getTagKeys(index, event.tags?.length || 0).splice(tagIndex, 1);
+    getTagKeys(event.type, event.tags?.length || 0).splice(tagIndex, 1);
     const newTags = event.tags?.filter((_, i) => i !== tagIndex);
     updateEvent(index, { ...event, tags: newTags?.length ? newTags : undefined });
   };
@@ -147,10 +157,10 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
       <div className="events-list">
         {events.map((event, index) => {
           const eventInfo = getEventTypeInfo(event.type);
-          const isAdvancedOpen = showAdvanced[index];
-          
+          const isAdvancedOpen = showAdvanced[event.type];
+
           return (
-            <div key={index} className="event-item">
+            <div key={event.type} className="event-item">
               <div className="event-header">
                 <div className="event-info">
                   <span className="event-type">{eventInfo?.label || event.type}</span>
@@ -159,7 +169,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                 <div className="event-actions">
                   <button
                     type="button"
-                    onClick={() => toggleAdvanced(index)}
+                    onClick={() => toggleAdvanced(event.type)}
                     className="advanced-toggle"
                     title="Advanced options"
                   >
@@ -313,7 +323,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
                       <div className="advanced-label">Tags (optional)</div>
                       <div className="array-input">
                         {event.tags?.map((tag, tagIndex) => (
-                          <div key={getTagKeys(index, event.tags?.length || 0)[tagIndex]} className="array-item">
+                          <div key={getTagKeys(event.type, event.tags?.length || 0)[tagIndex]} className="array-item">
                             <input
                               type="text"
                               value={tag}
@@ -349,7 +359,7 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
 
       {/* Add Event Buttons */}
       <div className="add-events">
-        <div className="add-events-label">Add Trigger:</div>
+        <div className="add-events-label">Triggers:</div>
         <div className="event-buttons">
           {EVENT_TYPES.map(eventType => {
             const isAlreadyAdded = events.some(e => e.type === eventType.value);
@@ -357,13 +367,13 @@ const EventPicker: React.FC<EventPickerProps> = ({ events, onChange }) => {
               <button
                 key={eventType.value}
                 type="button"
-                onClick={() => addEvent(eventType.value)}
-                disabled={isAlreadyAdded && eventType.value !== 'pull_request' && eventType.value !== 'release'}
+                onClick={() => toggleEvent(eventType.value)}
+                aria-pressed={isAlreadyAdded}
                 className={`event-button ${isAlreadyAdded ? 'added' : ''}`}
-                title={eventType.description}
+                title={isAlreadyAdded ? `Remove this trigger — ${eventType.description}` : eventType.description}
               >
                 {eventType.label}
-                {isAlreadyAdded && ' ✓'}
+                {isAlreadyAdded && <span aria-hidden="true"> ✓</span>}
               </button>
             );
           })}
