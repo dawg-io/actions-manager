@@ -347,6 +347,9 @@ GITHUB_CLIENT_SECRET=your_github_client_secret
 # Set explicitly only if you use GitHub OAuth login and need a fixed callback URL.
 # APP_URL=http://YOUR_SERVER_IP_OR_DOMAIN:8080
 # VITE_APP_URL=http://YOUR_SERVER_IP_OR_DOMAIN:8080  # deprecated alias
+# Required if the APP_URL above is plain http:// on a non-loopback address —
+# without it the container refuses to start. Remove it once you use https://.
+# ALLOW_INSECURE_HTTP=true
 
 # OPTIONAL: License key (reserved for future paid tiers; no paid plans are currently available during beta)
 # LICENSE_KEY=your_jwt_license_key
@@ -485,6 +488,22 @@ Projects organize your repositories:
 4. Edit the workflow YAML
 5. Deploy to GitHub
 
+### Optional: Inbound Webhooks
+
+ActionsManager works entirely through **outbound** calls to GitHub. Creating and delivering
+workflows, drift detection and pull request campaigns all work on an instance with no public URL —
+which is the normal case for internal and development deployments.
+
+The one thing an inbound URL buys you is immediacy: when a pull request ActionsManager opened is
+merged on GitHub, a webhook updates the status straight away instead of on the next check.
+
+If you want that, only the single path `POST /webhooks/github` needs to be reachable — not the
+dashboard or the API. See [Exposing the Webhook Endpoint](guides/WEBHOOK_ENDPOINT.md)
+for Cloudflare Tunnel, Tailscale Funnel and reverse-proxy setups.
+
+Until `GITHUB_PR_WEBHOOK_SECRET` is set, inbound webhooks are rejected, so skipping this leaves
+nothing exposed.
+
 ### Admin Panel Access
 
 The self-hosted beta image does not require admin panel credentials for first use. Sign in with GitHub OAuth or a Personal Access Token instead. Do not rely on placeholder admin credentials such as `admin/admin123` for any exposed deployment.
@@ -575,10 +594,12 @@ For PAT login, leave URL configuration commented out. The frontend auto-detects 
 GitHub needs a fixed callback URL registered in your OAuth App settings. Set `APP_URL` to the actual URL that browsers will use to reach the server:
 
 ```bash
-# LAN / server IP example
+# LAN / server IP example — plain HTTP on a non-loopback address, so the
+# insecure-HTTP opt-in is required for the container to start
 APP_URL=http://192.168.1.100:8080
+ALLOW_INSECURE_HTTP=true
 
-# Named domain with TLS
+# Named domain with TLS — no opt-in needed
 APP_URL=https://actionsmanager.example.com
 ```
 
@@ -594,6 +615,7 @@ To use a different port (e.g. 9000):
 ```bash
 # Only needed if you use GitHub OAuth; otherwise leave this commented out.
 # APP_URL=http://YOUR_SERVER_IP_OR_DOMAIN:9000
+# ALLOW_INSECURE_HTTP=true  # required alongside a non-loopback http:// APP_URL
 ```
 
 **2. Update `docker-compose.self-hosted.yml`:**
@@ -825,6 +847,26 @@ docker compose -f docker-compose.self-hosted.yml logs -f
 ---
 
 ## Upgrading
+
+### One-Time Database Cleanup on This Upgrade
+
+Earlier versions never enabled SQLite's `foreign_keys` pragma, which is off by
+default, so `ON DELETE CASCADE` never took effect. Deleting a project left its
+child rows behind, referencing a project that no longer existed.
+
+Foreign keys are now enforced, and a one-time migration removes those orphans on
+first startup. You will see something like `✅ Purged 214 orphaned row(s)` in the
+logs — that is expected, and the count simply reflects how much had built up.
+Later startups report `No orphaned rows found`.
+
+Two consequences worth knowing before you upgrade:
+
+- **Deleting a project now also deletes its notification delivery history.**
+  That history previously survived project deletion; it no longer does.
+- **PostgreSQL deployments are unaffected** — PostgreSQL always enforced these
+  constraints, so no orphans could accumulate and the migration skips.
+
+As always, [back up your database](#backup-strategy) before upgrading.
 
 ### Upgrading the Application
 

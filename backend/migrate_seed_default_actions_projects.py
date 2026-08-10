@@ -17,9 +17,8 @@ from sqlalchemy.orm import sessionmaker
 
 from migration_utils import get_migration_database_url
 from database import DATABASE_URL as APP_DATABASE_URL
-from models import Account, ActionsProject
+from models import Account, ActionsProject, SEED_ACCOUNT_GITHUB_USER
 
-SEED_ACCOUNT_GITHUB_USER = "__actionsmanager_seed__"
 SEED_ACCOUNT_EMAIL = "seed@actionsmanager.internal"
 
 # Ported from frontend/src/utils/actionInputSchemas.ts's ACTION_INPUT_CATALOG.

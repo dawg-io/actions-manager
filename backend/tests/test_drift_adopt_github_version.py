@@ -116,7 +116,7 @@ def db_state():
 # ---------------------------------------------------------------------------
 
 @patch('workflows.get_default_branch', return_value="main")
-@patch('workflows.get_all_workflow_shas', return_value={"AM_P001_ci.yml": "sha-new"})
+@patch('workflows.fetch_workflow_tree', return_value=({"AM_P001_ci.yml": "sha-new"}, None))
 @patch('workflows.get_workflow_from_github', return_value={
     "content": "name: AM_P001_ci\non: pull_request", "sha": "sha-new",
 })
@@ -124,7 +124,7 @@ def test_drift_detail_includes_shared_metadata(_g, _shas, _branch, db_state):
     """Drift response should mark workflow as shared and list affected repos."""
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"},
+        params={"github_user": "alice", "refresh": True},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -187,7 +187,7 @@ def test_adopt_github_create_repo_override(_g, db_state):
 
 
 @patch('workflows.get_default_branch', return_value="main")
-@patch('workflows.get_all_workflow_shas', return_value={"AM_P001_ci.yml": "sha-new"})
+@patch('workflows.fetch_workflow_tree', return_value=({"AM_P001_ci.yml": "sha-new"}, None))
 @patch('workflows.get_workflow_from_github', return_value={
     "content": "name: AM_P001_ci\non: pull_request", "sha": "sha-new",
 })
@@ -210,7 +210,7 @@ def test_drift_uses_override_when_present(_g, _shas, _branch, db_state):
 
     resp = client.get(
         f"/api/projects/{db_state['project_id']}/drift",
-        params={"github_user": "alice"},
+        params={"github_user": "alice", "refresh": True},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

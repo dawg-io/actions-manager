@@ -49,6 +49,7 @@ docker run -d \
   -p 8080:8080 \
   -v actions-manager-data:/app/data \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 
@@ -61,12 +62,15 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e SECRET_KEY=<your_generated_key> \
   -e APP_URL=http://localhost:8080 \
+  -e ALLOW_INSECURE_HTTP=true \
   -e GITHUB_CLIENT_ID=your_client_id \
   -e GITHUB_CLIENT_SECRET=your_client_secret \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 
 Generate `<your_generated_key>` once with `openssl rand -hex 32` and use the same value every time you restart or update the container.
+
+`ALLOW_INSECURE_HTTP=true` is required because both commands serve the app over plain HTTP: ActionsManager refuses to start on a non-loopback `http://` `APP_URL` without it, and blocks PAT login over non-local HTTP. Drop it once you put ActionsManager behind HTTPS — see [HTTPS Setup]({% link getting-started/https-setup.md %}).
 
 > **Note:** The self-hosted image now forces `INSTALLATION_MODE=self-hosted` in `start.sh`, so you can omit that variable. `VITE_APP_URL` still works as a deprecated alias for `APP_URL`.
 
@@ -85,6 +89,9 @@ services:
       - actions-manager-data:/app/data
     environment:
       - SECRET_KEY=${SECRET_KEY}
+      # Required while the app is served over plain HTTP; remove it once you
+      # front ActionsManager with HTTPS
+      - ALLOW_INSECURE_HTTP=true
       # Optional OAuth (set APP_URL to match your deployment URL when using OAuth;
       # VITE_APP_URL remains supported as a deprecated alias):
       # - APP_URL=http://localhost:8080

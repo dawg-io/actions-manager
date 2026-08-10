@@ -70,7 +70,7 @@
 │                 ▼                                          │
 │  Stage 4: Quality & Deploy                                │
 │  ┌──────────────────────────────────┐                     │
-│  │      SonarQube Analysis          │                     │
+│  │      SonarQube Scan              │                     │
 │  └──────────────┬───────────────────┘                     │
 │                 │                                          │
 │                 ▼                                          │
@@ -99,7 +99,7 @@
 
 ## Workflow-Specific Changes
 
-### docker-image.yml (Main Build)
+### docker-build-and-test.yml (Main Build)
 ```
 BEFORE:                    AFTER:
 ┌─────────────┐           ┌─────────────┐

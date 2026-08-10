@@ -160,6 +160,9 @@ export interface LoadProjectResponse extends Project {
   linked_standard_projects?: LinkedStandardProject[];
   caller_project_role?: string;
   custom_files?: CustomFile[];
+  /** Workflow names with persisted drift from the last drift check (issue #1793's WorkflowDriftState),
+   * used to seed the drift badge on initial render before the live check resolves. */
+  drifted_workflow_names?: string[];
 }
 
 // ===== API Functions =====
@@ -183,6 +186,25 @@ export const fetchProjects = async (user: string | undefined): Promise<Project[]
     console.error("❌ Error fetching projects:", axiosError.response?.data || axiosError);
     return [];
   }
+};
+
+/**
+ * Save the user's manual Projects-grid order (issue #1804).
+ *
+ * Takes the complete ordered list of the user's accessible project IDs — the
+ * backend rejects partial lists so a filtered view can never overwrite the
+ * saved order. Throws on failure so the caller can roll back its optimistic
+ * update; unlike fetchProjects this must not swallow the error.
+ */
+export const updateProjectOrder = async (
+  user: string,
+  projectIds: number[],
+): Promise<number[]> => {
+  const response: AxiosResponse<{ project_ids: number[] }> = await apiClient.put(
+    `/api/projects/order`,
+    { github_user: user, project_ids: projectIds },
+  );
+  return response.data.project_ids;
 };
 
 // Load a specific project by name

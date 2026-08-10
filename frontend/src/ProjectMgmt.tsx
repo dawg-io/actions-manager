@@ -4,7 +4,7 @@ import PlanUsagePill from "./components/PlanUsagePill";
 import BrandLogo from "./components/BrandLogo";
 import { useParams, useNavigate, useLocation } from "react-router";
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectName, exportProjectBackup } from "./api/projects";
+import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectName, updateProjectOrder, exportProjectBackup } from "./api/projects";
 import { deleteProjectEnhanced } from "./api/projectDeletion";
 import { handleSaveProjectWithModal } from "./api/handlers";
 import { getSecrets } from "./api/secrets";
@@ -196,6 +196,9 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   // Drift detection state — lifted from <DriftDetection /> so we can render
   // per-workflow badges and warn users before destructive sync actions.
   const [driftDetails, setDriftDetails] = useState<WorkflowDriftDetail[]>([]);
+  // Kept separate from driftDetails, which the live check overwrites — the
+  // banner needs the persisted seed to survive until that check resolves.
+  const [seededDriftNames, setSeededDriftNames] = useState<string[]>([]);
   const [driftRefreshSignal, setDriftRefreshSignal] = useState<number>(0);
   const driftedWorkflowNames = useMemo(
     () => new Set(driftDetails.map(d => d.workflow_name)),
@@ -273,6 +276,10 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   const [projectColorSaveError, setProjectColorSaveError] = useState<string | null>(null);
   const projectColorSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectColorSaveRequestIdRef = useRef<number>(0);
+
+  // Projects-grid manual ordering (issue #1804)
+  const [projectOrderError, setProjectOrderError] = useState<string | null>(null);
+  const projectOrderRequestIdRef = useRef<number>(0);
 
   // Linked reusable workflows (for standard projects)
   const [linkedWorkflows, setLinkedWorkflows] = useState<RwxWorkflow[]>([]);
@@ -408,6 +415,50 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       setProjectColorSaveError(error?.response?.data?.detail || error?.message || "Failed to save project color.");
     }
   }, [isProjectReadOnly, user, projectId, projectColor]);
+
+  /**
+   * Persist a manual Projects-grid reorder (issue #1804).
+   *
+   * Applies optimistically so the drop feels instant, then rolls the whole list
+   * back if the save fails. The request-id guard mirrors handleProjectColorSave:
+   * a slow earlier save must not clobber a newer arrangement.
+   */
+  const handleProjectsReorder = useCallback(async (orderedIds: number[]): Promise<void> => {
+    if (!user) return;
+
+    const previousProjects = projects;
+    const byId = new Map(projects.map((p) => [Number(p.project_id ?? p.id), p]));
+    const reordered = orderedIds
+      .map((id) => byId.get(Number(id)))
+      .filter((p): p is Project => p !== undefined);
+
+    // Guard against a drop computed from a stale list: if the ids don't cover
+    // every project, saving would send a partial order and be rejected anyway.
+    if (reordered.length !== projects.length) return;
+
+    setProjectOrderError(null);
+    setProjects(reordered);
+
+    const requestId = ++projectOrderRequestIdRef.current;
+    try {
+      const canonicalIds = await updateProjectOrder(user, orderedIds);
+      if (requestId !== projectOrderRequestIdRef.current) return;
+
+      // The backend response is canonical — re-apply it in case it differs.
+      const canonical = canonicalIds
+        .map((id) => byId.get(Number(id)))
+        .filter((p): p is Project => p !== undefined);
+      if (canonical.length === reordered.length) {
+        setProjects(canonical);
+      }
+    } catch (error: any) {
+      if (requestId !== projectOrderRequestIdRef.current) return;
+      setProjects(previousProjects);
+      setProjectOrderError(
+        error?.response?.data?.detail || error?.message || "Failed to save project order.",
+      );
+    }
+  }, [user, projects]);
 
   const handleProjectNameSave = useCallback((newValue: string) => {
     if (newValue === projectName) return;
@@ -636,6 +687,28 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         setWorkflows((response.workflows ?? []).map(w => ({ ...w, savedName: w.name })));
         setRXWorkflows((response.rxworkflows ?? []).map(w => ({ ...w, savedName: w.name })));
         setCustomFiles(response.custom_files ?? []);
+        // Seed the drift badge from the last persisted check (WorkflowDriftState)
+        // so it's correct on first paint instead of defaulting to "no drift" and
+        // flipping once <DriftDetection>'s live check resolves. That live check
+        // still runs unconditionally and fully replaces this with authoritative
+        // data via handleDriftLoaded/setDriftDetails below.
+        setSeededDriftNames(response.drifted_workflow_names ?? []);
+        setDriftDetails(
+          (response.drifted_workflow_names ?? []).map((name): WorkflowDriftDetail => ({
+            workflow_id: 0,
+            workflow_name: name,
+            workflow_filename: name,
+            repo: "",
+            branch: "",
+            has_drift: true,
+            actionsmanager_yaml: null,
+            github_yaml: null,
+            actionsmanager_sha: null,
+            github_sha: null,
+            last_checked: "",
+            message: "",
+          }))
+        );
         setRegexPattern(response.branch_regex ?? "");
         
         // Migrate legacy branch_option values
@@ -1350,9 +1423,11 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   // Helper function to render the project list when no project is selected
   const renderProjectList = (): React.ReactElement => {
     return (
-      <ProjectList 
+      <ProjectList
         user={user}
         projects={projects}
+        onReorder={handleProjectsReorder}
+        reorderError={projectOrderError}
         onCreateProject={() => navigate(`/project/${user}/new`)}
         isCreateProjectDisabled={(() => {
           if (projects.length === 0) return false;
@@ -2339,6 +2414,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               selectedRepos={selectedRepos}
               onDriftLoaded={handleDriftLoaded}
               refreshSignal={driftRefreshSignal}
+              seededDriftNames={seededDriftNames}
               onWorkflowStatusesChanged={handleDriftWorkflowStatusesChanged}
             />
             

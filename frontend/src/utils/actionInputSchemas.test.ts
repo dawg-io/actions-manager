@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getActionInputSchema, actionsProjectToSchema } from './actionInputSchemas';
+import { getActionInputSchema, actionsProjectToSchema, partitionActionInputs } from './actionInputSchemas';
 import type { ActionInput, ActionsProject } from '../api/actionsProjects';
 
 function makeInput(overrides: Partial<ActionInput> = {}): ActionInput {
@@ -99,5 +99,63 @@ describe('getActionInputSchema', () => {
 
   it('returns undefined when importedActions is empty', () => {
     expect(getActionInputSchema('actions/checkout@v7.0.1', [])).toBeUndefined();
+  });
+});
+
+describe('partitionActionInputs', () => {
+  const schema = actionsProjectToSchema(makeProject({
+    inputs: [
+      makeInput({ name: 'repository', required: true }),
+      makeInput({ name: 'ref' }),
+      makeInput({ name: 'token' }),
+      makeInput({ name: 'fetch-depth' }),
+    ],
+  }));
+  const names = (entries: [string, unknown][]) => entries.map(([name]) => name);
+  const noSticky = new Set<string>();
+
+  it('puts required inputs in visible and unset optional inputs in hidden', () => {
+    const { visible, hidden } = partitionActionInputs(schema, undefined, noSticky);
+    expect(names(visible)).toEqual(['repository']);
+    expect(names(hidden)).toEqual(['ref', 'token', 'fetch-depth']);
+  });
+
+  it('promotes an optional input to visible once it is present in with', () => {
+    const { visible, hidden } = partitionActionInputs(schema, { ref: 'main' }, noSticky);
+    expect(names(visible)).toEqual(['repository', 'ref']);
+    expect(names(hidden)).toEqual(['token', 'fetch-depth']);
+  });
+
+  it('treats an optional input set to an empty string as set', () => {
+    const { visible } = partitionActionInputs(schema, { token: '' }, noSticky);
+    expect(names(visible)).toEqual(['repository', 'token']);
+  });
+
+  it('keeps a sticky key visible after its value is cleared', () => {
+    const { visible, hidden } = partitionActionInputs(schema, {}, new Set(['token']));
+    expect(names(visible)).toEqual(['repository', 'token']);
+    expect(names(hidden)).toEqual(['ref', 'fetch-depth']);
+  });
+
+  it('returns everything hidden when nothing is required and none are set', () => {
+    const optionalOnly = actionsProjectToSchema(makeProject({
+      inputs: [makeInput({ name: 'ref' }), makeInput({ name: 'token' })],
+    }));
+    const { visible, hidden } = partitionActionInputs(optionalOnly, undefined, noSticky);
+    expect(visible).toEqual([]);
+    expect(names(hidden)).toEqual(['ref', 'token']);
+  });
+
+  it('returns everything visible when every input is required', () => {
+    const allRequired = actionsProjectToSchema(makeProject({
+      inputs: [makeInput({ name: 'ref', required: true }), makeInput({ name: 'token', required: true })],
+    }));
+    const { visible, hidden } = partitionActionInputs(allRequired, undefined, noSticky);
+    expect(names(visible)).toEqual(['ref', 'token']);
+    expect(hidden).toEqual([]);
+  });
+
+  it('returns empty partitions for an undefined schema', () => {
+    expect(partitionActionInputs(undefined, { ref: 'main' }, noSticky)).toEqual({ visible: [], hidden: [] });
   });
 });

@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.exc import OperationalError
-import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups
+import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups, notifications_smtp, notification_subscriptions
 from database import engine, Base, SessionLocal
 from models import Account, WorkspaceMember
 import config
@@ -42,6 +42,8 @@ import mode_validation
 import anyio
 import os
 import sys
+from notification_worker import start_notification_worker, stop_notification_worker
+from drift_worker import start_drift_worker, stop_drift_worker
 
 # FastAPI app with metadata
 # Disable interactive docs in production or when DISABLE_API_DOCS=true
@@ -231,6 +233,8 @@ app.include_router(workflow_import.router)
 app.include_router(custom_files.router)
 app.include_router(actions_projects.router)
 app.include_router(action_groups.router)
+app.include_router(notifications_smtp.router)
+app.include_router(notification_subscriptions.router)
 
 # Conditionally include marketplace webhooks router only in cloud mode
 if config.INSTALLATION_MODE == "cloud":
@@ -301,6 +305,21 @@ async def startup_event():
         print(f"🔗 GitHub OAuth callback: {auth.BACKEND_URL}/auth/callback")
 
     print("=" * 60)
+
+    app.state.notification_worker_task = start_notification_worker(SessionLocal)
+    app.state.drift_worker_task = start_drift_worker(SessionLocal)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop background tasks cleanly."""
+    task = getattr(app.state, "notification_worker_task", None)
+    if task is not None:
+        await stop_notification_worker(task)
+
+    drift_task = getattr(app.state, "drift_worker_task", None)
+    if drift_task is not None:
+        await stop_drift_worker(drift_task)
 
 
 @app.get("/")

@@ -25,8 +25,11 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
+
+`ALLOW_INSECURE_HTTP=true` is required because this command serves the app over plain HTTP; drop it once you put Actions Manager behind HTTPS.
 
 3. Open `http://localhost:8080`
 4. Choose **Sign in with Personal Access Token**

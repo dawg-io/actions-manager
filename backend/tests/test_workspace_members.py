@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import app
 from database import Base
-from models import Account, WorkspaceMember
+from models import Account, WorkspaceMember, SEED_ACCOUNT_GITHUB_USER
 from authorization import _get_db as auth_get_db
 from workspace_members import get_db as ws_get_db
 from auth import user_tokens, create_auth_session
@@ -566,3 +566,99 @@ class TestWorkspaceMembershipCreation:
         data = resp.json()
         listed_member = next(m for m in data if m["user_id"] == member_user.user_id)
         assert listed_member["workspace_role"] == "admin"
+
+
+class TestSeedAccountIsNotAMember:
+    """The reserved seed account must never hold a workspace role.
+
+    It is created by a migration before anyone logs in, so it holds the lowest
+    user_id. Both "first user" heuristics used that as a proxy for "the
+    installer", which made a machine account the only workspace admin and left
+    every human read_only with no way to fix it.
+    """
+
+    def _seed_account(self, test_db):
+        account = Account(
+            github_user=SEED_ACCOUNT_GITHUB_USER,
+            github_email="seed@actionsmanager.internal",
+            account_type="system",
+        )
+        test_db.add(account)
+        test_db.commit()
+        test_db.refresh(account)
+        return account
+
+    def test_seed_account_gets_no_membership(self, test_db):
+        from auth import _ensure_workspace_membership
+
+        seed = self._seed_account(test_db)
+        _ensure_workspace_membership(seed, test_db)
+
+        assert test_db.query(WorkspaceMember).filter(
+            WorkspaceMember.user_id == seed.user_id
+        ).count() == 0
+
+    def test_a_stray_seed_membership_is_not_counted(self, test_db):
+        """Even on a database still carrying the bad row, the next human is admin."""
+        from auth import _ensure_workspace_membership
+
+        seed = self._seed_account(test_db)
+        test_db.add(WorkspaceMember(user_id=seed.user_id, workspace_role="admin"))
+        test_db.commit()
+
+        human = Account(
+            github_user="human",
+            github_email="human@example.com",
+            account_type="free",
+        )
+        test_db.add(human)
+        test_db.commit()
+        test_db.refresh(human)
+
+        _ensure_workspace_membership(human, test_db)
+
+        member = test_db.query(WorkspaceMember).filter(
+            WorkspaceMember.user_id == human.user_id
+        ).first()
+        assert member.workspace_role == "admin"
+
+    def test_seed_account_is_hidden_from_the_member_list(self, admin_user, test_db):
+        seed = self._seed_account(test_db)
+        test_db.add(WorkspaceMember(user_id=seed.user_id, workspace_role="admin"))
+        test_db.commit()
+
+        resp = client.get(
+            "/api/workspace/members",
+            headers={"Authorization": "Bearer " + admin_user.session_token},
+        )
+
+        assert resp.status_code == 200
+        assert SEED_ACCOUNT_GITHUB_USER not in [m["github_user"] for m in resp.json()]
+
+    def test_seed_account_role_cannot_be_changed(self, admin_user, test_db):
+        seed = self._seed_account(test_db)
+        test_db.add(WorkspaceMember(user_id=seed.user_id, workspace_role="admin"))
+        test_db.commit()
+
+        resp = client.patch(
+            f"/api/workspace/members/{seed.user_id}/role",
+            json={"workspace_role": "read_only"},
+            headers={"Authorization": "Bearer " + admin_user.session_token},
+        )
+
+        assert resp.status_code == 404
+
+    def test_last_real_admin_cannot_demote_themselves_via_the_seed(self, admin_user, test_db):
+        """A seed row must not make the only real admin look like one of two."""
+        seed = self._seed_account(test_db)
+        test_db.add(WorkspaceMember(user_id=seed.user_id, workspace_role="admin"))
+        test_db.commit()
+
+        resp = client.patch(
+            f"/api/workspace/members/{admin_user.user_id}/role",
+            json={"workspace_role": "read_only"},
+            headers={"Authorization": "Bearer " + admin_user.session_token},
+        )
+
+        assert resp.status_code == 400
+        assert "last admin" in resp.json()["detail"].lower()

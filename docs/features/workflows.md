@@ -46,6 +46,40 @@ When you edit a workflow definition in ActionsManager, the platform:
 
 Removing a workflow from a project scope deletes the `.github/workflows/` file from all repositories in the project, again via PR or direct commit.
 
+## Workflow Status
+
+Every workflow carries a status showing how far it has travelled from ActionsManager to GitHub:
+
+| Status | Meaning |
+|--------|---------|
+| **New Local** | Created in ActionsManager, never delivered |
+| **Committed Locally** | Edited and saved in ActionsManager, not yet delivered to GitHub |
+| **Under Review** | Carried by an open pull request that hasn't merged yet |
+| **Synced** | Delivered, and the repository's file matches the managed definition |
+
+Lists may also show derived labels that combine the status with what's actually in GitHub: **Local
+Draft** and **Pending Sync** for content with no GitHub baseline yet, **Imported Locally** for a
+workflow imported from a repository but not yet re-delivered, and **Drift Detected** when the file in
+GitHub has diverged.
+
+Status and drift answer different questions. Status is about *your* pending work; drift is about
+changes made in GitHub outside ActionsManager. A workflow that is Committed Locally or Under Review
+is never reported as drifted — see [What Counts as Drift]({% link features/drift-detection.md %}#what-counts-as-drift).
+
+## Workflow Names Across Projects
+
+Workflow names only need to be unique **within** a project. Two projects can each have a workflow
+called `ci`, and they are entirely independent — editing or syncing one never affects the other.
+
+Each workflow belongs to exactly one project. Sharing a single workflow between projects is not
+supported; if two projects need the same content, give each its own copy, or use a
+[Reusable Workflow Project]({% link features/reusable-workflows.md %}), which is the supported way
+to share definitions.
+
+**Prefix mode affects only the GitHub filename.** With prefixing on, project `ABC` pushes
+`AM_ABC_ci.yml` so two projects' files never collide in a shared repository. It does not change the
+name ActionsManager stores, which is always the bare `ci`.
+
 ## Delivery Modes
 
 | Mode | Description | When to Use |
@@ -78,6 +112,16 @@ ActionsManager includes a YAML editor for creating and modifying workflow conten
 - Template selection
 
 ![Workflow page view showing the project file browser and YAML editor](../assets/screenshots/workflows/workflow-page-view.png)
+
+### GUI mode
+
+Switching the editor to **GUI** mode gives you a form-based view of the same workflow, kept in sync with the YAML as you edit.
+
+**Triggers** are toggle buttons. Clicking one adds that trigger with sensible defaults; clicking it again removes it, along with any branches, paths, sub-types or cron schedule you set on it. A trigger can only be added once — GitHub Actions keys `on:` by event name, so a second copy could never survive being written out.
+
+**Steps** are listed as compact rows. Click a row to open that step in the detail panel, which stays open while you move between steps — it sits to the right of the job list, or below it on narrower screens, where selecting a step scrolls it into view. The panel is the only place a step is edited, so there's never a question of where to make a change. Renaming a step updates its row title immediately.
+
+Adding or duplicating a step opens it in the panel straight away, ready to edit.
 
 ## Related Topics
 

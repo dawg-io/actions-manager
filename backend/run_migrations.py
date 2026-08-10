@@ -90,6 +90,21 @@ def main():
         "migrate_seed_default_actions_projects.py",    # Seeds the shared Actions Projects catalog with 7 common actions
         "migrate_add_action_branding.py",              # Adds branding_icon/branding_color columns to actions_projects
         "migrate_add_action_groups.py",                # Adds action_groups and action_group_memberships tables
+        "migrate_add_notifications_schema.py",         # Adds notification_events/deliveries/subscriptions/settings tables (issue #1790)
+        "migrate_add_workflow_drift_states.py",        # Adds workflow_drift_states table for drift transition detection (issue #1793)
+        "migrate_add_campaign_last_known_status.py",   # Adds last_known_status column to project_pr_campaigns (issue #1794)
+        "migrate_add_project_display_order.py",        # Adds project_display_order table for per-user grid ordering (issue #1804)
+        # After the drift-states table exists, since it rebuilds that table.
+        "migrate_add_drift_state_branch.py",           # Keys drift state by branch as well as repo (drift hardening PR 5)
+        "migrate_add_workflow_tree_cache.py",          # Caches tree listings + ETags so unchanged branches cost no rate limit
+        "migrate_add_drift_state_display_fields.py",   # Lets the drift panel render from stored state without calling GitHub
+        "migrate_add_drift_check_failure_count.py",    # Adds a consecutive-failure counter to projects, for sweep backoff
+        # After the seed account exists, so it repairs the same boot that creates it.
+        "migrate_revoke_seed_workspace_membership.py", # Takes workspace admin off the seed account and restores it to the installer
+        # Must stay last: purges rows orphaned while SQLite foreign keys were
+        # disabled, so every table it cleans has to exist by the time it runs.
+        "migrate_add_project_workflow_unique.py",      # Enforces one project per workflow (drift hardening PR 4)
+        "migrate_purge_orphaned_rows.py",              # Removes pre-existing orphaned rows (issue #1811)
     ]
     
     # Check which migrations exist

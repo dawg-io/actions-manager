@@ -117,8 +117,9 @@ test.describe("Managed Actions", () => {
     await page.getByRole("button", { name: new RegExp(SAMPLE_WORKFLOW.name) }).click();
     await page.getByRole("button", { name: "GUI", exact: true }).click();
 
-    // Add a step to the existing job and switch it to "Use Action".
+    // Add a step, open it in the detail panel, and switch it to "Use Action".
     await page.getByRole("button", { name: /Add Step/i }).click();
+    await page.locator('[id^="step-row-"]').last().click();
     await page.getByRole("radio", { name: "Use Action" }).last().click();
 
     // Browse the imported Managed Actions catalog and pick it for this step.
@@ -128,7 +129,12 @@ test.describe("Managed Actions", () => {
     const usesInput = page.locator('input[id^="step-uses-"]').last();
     await expect(usesInput).toHaveValue(`${importedAction.owner}/${importedAction.repo}@${importedAction.ref}`);
 
-    // The action's declared inputs render as typed `with:` fields once selected.
+    // `token` is optional and unset, so it starts behind the disclosure.
+    const disclosure = page.getByRole("button", { name: /Show 1 option/ });
+    await expect(disclosure).toBeVisible();
+    await disclosure.click();
+
+    // The action's declared inputs render as typed `with:` fields once revealed.
     await expect(page.getByText("token", { exact: false }).last()).toBeVisible();
   });
 });

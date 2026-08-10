@@ -22,9 +22,10 @@ from workflows import (
     _update_workflow_to_github,
     _update_workflow_git_hash,
     _ensure_workflows_directory_exists,
+    DriftCheckUnavailable,
     GITHUB_API_URL
 )
-from models import Workflow
+from models import Workflow, Project, ProjectWorkflow, Account
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base
@@ -33,6 +34,36 @@ from models import Base
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test_github_integration.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def _seed_project_workflow(db, project_code, workflow_name, *, git_hash=None, is_reusable=False):
+    """Create an account, project and workflow wired together.
+
+    _update_workflow_git_hash resolves the workflow through its project, so a
+    bare Workflow row is no longer findable — names are not globally unique.
+    """
+    account = Account(
+        github_user=f"user-{project_code}",
+        github_email=f"{project_code}@example.com",
+        account_type="free",
+    )
+    db.add(account); db.commit(); db.refresh(account)
+
+    project = Project(
+        project_name=f"proj-{project_code}", project_code=project_code, user_id=account.user_id
+    )
+    db.add(project); db.commit(); db.refresh(project)
+
+    workflow = Workflow(
+        workflow_name=workflow_name,
+        workflow_yaml="name: Test\non: push",
+        reusable_workflow=is_reusable,
+        workflow_git_hash=git_hash,
+    )
+    db.add(workflow); db.commit(); db.refresh(workflow)
+    db.add(ProjectWorkflow(project_id=project.project_id, workflow_id=workflow.workflow_id))
+    db.commit()
+    return workflow
 
 
 class TestGitHubIntegration:
@@ -120,16 +151,29 @@ class TestGitHubIntegration:
             
             assert result == "develop"
 
-    def test_get_default_branch_fallback(self):
-        """Test default branch fallback to 'main'."""
+    def test_get_default_branch_raises_instead_of_guessing_main(self):
+        """A failed lookup must be an error, not the answer "main".
+
+        Returning "main" turned a revoked token or rate limit into a wrong
+        answer: drift was compared against a branch nobody chose and reported
+        synchronized against a file the project never wrote to.
+        """
         mock_response = Mock()
         mock_response.status_code = 404
-        
+
         with patch('workflows.requests.get', return_value=mock_response):
             headers = {"Authorization": "token test"}
-            result = get_default_branch("owner", "repo", headers)
-            
-            assert result == "main"
+            with pytest.raises(DriftCheckUnavailable):
+                get_default_branch("owner", "repo", headers)
+
+    def test_get_default_branch_raises_when_github_omits_the_field(self):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {}
+
+        with patch('workflows.requests.get', return_value=mock_response):
+            with pytest.raises(DriftCheckUnavailable):
+                get_default_branch("owner", "repo", {"Authorization": "token test"})
 
     def test_verify_workflow_belongs_to_project_with_indicator(self):
         """Test workflow verification with project code indicator."""
@@ -530,21 +574,13 @@ class TestGitHubIntegration:
         """Test updating workflow git hash in database."""
         db = TestingSessionLocal()
         try:
-            # Create a workflow
-            workflow = Workflow(
-                workflow_name="test.yml",
-                workflow_yaml="name: Test\non: push",
-                reusable_workflow=False
-            )
-            db.add(workflow)
-            db.commit()
-            
-            # Update git hash
-            _update_workflow_git_hash(db, "test.yml", "newhash789")
-            
-            # Verify update
-            updated = db.query(Workflow).filter_by(workflow_name="test.yml").first()
-            assert updated.workflow_git_hash == "newhash789"
+            # The lookup is project-scoped now, so the workflow needs an owner.
+            workflow = _seed_project_workflow(db, "PGH1", "test.yml")
+
+            _update_workflow_git_hash(db, "test.yml", "newhash789", "PGH1")
+
+            db.refresh(workflow)
+            assert workflow.workflow_git_hash == "newhash789"
         finally:
             db.close()
 
@@ -553,7 +589,7 @@ class TestGitHubIntegration:
         db = TestingSessionLocal()
         try:
             # Should not raise error, just silently fail
-            _update_workflow_git_hash(db, "nonexistent.yml", "hash123")
+            _update_workflow_git_hash(db, "nonexistent.yml", "hash123", "PGH2")
         finally:
             db.close()
 
@@ -561,22 +597,13 @@ class TestGitHubIntegration:
         """Test updating workflow git hash with None."""
         db = TestingSessionLocal()
         try:
-            # Create a workflow
-            workflow = Workflow(
-                workflow_name="test.yml",
-                workflow_yaml="name: Test\non: push",
-                reusable_workflow=False,
-                workflow_git_hash="oldhash"
-            )
-            db.add(workflow)
-            db.commit()
-            
+            workflow = _seed_project_workflow(db, "PGH3", "test.yml", git_hash="oldhash")
+
             # Try to update with None (should skip)
-            _update_workflow_git_hash(db, "test.yml", None)
-            
-            # Verify not updated
-            updated = db.query(Workflow).filter_by(workflow_name="test.yml").first()
-            assert updated.workflow_git_hash == "oldhash"
+            _update_workflow_git_hash(db, "test.yml", None, "PGH3")
+
+            db.refresh(workflow)
+            assert workflow.workflow_git_hash == "oldhash"
         finally:
             db.close()
 
@@ -742,17 +769,21 @@ class TestGitHubIntegration:
             assert result == {}
 
     def test_get_all_workflow_shas_api_error(self):
-        """Test handling GitHub API errors."""
+        """A failed listing must not look like a repo with no workflows.
+
+        This previously returned {}, which is the same answer as "the directory
+        is empty" — so a 500 or a rate limit made every workflow in the repo
+        look deleted from GitHub. An unreachable repo is now an explicit
+        unknown (see the 404 test above for the genuine-absence case).
+        """
         mock_response = Mock()
         mock_response.status_code = 500
-        
+
         with patch('workflows.requests.get') as mock_get:
             mock_get.return_value = mock_response
-            
-            result = get_all_workflow_shas("owner", "repo", "main", "token123")
-            
-            # Should return empty dict on API errors
-            assert result == {}
+
+            with pytest.raises(DriftCheckUnavailable):
+                get_all_workflow_shas("owner", "repo", "main", "token123")
 
     def test_get_all_workflow_shas_empty_tree(self):
         """Test handling when .github/workflows directory is empty."""

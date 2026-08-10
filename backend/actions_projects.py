@@ -366,7 +366,15 @@ def preview_actions_project(
             "Accept": ACCEPT_HEADER,
             "X-GitHub-Api-Version": X_API_VERSION,
         }
-        ref = get_default_branch(owner, repo, headers)
+        try:
+            ref = get_default_branch(owner, repo, headers)
+        except Exception as e:
+            # Say we couldn't read the repo rather than guessing a branch and
+            # reporting "action.yml not found" for a repo that has one.
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not determine the default branch of {owner}/{repo}: {e}",
+            )
 
     try:
         if path is None:

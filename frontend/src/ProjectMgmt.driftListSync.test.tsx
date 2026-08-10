@@ -26,6 +26,7 @@ const mockUseParams = jest.fn();
 
 // Capture DriftDetection's onDriftLoaded so tests can simulate a drift check completing
 let capturedOnDriftLoaded: ((details: unknown[]) => void) | null = null;
+let capturedSeededDriftNames: string[] | null = null;
 
 vi.mock(
   "react-router",
@@ -125,8 +126,13 @@ vi.mock("./components/Secrets", () => ({
   },
 }));
 
+// Captures the driftedWorkflowNames prop each render, so tests can assert on
+// the badge-driving state without needing the real UnifiedWorkflowList tree.
+let capturedDriftedWorkflowNames: Set<string> | null = null;
+
 vi.mock("./components/UnifiedWorkflows", () => ({
-  default: function UnifiedWorkflows() {
+  default: function UnifiedWorkflows(props: any) {
+    capturedDriftedWorkflowNames = props.driftedWorkflowNames;
     return <div data-testid="unified-workflows" />;
   },
 }));
@@ -190,6 +196,7 @@ vi.mock("./components/ProjectMembers", () => ({
 vi.mock("./components/DriftDetection", () => ({
   default: function DriftDetection(props: any) {
     capturedOnDriftLoaded = props.onDriftLoaded;
+    capturedSeededDriftNames = props.seededDriftNames;
     return null;
   },
 }));
@@ -269,6 +276,8 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
   beforeEach(() => {
     jest.clearAllMocks();
     capturedOnDriftLoaded = null;
+    capturedDriftedWorkflowNames = null;
+    capturedSeededDriftNames = null;
 
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
 
@@ -350,5 +359,124 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
     });
 
     await waitFor(() => expect(fetchProjects).toHaveBeenCalledTimes(2));
+  });
+
+  test("drift badge is seeded from the persisted project-load response before the live check resolves", async () => {
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+    (loadProject as jest.Mock).mockResolvedValue({
+      project_name: "proj-a",
+      project_id: 42,
+      project_code: "PROJA",
+      selected_repos: ["acme/proj-a"],
+      workflows: [],
+      rxworkflows: [],
+      branch_regex: "",
+      branch_option: "default",
+      branch_max_age_days: 30,
+      reusable_workflows_enabled: false,
+      use_prefix: false,
+      project_type: "standard",
+      pr_state: "new",
+      drifted_workflow_names: ["CI"],
+    });
+
+    renderWithProject();
+
+    // Assert the seeded state lands from the project-load response alone -
+    // note we never invoke capturedOnDriftLoaded in this test, so this can
+    // only be true if it came from loadProject's drifted_workflow_names,
+    // not from a live drift check. This is what makes the badge correct on
+    // first paint instead of a flip.
+    await waitFor(() => expect(capturedDriftedWorkflowNames).not.toBeNull());
+    expect(Array.from(capturedDriftedWorkflowNames!)).toEqual(["CI"]);
+  });
+
+  test("persisted drift names are passed to DriftDetection so the banner renders on first paint", async () => {
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+    (loadProject as jest.Mock).mockResolvedValue({
+      project_name: "proj-a",
+      project_id: 42,
+      project_code: "PROJA",
+      selected_repos: ["acme/proj-a"],
+      workflows: [],
+      rxworkflows: [],
+      branch_regex: "",
+      branch_option: "default",
+      branch_max_age_days: 30,
+      reusable_workflows_enabled: false,
+      use_prefix: false,
+      project_type: "standard",
+      pr_state: "new",
+      drifted_workflow_names: ["CI"],
+    });
+
+    renderWithProject();
+
+    // The banner lives inside DriftDetection and starts from its own empty
+    // state, so it can only render on first paint if the persisted names are
+    // threaded in as a prop. capturedOnDriftLoaded is never invoked here, so
+    // this can only come from loadProject's response.
+    await waitFor(() => expect(capturedSeededDriftNames).toEqual(["CI"]));
+  });
+
+  test("seeded drift names survive the live check overwriting driftDetails", async () => {
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+    (loadProject as jest.Mock).mockResolvedValue({
+      project_name: "proj-a",
+      project_id: 42,
+      project_code: "PROJA",
+      selected_repos: ["acme/proj-a"],
+      workflows: [],
+      rxworkflows: [],
+      branch_regex: "",
+      branch_option: "default",
+      branch_max_age_days: 30,
+      reusable_workflows_enabled: false,
+      use_prefix: false,
+      project_type: "standard",
+      pr_state: "new",
+      drifted_workflow_names: ["CI"],
+    });
+
+    renderWithProject();
+    await waitFor(() => expect(capturedOnDriftLoaded).not.toBeNull());
+
+    act(() => {
+      capturedOnDriftLoaded!([]);
+    });
+
+    // driftDetails is now empty, but the seed must not be clobbered with it -
+    // DriftDetection owns when to stop using the seed, via its own liveLoaded.
+    await waitFor(() => expect(Array.from(capturedDriftedWorkflowNames!)).toEqual([]));
+    expect(capturedSeededDriftNames).toEqual(["CI"]);
+  });
+
+  test("live check result still fully replaces the seeded state once it resolves", async () => {
+    mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
+    (loadProject as jest.Mock).mockResolvedValue({
+      project_name: "proj-a",
+      project_id: 42,
+      project_code: "PROJA",
+      selected_repos: ["acme/proj-a"],
+      workflows: [],
+      rxworkflows: [],
+      branch_regex: "",
+      branch_option: "default",
+      branch_max_age_days: 30,
+      reusable_workflows_enabled: false,
+      use_prefix: false,
+      project_type: "standard",
+      pr_state: "new",
+      drifted_workflow_names: ["CI"],
+    });
+
+    renderWithProject();
+    await waitFor(() => expect(capturedOnDriftLoaded).not.toBeNull());
+
+    act(() => {
+      capturedOnDriftLoaded!([]); // live check found nothing drifted
+    });
+
+    await waitFor(() => expect(Array.from(capturedDriftedWorkflowNames!)).toEqual([]));
   });
 });

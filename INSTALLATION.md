@@ -55,10 +55,12 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 
 Replace `<your_generated_key>` with the output of the `openssl` command above.
+`ALLOW_INSECURE_HTTP=true` is required because this command serves the app over plain HTTP; drop it once you put ActionsManager behind HTTPS (see [HTTPS setup examples](docs/SELF_HOSTED_INSTALL.md#using-https-with-reverse-proxy)).
 **Use the same `SECRET_KEY` value every time you recreate the container.** Changing it will
 invalidate any saved encrypted tokens.
 
@@ -160,6 +162,7 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 
@@ -176,12 +179,15 @@ docker run -d \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<your_generated_key> \
   -e APP_URL=http://YOUR_SERVER_IP_OR_DOMAIN:8080 \
+  -e ALLOW_INSECURE_HTTP=true \
   -e GITHUB_CLIENT_ID=your_github_client_id \
   -e GITHUB_CLIENT_SECRET=your_github_client_secret \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 
 Replace `YOUR_SERVER_IP_OR_DOMAIN` with the actual IP or domain users will access (not `localhost` for shared servers).
+
+A non-loopback `http://` `APP_URL` requires `ALLOW_INSECURE_HTTP=true` — without it the container refuses to start. Serve this deployment over HTTPS instead when you can, and drop the flag when you do.
 
 Optional:
 - Omit OAuth credentials if you plan to sign in only with a GitHub PAT
@@ -208,6 +214,9 @@ services:
     environment:
       INSTALLATION_MODE: self-hosted
       SECRET_KEY: ${SECRET_KEY}
+      # Required while the app is served over plain HTTP; remove it once you
+      # front ActionsManager with HTTPS
+      ALLOW_INSECURE_HTTP: "true"
       # Optional: Set APP_URL for OAuth login (not needed for PAT login)
       # APP_URL: http://YOUR_SERVER_IP_OR_DOMAIN:8080
       # GITHUB_CLIENT_ID: your_github_client_id
@@ -305,6 +314,7 @@ docker run -d \
   -v actions-manager-data:/app/data \
   -e INSTALLATION_MODE=self-hosted \
   -e SECRET_KEY=<same_key_as_before> \
+  -e ALLOW_INSECURE_HTTP=true \
   ghcr.io/dawg-io/actions-manager:latest
 ```
 

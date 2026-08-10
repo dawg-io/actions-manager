@@ -12,6 +12,7 @@ Supports both SQLite and PostgreSQL databases.
 
 from sqlalchemy import create_engine, text
 from database import DATABASE_URL
+from models import SEED_ACCOUNT_GITHUB_USER
 
 
 def run_migration():
@@ -117,9 +118,14 @@ def _accounts_table_exists(conn) -> bool:
 
 def _seed_existing_users(conn):
     """
-    For every Account that does not yet have a workspace_members row,
+    For every real Account that does not yet have a workspace_members row,
     insert one.  The account with the lowest user_id is made 'admin';
     all others default to 'read_only'.
+
+    The reserved seed account is skipped entirely — it is not a person, and
+    because it is created before anyone logs in it holds the lowest user_id,
+    so including it handed workspace admin to a machine account and left the
+    installer read-only with nobody able to fix it.
 
     If the 'accounts' table does not yet exist (e.g. a fresh CI database
     that has not run the base schema migration), this function exits
@@ -129,24 +135,24 @@ def _seed_existing_users(conn):
         print("⏭️ 'accounts' table not found — skipping user seed (no existing users)")
         return
 
-    # Find the first (oldest) user_id
+    # Find the first (oldest) real user_id
     first_row = conn.execute(text(
-        "SELECT MIN(user_id) AS first_id FROM accounts"
-    )).fetchone()
+        "SELECT MIN(user_id) AS first_id FROM accounts WHERE github_user != :seed"
+    ), {"seed": SEED_ACCOUNT_GITHUB_USER}).fetchone()
 
     first_user_id = first_row[0] if first_row else None
     if first_user_id is None:
         print("⏭️ No existing accounts to seed")
         return
 
-    # Get all accounts that do NOT already have a membership row
+    # Get all real accounts that do NOT already have a membership row
     rows = conn.execute(text("""
         SELECT a.user_id
         FROM accounts a
         LEFT JOIN workspace_members wm ON a.user_id = wm.user_id
-        WHERE wm.id IS NULL
+        WHERE wm.id IS NULL AND a.github_user != :seed
         ORDER BY a.user_id
-    """)).fetchall()
+    """), {"seed": SEED_ACCOUNT_GITHUB_USER}).fetchall()
 
     if not rows:
         print("⏭️ All existing accounts already have workspace membership")
@@ -170,8 +176,12 @@ def _seed_existing_users(conn):
 def _ensure_admin_exists(conn):
     """
     Post-seed sanity check: if workspace_members has rows but zero admins,
-    promote the member with the lowest user_id to admin.
+    promote the real member with the lowest user_id to admin.
     This prevents permanently locking out admin-only operations.
+
+    "Real" excludes the reserved seed account: promoting it would satisfy the
+    admin_count check while leaving every human read-only, which is the exact
+    lockout this check exists to prevent.
     """
     total = conn.execute(text(
         "SELECT COUNT(*) FROM workspace_members"
@@ -180,17 +190,24 @@ def _ensure_admin_exists(conn):
     if total == 0:
         return  # No members at all — nothing to fix
 
-    admin_count = conn.execute(text(
-        "SELECT COUNT(*) FROM workspace_members WHERE workspace_role = 'admin'"
-    )).scalar()
+    admin_count = conn.execute(text("""
+        SELECT COUNT(*)
+        FROM workspace_members wm
+        JOIN accounts a ON a.user_id = wm.user_id
+        WHERE wm.workspace_role = 'admin' AND a.github_user != :seed
+    """), {"seed": SEED_ACCOUNT_GITHUB_USER}).scalar()
 
     if admin_count > 0:
-        return  # At least one admin exists
+        return  # At least one real admin exists
 
-    # Promote the member with the lowest user_id to admin
-    lowest = conn.execute(text(
-        "SELECT id, user_id FROM workspace_members ORDER BY user_id ASC LIMIT 1"
-    )).fetchone()
+    # Promote the real member with the lowest user_id to admin
+    lowest = conn.execute(text("""
+        SELECT wm.id, wm.user_id
+        FROM workspace_members wm
+        JOIN accounts a ON a.user_id = wm.user_id
+        WHERE a.github_user != :seed
+        ORDER BY wm.user_id ASC LIMIT 1
+    """), {"seed": SEED_ACCOUNT_GITHUB_USER}).fetchone()
 
     if lowest:
         conn.execute(text(

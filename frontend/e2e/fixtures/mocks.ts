@@ -94,6 +94,12 @@ export interface ProjectStub {
   last_modified_by?: string;
   linked_reusable_workflows?: any[];
   project_color?: string;
+  /**
+   * Workflow names with drift persisted by the last check (issue #1793), as
+   * returned by GET /api/projects/{name}. Seeds the drift banner on first
+   * paint, before the live check resolves.
+   */
+  drifted_workflow_names?: string[];
 }
 
 export function makeProject(overrides: Partial<ProjectStub> = {}): ProjectStub {
@@ -646,6 +652,14 @@ export async function installApiMocks(
     (route) => jsonResponse(route, []),
   );
   await page.route(
+    apiPath((p) => p === "/api/notifications/subscriptions"),
+    (route) => jsonResponse(route, []),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/notifications/deliveries"),
+    (route) => jsonResponse(route, []),
+  );
+  await page.route(
     apiPath((p) => p.startsWith("/api/workflow-templates")),
     (route) => jsonResponse(route, []),
   );
@@ -774,15 +788,32 @@ export async function mockDriftResponse(
       message?: string;
       is_shared_workflow?: boolean;
       has_repo_override?: boolean;
+      /** The file is gone from GitHub — renders the deleted panel, not a diff. */
+      deleted_in_github?: boolean;
     }>;
     failWithStatus?: number;
+    /** Hold the response back, to assert what renders before the check lands. */
+    delayMs?: number;
+    /** Why the reported state may be older than it looks (no saved token, etc). */
+    staleReason?: string;
+    /** When the reported state was established. Rendered as "Last checked …". */
+    lastChecked?: string;
   } = {},
 ): Promise<void> {
-  const { driftedWorkflows = [], failWithStatus } = options;
+  const {
+    driftedWorkflows = [],
+    failWithStatus,
+    delayMs,
+    staleReason,
+    lastChecked = "2025-01-01T00:00:00Z",
+  } = options;
 
   await page.route(
     apiPath((p) => /^\/api\/projects\/[^/]+\/drift$/.test(p)),
-    (route) => {
+    async (route) => {
+      if (delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
       if (failWithStatus) {
         return jsonResponse(route, { detail: "drift check failed" }, failWithStatus);
       }
@@ -797,10 +828,11 @@ export async function mockDriftResponse(
         github_yaml: w.github_yaml ?? "name: CI\n# changed in github\n",
         actionsmanager_sha: w.actionsmanager_sha ?? "abc123",
         github_sha: w.github_sha ?? "def456",
-        last_checked: w.last_checked ?? "2025-01-01T00:00:00Z",
+        last_checked: w.last_checked ?? lastChecked,
         message: w.message ?? (w.has_drift ? "Drift detected" : "No drift"),
         is_shared_workflow: w.is_shared_workflow ?? false,
         has_repo_override: w.has_repo_override ?? false,
+        deleted_in_github: w.deleted_in_github ?? false,
         // Required by the adopt-github-version modal's handleConfirm guard
         project_id: 1,
         repo_id: idx + 1,
@@ -812,7 +844,8 @@ export async function mockDriftResponse(
         project_name: "test-project",
         drift_count: drifted_workflows.filter((w) => w.has_drift).length,
         drifted_workflows: drifted_workflows.filter((w) => w.has_drift),
-        last_checked: "2025-01-01T00:00:00Z",
+        last_checked: lastChecked,
+        stale_reason: staleReason ?? null,
       });
     },
   );

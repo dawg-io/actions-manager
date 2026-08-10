@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import StepList from './StepList';
+import { useStepSelection } from './StepSelectionContext';
+import { uniqueId } from '../utils/stepSelection';
 import { WorkflowJob, WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
-import { ActionsProject } from '../api/actionsProjects';
-import { ActionGroup } from '../api/actionGroups';
 
 interface JobCardProps {
   job: WorkflowJob;
@@ -14,8 +14,6 @@ interface JobCardProps {
   onDuplicate: () => void;
   validationErrors: ValidationError[];
   availableJobIds: string[];
-  importedActions: ActionsProject[];
-  actionGroups: ActionGroup[];
 }
 
 const RUNNER_OPTIONS = [
@@ -38,12 +36,11 @@ const JobCard: React.FC<JobCardProps> = memo(({
   onMoveDown,
   onDuplicate,
   validationErrors,
-  availableJobIds,
-  importedActions,
-  actionGroups
+  availableJobIds
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const { onSelect } = useStepSelection();
 
   // Local buffers to prevent focus loss during typing
   const [localJobName, setLocalJobName] = useState(job.name || '');
@@ -121,11 +118,15 @@ const JobCard: React.FC<JobCardProps> = memo(({
   }, [onChange, job]);
 
   const addStep = () => {
+    const steps = job.steps || [];
     const newStep: WorkflowStep = {
-      id: `step-${job.steps.length + 1}`,
-      name: `Step ${job.steps.length + 1}`
+      id: uniqueId(steps.map(s => s.id), `step-${steps.length + 1}`),
+      name: `Step ${steps.length + 1}`
     };
-    handleStepsChange([...(job.steps || []), newStep]);
+    handleStepsChange([...steps, newStep]);
+    // Open it straight away, so a new step doesn't have to be hunted for and
+    // clicked before it can be edited.
+    onSelect({ jobId: job.id, stepId: newStep.id });
   };
 
   return (
@@ -378,8 +379,7 @@ const JobCard: React.FC<JobCardProps> = memo(({
               onChange={handleStepsChange}
               validationErrors={validationErrors}
               jobIndex={jobIndex}
-              importedActions={importedActions}
-              actionGroups={actionGroups}
+              jobId={job.id}
             />
             <button
               type="button"

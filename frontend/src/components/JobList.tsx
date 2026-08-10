@@ -1,18 +1,15 @@
 import React, { useCallback } from 'react';
 import JobCard from './JobCard';
+import { uniqueId, isFieldUnder } from '../utils/stepSelection';
 import { WorkflowJob, ValidationError } from '../utils/workflowGuiConversion';
-import { ActionsProject } from '../api/actionsProjects';
-import { ActionGroup } from '../api/actionGroups';
 
 interface JobListProps {
   jobs: WorkflowJob[];
   onChange: (jobs: WorkflowJob[]) => void;
   validationErrors: ValidationError[];
-  importedActions: ActionsProject[];
-  actionGroups: ActionGroup[];
 }
 
-const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors, importedActions, actionGroups }) => {
+const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors }) => {
   const updateJob = useCallback((index: number, updatedJob: WorkflowJob) => {
     const newJobs = [...jobs];
     newJobs[index] = updatedJob;
@@ -36,7 +33,7 @@ const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors, imp
     const job = jobs[index];
     const newJob: WorkflowJob = {
       ...job,
-      id: `${job.id}-copy`,
+      id: uniqueId(jobs.map(j => j.id), `${job.id}-copy`),
       name: job.name ? `${job.name} (Copy)` : undefined,
       steps: job.steps.map(step => ({
         ...step,
@@ -51,7 +48,7 @@ const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors, imp
 
   const getJobErrors = useCallback((jobIndex: number): ValidationError[] => {
     return validationErrors.filter(error => 
-      error.field.startsWith(`jobs[${jobIndex}]`)
+      isFieldUnder(error.field, `jobs[${jobIndex}]`)
     );
   }, [validationErrors]);
 
@@ -74,8 +71,6 @@ const JobList: React.FC<JobListProps> = ({ jobs, onChange, validationErrors, imp
             onDuplicate={() => duplicateJob(index)}
             validationErrors={getJobErrors(index)}
             availableJobIds={jobs.map(j => j.id).filter((_, i) => i !== index)}
-            importedActions={importedActions}
-            actionGroups={actionGroups}
           />
         ))
       )}

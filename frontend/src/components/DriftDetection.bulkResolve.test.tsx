@@ -43,7 +43,9 @@ const mockSummary = (drifted: WorkflowDriftDetail[]): ProjectDriftSummary => ({
   project_name: "proj",
   drift_count: drifted.length,
   drifted_workflows: drifted,
-  last_checked: "2026-01-01T00:00:00Z",
+  // Recent, so the panel's staleness revalidation does not fire —
+  // these tests are about behaviour, not the refresh cadence.
+  last_checked: new Date().toISOString(),
 });
 
 const defaultProps = {
@@ -134,8 +136,10 @@ describe("DriftDetection - bulk resolve", () => {
     expect(vi.mocked(bulkResolveWorkflowDrift)).toHaveBeenCalledWith(1, {
       github_user: "testuser",
       items: expect.arrayContaining([
-        { workflow_id: 1, repo: "org/repo", branch: "main" },
-        { workflow_id: 2, repo: "org/repo2", branch: "main" },
+        // expected_github_sha lets the backend reject a stale item without
+        // failing the whole batch (drift hardening).
+        { workflow_id: 1, repo: "org/repo", branch: "main", expected_github_sha: "sha-b" },
+        { workflow_id: 2, repo: "org/repo2", branch: "main", expected_github_sha: "sha-b" },
       ]),
       resolution: "restore_actionsmanager",
       delivery_mode: "pr",

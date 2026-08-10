@@ -1,7 +1,7 @@
 # Staging Cloud Deployment via Cloudflare Tunnel
 
 This guide explains how to expose the in-cluster Actions Manager deployment
-(built by `.github/workflows/docker-image.yml` and rolled out by Flux) at a
+(built by `.github/workflows/docker-build-and-test.yml` and rolled out by Flux) at a
 stable public HTTPS URL — for example `https://staging.example.com` — without
 opening any inbound ports on your firewall or assigning a public IP to the
 cluster.
@@ -232,7 +232,7 @@ variables that may need a staging-specific value.
 
 ## Validate after every push
 
-The existing `.github/workflows/docker-image.yml` already pushes new
+The existing `.github/workflows/docker-build-and-test.yml` already pushes new
 `dev-backend:<TIMESTAMP>` and `dev-frontend:<TIMESTAMP>` images on every push
 to `develop`/`main`/`copilot/*`, and Flux rolls those into the cluster. Once
 the tunnel is in place, the per-change validation loop is:

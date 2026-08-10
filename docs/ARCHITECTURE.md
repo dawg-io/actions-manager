@@ -122,9 +122,9 @@ Actions Manager is a web application for managing GitHub Actions workflows acros
 - **BuildTypeDetection**: Shows detected build types
 
 #### 5. Drift Detection
-- **DriftPanel**: Shows workflow drift status
-- **ConflictResolution**: UI for resolving drift conflicts
-- **SyncControls**: Manual sync triggers
+- **DriftDetection**: Status row / banner rendered from the last stored check, "Check Now" for a live check, and the Review Drift modal listing one row per (workflow, repo, branch)
+- **SideBySideDiff**: Managed version vs GitHub's current content, with the per-row resolution actions
+- **DeletedInGithubPanel**: Shown instead of a diff when the file no longer exists in GitHub (recreate, or Delete Everywhere)
 
 #### 6. Secrets Management
 - **SecretsPanel**: CRUD for repository secrets
@@ -156,11 +156,10 @@ Actions Manager is a web application for managing GitHub Actions workflows acros
 - Suggests appropriate templates
 - Multi-language support
 
-#### 5. Drift Detection (`drift.py`)
-- Compares local vs GitHub workflows
-- Identifies changes made outside platform
-- Provides merge/overwrite options
-- Conflict resolution
+#### 5. Drift Detection (`workflows.py`, `drift_worker.py`, `drift_notifications.py`)
+- `workflows.py` — the check itself (`run_project_drift_check`), the `/api/projects/{id}/drift` and `/api/workflows/{id}/drift` endpoints, and the resolution endpoints
+- `drift_worker.py` — in-process asyncio sweep that re-checks stale projects on a timer, with per-project backoff
+- `drift_notifications.py` — persists `WorkflowDriftState` per (workflow, repo, branch), emits `drift.detected` / `drift.resolved` / `drift.check_failed`, and keeps the cached `projects.drift_*` columns in step
 
 #### 6. Secrets Management (`github_secrets.py`)
 - Encrypts secrets for GitHub
@@ -286,49 +285,47 @@ Actions Manager is a web application for managing GitHub Actions workflows acros
 
 ### Drift Detection Flow
 
-**Optimized with Git Trees API for Batch SHA Comparison**
+**Optimized with conditional Git Trees reads and per-(repo, branch) state**
 
 ```
-1. Periodic check or manual trigger
+1. Trigger: background sweep (drift_worker) or refresh=true from the UI
+   │        Opening a project does NOT trigger a check - it reads stored state
+   ▼
+2. Backend: Resolve the (repo, branch) pairs the project delivers to
+   │        resolve_branch_config_for_repo + _resolve_branches_for_repo,
+   │        the same path delivery uses (never the GitHub default branch on its own)
+   ▼
+3. Backend: For each (repo, branch), ONE Git Trees call, conditional on the
+   │        stored ETag in workflow_tree_cache
+   │        304 → replay cached {filename: sha}, no rate-limit cost
+   │        Listing failure → None ("unknown"), never {} ("no workflow files")
+   ▼
+4. Backend: Compare tree SHAs against workflow_git_hash (or the repo override's hash)
    │
    ▼
-2. Backend: Fetch local workflows from DB
+5. Backend: Fetch full content only where the SHA differs (or the file is missing)
    │
    ▼
-3. Backend: For each repo, make ONE Git Trees API call
-   │        GET /repos/{owner}/{repo}/git/trees/{branch}\:.github/workflows
-   │        Returns {filename: sha} for all workflow files
+6. Backend: Compare normalized YAML; classify local-edit / under-review /
+   │        pending-merge / deleted / drift / check_failed
+   ▼
+7. Backend: Persist WorkflowDriftState per (workflow, repo, branch), emit
+   │        transition notifications, cache the project drift summary
+   ▼
+8. Frontend: Render banner/list from stored state; fetch GitHub's side of a
+   │        diff only when a row is expanded
+   ▼
+9. User: Resolve (fix PR / restore directly / adopt GitHub version)
    │
    ▼
-4. Backend: Compare SHAs from GitHub tree with workflow_git_hash in DB
-   │
-   ▼
-5. Backend: Only fetch full content for workflows where SHA differs
-   │        (or workflow deleted/never synced)
-   │
-   ▼
-6. Backend: Compare YAML content for mismatched SHAs
-   │
-   ▼
-7. Backend: Detect differences and mark drift status
-   │
-   ▼
-8. Frontend: Display drift indicator
-   │
-   ▼
-9. User: Review and resolve conflict
-   │
-   ▼
-10. Backend: Apply resolution (use_github/use_local)
-    │
-    ▼
-11. Backend: Update both DB and GitHub
+10. Backend: Apply to GitHub, update DB, and clear the persisted drift for the
+    │        repo+branch it acted on (no re-check needed)
 ```
 
 **Performance Improvement:**
 - **Before:** N API calls (one per workflow per repo)
-- **After:** 1 API call per repo + only fetch content for drifted workflows
-- **Example:** 10 workflows across 5 repos with no drift: 50 calls → 5 calls (90% reduction)
+- **After:** 1 conditional call per (repo, branch) + content only for changed files
+- **Example:** 10 workflows across 5 repos with no drift: 50 calls → 5 calls, and those 5 answer 304 (no rate-limit cost) while the branches are untouched
 
 
 

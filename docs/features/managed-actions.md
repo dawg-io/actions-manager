@@ -56,11 +56,17 @@ The Managed Actions catalog is shared and workspace-wide, not per-user. Any auth
 
 ## Using Managed Actions in the workflow editor
 
-In the GUI workflow editor's step picker, imported Managed Actions appear under **Your imported actions** when you're configuring a `uses:` step. Selecting one fills in its `owner/repo@ref` and pre-fills its known inputs as `with:` fields, so you don't have to look up the action's inputs separately.
+In the GUI workflow editor's step picker, imported Managed Actions appear under **Your imported actions** when you're configuring a `uses:` step. Selecting one fills in its `owner/repo@ref` and turns its known inputs into typed `with:` fields, so you don't have to look up the action's inputs separately. Each input renders according to its type — a checkbox for `boolean`, a dropdown for `choice`, a number field for `number`, and a text field otherwise.
 
-## Known limitation
+Actions often declare far more inputs than a given step needs, so the editor only shows the ones that matter up front:
 
-Every input currently renders as a plain text field — there's no boolean/checkbox or choice/dropdown UI, because imported action schemas don't carry type information yet (only name, description, required, and default). Tracked in [#1693](https://github.com/dawg-io/actions-manager/issues/1693).
+- **Required inputs** are always visible.
+- **Optional inputs you've set a value for** are visible too, marked with a small **Set** badge so you can tell them apart from the required ones at a glance.
+- **Everything else** sits behind a **Show N more options** disclosure. Expand it to set any of them; once set, an input joins the visible list and stays there.
+
+Clearing an optional input's value removes it from the generated `with:` block, but the field stays on screen while you're working so you can type a new value straight back in.
+
+Inputs the action doesn't declare — anything you add yourself — still appear under **Additional Parameters** as free-text key/value pairs, and are never hidden.
 
 ## Related Topics
 

@@ -26,6 +26,20 @@ import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
  * that doc asset is a recorded video, not a screenshot.
  */
 
+/** Keeps every drift scene's "last checked" plausible for a published doc,
+ *  instead of the shared fixtures' 2025-01-01 placeholder. */
+const DOCS_LAST_CHECKED = "2026-07-24T09:12:00Z";
+
+const DOCS_DRIFT_PROJECT = {
+  project_name: "Payments Platform",
+  project_code: "PAY",
+  github_user: DOCS_USER,
+  last_modified_by: DOCS_USER,
+  updated_at: "2026-07-24T00:00:00Z",
+  pr_state: "draft",
+  selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+} as const;
+
 test.describe("docs screenshots", () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthenticatedSession(page, DOCS_USER);
@@ -170,6 +184,7 @@ test.describe("docs screenshots", () => {
     // Same workflow, same github_sha, drifted identically in both repos -
     // this is what triggers the "N identical - select all" grouping link.
     await mockDriftResponse(page, {
+      lastChecked: DOCS_LAST_CHECKED,
       driftedWorkflows: [
         {
           workflow_name: "build-and-test.yml",
@@ -218,5 +233,147 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-bulk-toolbar.png" });
+  });
+
+  test("drift detection — status row with no drift", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_DRIFT_PROJECT,
+      workflows: [makeWorkflow({ name: "build-and-test.yml", lastModifiedBy: DOCS_USER })],
+    });
+    await mockDriftResponse(page, { lastChecked: DOCS_LAST_CHECKED, driftedWorkflows: [] });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    const statusRow = page.getByTestId("drift-status-row");
+    await statusRow.waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    // The row itself, not the whole page: it is one thin strip near the top,
+    // and a full-page capture would bury the thing the doc is pointing at.
+    await statusRow.screenshot({
+      path: "../docs/assets/screenshots/drift-detection/drift-status-row.png",
+    });
+  });
+
+  test("drift detection — automatic checks paused", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_DRIFT_PROJECT,
+      workflows: [makeWorkflow({ name: "build-and-test.yml", lastModifiedBy: DOCS_USER })],
+    });
+    await mockDriftResponse(page, {
+      lastChecked: DOCS_LAST_CHECKED,
+      driftedWorkflows: [],
+      staleReason:
+        "Automatic drift checks are paused: this project's owner has no saved " +
+        "GitHub token. Save a personal access token, or use Check Now.",
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    const statusRow = page.getByTestId("drift-status-row");
+    await statusRow.waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await statusRow.screenshot({
+      path: "../docs/assets/screenshots/drift-detection/drift-checks-paused.png",
+    });
+  });
+
+  test("drift detection — workflow deleted in GitHub", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_DRIFT_PROJECT,
+      workflows: [makeWorkflow({ name: "deploy-production.yml", lastModifiedBy: DOCS_USER })],
+    });
+    await mockDriftResponse(page, {
+      lastChecked: DOCS_LAST_CHECKED,
+      driftedWorkflows: [
+        {
+          workflow_name: "deploy-production.yml",
+          workflow_filename: "deploy-production.yml",
+          repo: "acme-corp/payments-worker",
+          has_drift: true,
+          deleted_in_github: true,
+          // Empty rather than absent: the panel replaces the diff either way,
+          // but a null here makes the row fetch GitHub's side on expand.
+          github_yaml: "",
+          message: "Workflow was deleted from acme-corp/payments-worker",
+        },
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page.getByTestId("drift-banner").waitFor({ timeout: 15000 });
+    await page.getByTestId("review-drift-button").click();
+    await page.getByTestId("drift-modal").waitFor();
+    await page.getByRole("button", { name: /View Diff/i }).first().click();
+    await page.getByTestId("deleted-in-github-panel").waitFor({ timeout: 5000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/drift-detection/drift-deleted-in-github.png",
+    });
+  });
+
+  test("notifications settings page", async ({ page }) => {
+    const project = makeProject({
+      project_name: "Payments Platform",
+      project_code: "PAY",
+      github_user: DOCS_USER,
+      last_modified_by: DOCS_USER,
+      updated_at: "2026-07-24T00:00:00Z",
+      pr_state: "synced",
+      selected_repos: ["acme-corp/payments-service"],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+
+    // Override the default empty-state mocks with example data so the
+    // screenshot shows what a configured installation looks like.
+    await page.route("**/api/notifications/subscriptions", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            subscription_id: 1,
+            recipient_email: "platform-team@acme-corp.example",
+            project_id: null,
+            project_name: null,
+            event_types: ["drift.detected", "drift.resolved"],
+            notify_on_resolved: true,
+          },
+        ]),
+      }),
+    );
+    await page.route("**/api/notifications/deliveries", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            delivery_id: 1,
+            event_type: "drift.detected",
+            project_id: 1,
+            project_name: "Payments Platform",
+            recipient_email: "platform-team@acme-corp.example",
+            status: "sent",
+            attempt_count: 1,
+            last_error: null,
+            created_at: "2026-07-24T09:00:00Z",
+            sent_at: "2026-07-24T09:00:02Z",
+          },
+        ]),
+      }),
+    );
+
+    await page.goto(`/workspace/notifications`);
+    await page.getByText("platform-team@acme-corp.example").first().waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/notifications/notifications-settings.png" });
   });
 });

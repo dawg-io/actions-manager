@@ -15,6 +15,12 @@ vi.mock(
   { virtual: true } // <-- this tells Jest not to look for a real package
 );
 
+function renderedOrder(): string[] {
+  return screen
+    .getAllByTestId(/^project-row-/)
+    .map((el) => (el as HTMLElement).dataset.testid!.replace('project-row-', ''));
+}
+
 describe('ProjectList', () => {
   const user = userEvent.setup();
 
@@ -314,6 +320,36 @@ describe('ProjectList', () => {
       expect(screen.getByTestId('project-drift-indicator-1')).toHaveTextContent('Not checked');
     });
 
+    test('shows the last drift check time on the card when it has been checked', () => {
+      renderProjectList({
+        projects: [
+          {
+            id: 1,
+            project_name: 'Checked',
+            project_code: 'CHKD',
+            updated_at: '2024-01-01T00:00:00Z',
+            pr_state: 'synced',
+            drift_status: 'clean',
+            last_drift_check_at: '2024-03-05T12:30:00Z',
+          },
+        ],
+      });
+
+      expect(screen.getByTestId('project-drift-checked-1')).toHaveTextContent(
+        new Date('2024-03-05T12:30:00Z').toLocaleString(),
+      );
+    });
+
+    test('omits the last drift check time when the project has never been checked', () => {
+      renderProjectList({
+        projects: [
+          { id: 1, project_name: 'Never', project_code: 'NVR', updated_at: '2024-01-01T00:00:00Z', pr_state: 'new' },
+        ],
+      });
+
+      expect(screen.queryByTestId('project-drift-checked-1')).not.toBeInTheDocument();
+    });
+
     test('displays "Needs Sync" when workflows report failed sync', () => {
       renderProjectList({
         projects: [
@@ -594,5 +630,117 @@ describe('ProjectList', () => {
 
     await user.click(screen.getByTestId('actions-projects-nav-button'));
     expect(mockNavigate).toHaveBeenCalledWith('/project/alice/actions-projects');
+  });
+
+  // --- Persistent manual ordering (issue #1804) ---
+  describe('Project ordering', () => {
+    // 12 projects so the removed 10-item slice would be visible if it came back.
+    // updated_at deliberately runs opposite to array order: if anything still
+    // sorted by updated_at, these would render reversed.
+    const manyProjects = Array.from({ length: 12 }, (_, i) => ({
+      id: i + 1,
+      project_id: i + 1,
+      project_name: `Project${String(i + 1).padStart(2, '0')}`,
+      project_code: `P${String(i + 1).padStart(2, '0')}`,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: `2024-01-${String(12 - i).padStart(2, '0')}T00:00:00Z`,
+      pr_state: 'draft' as const,
+    }));
+
+    test('renders projects in the given order, not sorted by updated_at', () => {
+      renderProjectList({ projects: manyProjects });
+
+      expect(renderedOrder()).toEqual(manyProjects.map((p) => p.project_name));
+    });
+
+    test('renders every project — no hidden slice past the tenth card', () => {
+      renderProjectList({ projects: manyProjects });
+
+      expect(screen.getAllByTestId(/^project-row-/)).toHaveLength(12);
+      expect(screen.getByTestId('projects-filtered-count')).toHaveTextContent('12');
+    });
+
+    test('a newer updated_at does not move a card', () => {
+      const bumped = manyProjects.map((p, i) =>
+        i === 11 ? { ...p, updated_at: '2099-01-01T00:00:00Z' } : p,
+      );
+      renderProjectList({ projects: bumped });
+
+      // The freshly-"edited" project stays last instead of jumping to first.
+      expect(renderedOrder()[11]).toBe('Project12');
+    });
+
+    test('drag handles are enabled when no filter is active', () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      expect(screen.getByTestId('project-drag-handle-Project01')).toBeEnabled();
+    });
+
+    test('drag handles are disabled while a filter is active, with an explanation', async () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      await user.type(screen.getByTestId('project-search-input'), 'Project01');
+
+      const handle = screen.getByTestId('project-drag-handle-Project01');
+      expect(handle).toBeDisabled();
+      expect(handle).toHaveAttribute('aria-label', 'Clear filters to reorder projects');
+    });
+
+    test('clearing filters restores the complete saved order', async () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      await user.type(screen.getByTestId('project-search-input'), 'Project01');
+      expect(screen.getAllByTestId(/^project-row-/)).toHaveLength(1);
+
+      await user.click(screen.getByTestId('clear-project-filters'));
+
+      expect(renderedOrder()).toEqual(manyProjects.map((p) => p.project_name));
+      expect(screen.getByTestId('project-drag-handle-Project01')).toBeEnabled();
+    });
+
+    test('clicking the drag handle does not navigate', async () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      await user.click(screen.getByTestId('project-drag-handle-Project01'));
+
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    test('card navigation still works alongside the drag handle', async () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      await user.click(screen.getByRole('button', { name: 'Open project Project03' }));
+
+      expect(mockNavigate).toHaveBeenCalledWith('/project/alice/Project03');
+    });
+
+    test('the three-dot menu still opens alongside the drag handle', async () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      await user.click(screen.getByTestId('project-more-Project01'));
+
+      expect(await screen.findByTestId('project-action-continue-editing')).toBeInTheDocument();
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    test('a reorder failure surfaces an error to the user', () => {
+      renderProjectList({
+        projects: manyProjects,
+        onReorder: jest.fn(),
+        reorderError: 'Failed to save project order.',
+      });
+
+      expect(screen.getByTestId('project-reorder-error')).toHaveTextContent(
+        'Failed to save project order.',
+      );
+    });
+
+    test('the responsive grid still wraps the cards directly', () => {
+      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+
+      const grid = screen.getByTestId('project-row-Project01').parentElement;
+      expect(grid).toHaveClass('grid');
+      expect(grid).toHaveClass('sm:grid-cols-2');
+    });
   });
 });

@@ -76,6 +76,125 @@ test.describe("Drift detection – UI display", () => {
     await expect(page.getByTestId("drift-banner")).toHaveCount(0);
   });
 
+  test("drift banner renders from persisted state before the live check resolves", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-seeded",
+      project_code: "SEED",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+      // Persisted by the last check and returned by the project load.
+      drifted_workflow_names: [PHASE2_WORKFLOWS.CI],
+    });
+
+    // Hold the live check open well past first paint, so the banner can only
+    // come from the persisted state, not from this response.
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+      delayMs: 10_000,
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-seeded`);
+
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("drift-banner")).toContainText("1 workflow changed in GitHub");
+    // Rows aren't available until the live check lands, so resolving is gated.
+    await expect(page.getByTestId("review-drift-button")).toBeDisabled();
+  });
+
+  test("a project the sweep cannot check explains why, instead of freezing silently", async ({ page }) => {
+    // The background sweep skips a project whose owner has no saved token. It
+    // deliberately does not advance the last-checked time, so without this
+    // message the timestamp just stops moving and the feature reads as broken.
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-notoken",
+      project_code: "NOTK",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+      staleReason:
+        "Automatic drift checks are paused: this project's owner has no saved GitHub token.",
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-notoken`);
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("review-drift-button").click();
+
+    await expect(page.getByTestId("drift-stale-reason")).toBeVisible();
+    await expect(page.getByTestId("drift-stale-reason")).toContainText(
+      /no saved GitHub token/i,
+    );
+  });
+
+  test("a healthy project shows no stale-state warning", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-healthy",
+      project_code: "HLTH",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+    });
+
+    await mockDriftResponse(page, {
+      driftedWorkflows: [
+        {
+          workflow_name: PHASE2_WORKFLOWS.CI,
+          workflow_filename: PHASE2_WORKFLOWS.CI,
+          repo: PHASE2_REPOS.SERVICE_A,
+          has_drift: true,
+        },
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-healthy`);
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("review-drift-button").click();
+
+    await expect(page.getByTestId("drift-modal")).toBeVisible();
+    await expect(page.getByTestId("drift-stale-reason")).toHaveCount(0);
+  });
+
+  test("seeded banner clears once the live check reports the drift is resolved", async ({ page }) => {
+    const project = makeProject({
+      project_id: 1,
+      project_name: "drift-stale",
+      project_code: "STAL",
+      selected_repos: [PHASE2_REPOS.SERVICE_A],
+      workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
+      // Stale persisted drift: already fixed in GitHub since the last check.
+      drifted_workflow_names: [PHASE2_WORKFLOWS.CI],
+    });
+
+    await mockDriftResponse(page, { driftedWorkflows: [], delayMs: 1_000 });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+
+    await page.goto(`/project/${TEST_USER}/drift-stale`);
+
+    await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("drift-banner")).toHaveCount(0, { timeout: 15_000 });
+  });
+
   test("drift modal shows the affected repo and workflow", async ({ page }) => {
     const project = makeProject({
       project_id: 1,
@@ -151,12 +270,15 @@ test.describe("Drift resolution – Adopt GitHub version", () => {
       workflows: [makeWorkflow({ name: PHASE2_WORKFLOWS.CI })],
     });
 
-    // First call returns drift; second call (after resolve) returns clean
-    let driftCallCount = 0;
+    // Drifted until the adoption actually happens, then clean. Keyed on the
+    // resolve call rather than a fetch count: the panel legitimately fetches
+    // drift more than once before the user acts (cached state first, then a
+    // live re-check when that state is stale), and counting calls made this
+    // test depend on how many of those happen to fire.
+    let resolved = false;
     await page.route(/\/api\/projects\/[^/]+\/drift(\?.*)?$/, (route) => {
-      driftCallCount += 1;
       const drifted =
-        driftCallCount === 1
+        !resolved
           ? [
               {
                 workflow_id: 1,
@@ -197,6 +319,12 @@ test.describe("Drift resolution – Adopt GitHub version", () => {
 
     await mockResolveDrift(page, { responseState: "synced" });
     await installApiMocks(page, createMockState({ projects: [project] }));
+    // Observed rather than routed: another mock already serves this endpoint,
+    // and whichever page.route wins the match would swallow a second handler.
+    // A request listener fires no matter who fulfils it.
+    page.on("request", (req) => {
+      if (req.url().includes("/api/drift/adopt-github-version")) resolved = true;
+    });
 
     await page.goto(`/project/${TEST_USER}/drift-demo`);
     await expect(page.getByTestId("drift-banner")).toBeVisible({ timeout: 15_000 });

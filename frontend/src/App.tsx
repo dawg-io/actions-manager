@@ -9,6 +9,7 @@ import ActionsProjectDetail from "./ActionsProjectDetail";
 import DarkModeToggle from "./components/DarkModeToggle";
 import BrandLogo from "./components/BrandLogo";
 import WorkspaceMembers from "./components/WorkspaceMembers";
+import WorkspaceNotifications from "./components/WorkspaceNotifications";
 import { ThemeProvider } from "./components/ThemeContext";
 import { checkGitHubPermissions, getUserDetails, loginWithGitHubToken, logout, PermissionValidationResult, UserDetails } from "./api/user";
 import config from "./config";
@@ -235,6 +236,10 @@ function App(): React.ReactElement {
                   element={<WorkspaceMembersWrapper currentUser={user || ""} currentUserRole={userDetails?.workspace_role} onLogout={handleLogout} />}
                 />
                 <Route
+                  path="/workspace/notifications"
+                  element={<WorkspaceNotificationsWrapper currentUser={user || ""} currentUserRole={userDetails?.workspace_role} onLogout={handleLogout} />}
+                />
+                <Route
                   path="/project/:user/actions-projects/new"
                   element={<AddActionsProjectWrapper />}
                 />
@@ -447,6 +452,40 @@ function WorkspaceMembersWrapper({ currentUser, currentUserRole, onLogout }: Wor
       </div>
       <div className="p-6">
         <WorkspaceMembers currentUser={currentUser} currentUserRole={currentUserRole} />
+      </div>
+    </div>
+  );
+}
+
+// Wrapper for workspace notifications page with header/navigation
+interface WorkspaceNotificationsWrapperProps {
+  readonly currentUser: string;
+  readonly currentUserRole?: string;
+  readonly onLogout: () => void;
+}
+
+function WorkspaceNotificationsWrapper({ currentUser, currentUserRole, onLogout }: WorkspaceNotificationsWrapperProps): React.ReactElement {
+  return (
+    <div className="w-full min-h-screen bg-background dark:bg-background-dark">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border dark:border-border-dark">
+        <BrandLogo variant="full" size="sm" />
+        <div className="flex items-center gap-4">
+          <Link
+            to={`/project/${currentUser}`}
+            className="text-sm text-text-secondary dark:text-secondary-dark hover:text-text-primary dark:hover:text-text-primary-dark transition-colors"
+          >
+            ← Back to Projects
+          </Link>
+          <button
+            className="text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 transition-colors"
+            onClick={onLogout}
+          >
+            Log out
+          </button>
+        </div>
+      </div>
+      <div className="p-6">
+        <WorkspaceNotifications currentUser={currentUser} currentUserRole={currentUserRole} />
       </div>
     </div>
   );

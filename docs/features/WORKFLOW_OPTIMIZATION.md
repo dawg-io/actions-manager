@@ -18,7 +18,7 @@ Implemented a staged, sequential approach to workflow execution with clear depen
 
 ## Workflow Optimizations
 
-### 1. docker-image.yml (Main Build Pipeline)
+### 1. docker-build-and-test.yml (Main Build Pipeline)
 
 **Previous State**: Single monolithic job doing everything
 **New State**: 4 sequential stages with clear dependencies

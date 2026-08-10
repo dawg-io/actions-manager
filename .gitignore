@@ -98,3 +98,6 @@ docs/temp/
 docs/scratch/
 test_pr_workflow_update_ui.md
 failure.log
+
+# Claude Code agent worktrees (scratch clones, never part of the repo)
+.claude/worktrees/
