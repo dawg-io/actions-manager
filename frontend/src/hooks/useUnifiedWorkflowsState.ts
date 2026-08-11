@@ -1,6 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { WorkflowGUI, DEFAULT_REUSABLE_WORKFLOW_GUI, DEFAULT_WORKFLOW_GUI } from '../utils/workflowGuiConversion';
 import { WorkflowStatusData, DetectedBuildResult, TemplatesByType } from '../types/workflow';
+import {
+  PROJECT_FILES_COLLAPSED_KEY,
+  readStoredPreference,
+  writeStoredPreference,
+} from '../utils/projectFilesPanelPrefs';
 
 export interface UseUnifiedWorkflowsStateReturn {
   // UI State
@@ -75,7 +80,9 @@ export const useUnifiedWorkflowsState = (
 ): UseUnifiedWorkflowsStateReturn => {
   // UI State
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(
+    () => readStoredPreference(PROJECT_FILES_COLLAPSED_KEY) === 'true'
+  );
   const [editMode, setEditMode] = useState<'yaml' | 'gui'>('yaml');
   
   // GUI Workflow State
@@ -112,6 +119,10 @@ export const useUnifiedWorkflowsState = (
   const [workflowStatuses, setWorkflowStatuses] = useState<Record<string, WorkflowStatusData>>({});
   const [loadingStatuses, setLoadingStatuses] = useState(false);
   
+  useEffect(() => {
+    writeStoredPreference(PROJECT_FILES_COLLAPSED_KEY, String(isCollapsed));
+  }, [isCollapsed]);
+
   // Helper Functions
   const markWorkflowAsModified = useCallback((index: number, type: 'regular' | 'reusable') => {
     if (type === 'regular') {

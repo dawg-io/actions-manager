@@ -12,6 +12,7 @@ import { UnifiedWorkflowsProps, UnifiedWorkflowItem } from '../types/workflow';
 import { CustomFilePanel } from './CustomFiles';
 import CodeownersManager from './CodeownersManager';
 import { CustomFile } from '../api/customFiles';
+import { toast } from '../utils/toast';
 // eslint-disable-next-line no-restricted-imports -- Legacy: TODO migrate CSS file to Tailwind CSS classes
 import '../styles/UnifiedWorkflows.css';
 // eslint-disable-next-line no-restricted-imports -- Legacy: TODO migrate CSS file to Tailwind CSS classes
@@ -58,6 +59,8 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
   onCodeownersSaved,
   importedActions = [],
   actionGroups = [],
+  secrets = [],
+  envVars = [],
 }) => {
   // Project Files: custom file and codeowners selection
   const [selectedCustomFileId, setSelectedCustomFileId] = useState<number | null>(null);
@@ -164,7 +167,7 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
   });
 
   // Use workflow selection logic hook
-  const { handleSelectWorkflow: _handleSelectWorkflow } = useWorkflowSelectionLogic({
+  const { handleSelectWorkflow: _handleSelectWorkflow, initializeWorkflowGUI } = useWorkflowSelectionLogic({
     unifiedWorkflows,
     setSelectedWorkflowId: state.setSelectedWorkflowId,
     setGuiWorkflow: state.setGuiWorkflow,
@@ -176,6 +179,24 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
     setSelectedCustomFileId(null);
     setSelectedCodeownersRepo(null);
     _handleSelectWorkflow(workflowId);
+  };
+
+  // The GUI model is only built when a workflow is selected, so entering GUI
+  // mode has to re-read the current YAML. Without this the panel shows the
+  // workflow as it was at selection time, and the first GUI edit serialises that
+  // stale model back over every YAML edit made since.
+  //
+  // If the YAML no longer converts, stay put: entering GUI would load a default
+  // template that the next click would write over the document.
+  const handleSetEditMode = (mode: 'yaml' | 'gui') => {
+    if (mode === 'gui' && selectedWorkflow) {
+      const conversionError = initializeWorkflowGUI(selectedWorkflow);
+      if (conversionError) {
+        toast.error('Fix the YAML errors before switching to GUI mode.');
+        return;
+      }
+    }
+    state.setEditMode(mode);
   };
 
   // Workflow change handler
@@ -296,7 +317,9 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
           selectedRepos={selectedRepos}
           importedActions={importedActions}
           actionGroups={actionGroups}
-          setEditMode={state.setEditMode}
+          secrets={secrets}
+          envVars={envVars}
+          setEditMode={handleSetEditMode}
           setRegularGuiWorkflow={state.setRegularGuiWorkflow}
           setGuiWorkflow={state.setGuiWorkflow}
           handleWorkflowChange={handleWorkflowChangeWrapper}

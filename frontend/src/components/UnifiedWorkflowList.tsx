@@ -1,65 +1,20 @@
 /* eslint-disable no-restricted-syntax -- Legacy: TODO migrate inline styles to Tailwind CSS classes */
 import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { UnifiedWorkflowItem } from '../types/workflow';
 import { normalizeWorkflowFilename } from '../utils/workflowFilename';
-import WorkflowStatusBadge from './WorkflowStatusBadge';
 import { CustomFile } from '../api/customFiles';
-
-/** Small decorative indicator showing who last saved a workflow. */
-const LastSavedByIndicator: React.FC<{ username: string }> = ({ username }) => {
-  const [imageError, setImageError] = React.useState(false);
-
-  return (
-    <div className="workflow-last-saved-by" title={`Last saved by ${username}`}>
-      {!imageError ? (
-        <img
-          src={`https://github.com/${encodeURIComponent(username)}.png?size=32`}
-          alt=""
-          aria-hidden="true"
-          onError={() => setImageError(true)}
-          style={{ width: 16, height: 16, borderRadius: '50%', display: 'inline-block', verticalAlign: 'middle' }}
-        />
-      ) : (
-        <span
-          style={{
-            width: 16,
-            height: 16,
-            borderRadius: '50%',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: '#e5e7eb',
-            color: '#6b7280',
-            fontSize: '0.625rem',
-            fontWeight: 600,
-            verticalAlign: 'middle'
-          }}
-        >
-          {username.charAt(0).toUpperCase()}
-        </span>
-      )}
-      <span style={{ fontSize: '0.75rem', marginLeft: 4, opacity: 0.7 }}>{username}</span>
-    </div>
-  );
-};
-
-/** Amber badge shown when a workflow has been changed directly in GitHub. */
-const DriftBadge: React.FC = () => (
-  <div
-    className="workflow-lifecycle-status status-drift"
-    title="Workflow was changed directly in GitHub. Use Review Drift to resolve."
-    data-testid="drift-badge"
-    style={{
-      background: 'rgba(245,158,11,0.15)',
-      color: '#92400e',
-      borderColor: 'rgba(245,158,11,0.4)',
-    }}
-  >
-    <span aria-hidden="true">⚠️</span>
-    <span className="lifecycle-label">Drift detected</span>
-  </div>
-);
+import {
+  PANEL_DEFAULT_WIDTH,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
+  PROJECT_FILES_CLOSED_SECTIONS_KEY,
+  PROJECT_FILES_WIDTH_KEY,
+  clampPanelWidth,
+  readStoredClosedSections,
+  readStoredPanelWidth,
+  writeStoredPreference,
+} from '../utils/projectFilesPanelPrefs';
 
 interface UnifiedWorkflowListProps {
   unifiedWorkflows: UnifiedWorkflowItem[];
@@ -76,7 +31,7 @@ interface UnifiedWorkflowListProps {
   handleSelectWorkflow: (workflowId: string) => void;
   /** Opens the Add Project File dialog (Workflow / Reusable Workflow / Link Reusable Workflow / Custom File / CODEOWNERS). */
   addWorkflowFn?: () => void;
-  /** Set of workflow names currently drifted on GitHub (renders an amber badge). */
+  /** Set of workflow names currently drifted on GitHub (renders a small warning icon). */
   driftedWorkflowNames?: Set<string>;
   // Project Files: Custom Files
   customFiles?: CustomFile[];
@@ -97,54 +52,226 @@ const WORKFLOW_STATUS_LABELS: Record<string, { label: string; className: string 
 };
 
 const DETAIL_SEPARATOR = ' · ';
-const COMPACT_FILENAME_MAX_LENGTH = 16;
-const COMPACT_FILENAME_MIN_SEGMENT_LENGTH = 4;
-const COMPACT_FILENAME_MAX_PREFIX_LENGTH = 6;
-const COMPACT_FILENAME_FALLBACK_PREFIX_LENGTH = 6;
-const COMPACT_FILENAME_NO_EXTENSION_PREFIX_LENGTH = 8;
+
+/** Stable ids so a section's open/closed state survives a reload. */
+const SECTION_WORKFLOWS = 'workflows';
+const SECTION_REUSABLE = 'reusable';
+const SECTION_LINKED = 'linked';
+const SECTION_CUSTOM = 'custom';
+const SECTION_CODEOWNERS = 'codeowners';
+
+const SECTION_ICONS: Record<string, string> = {
+  [SECTION_WORKFLOWS]: '📝',
+  [SECTION_REUSABLE]: '🔄',
+  [SECTION_LINKED]: '🔗',
+  [SECTION_CUSTOM]: '📄',
+  [SECTION_CODEOWNERS]: '👥',
+};
+
+/** Distinct per row kind — the icon is the only type signal a one-line row has. */
+const ROW_ICONS: Record<UnifiedWorkflowItem['type'] | 'custom', string> = {
+  regular: '📄',
+  reusable: '🔄',
+  linked: '🔗',
+  custom: '📎',
+};
+
+const SECTION_LABELS: Record<string, string> = {
+  [SECTION_WORKFLOWS]: 'Workflows',
+  [SECTION_REUSABLE]: 'Reusable Workflows',
+  [SECTION_LINKED]: 'Linked Workflows',
+  [SECTION_CUSTOM]: 'Custom Files',
+  [SECTION_CODEOWNERS]: 'CODEOWNERS',
+};
 
 const getWorkflowStatusDisplay = (status?: string) => {
   if (!status) return null;
   return WORKFLOW_STATUS_LABELS[status] || null;
 };
 
+const UNSAVED_LABEL = 'Unsaved changes';
+
+const getRowStatus = (status: string | undefined, isModified?: boolean) => {
+  const statusDisplay = getWorkflowStatusDisplay(status);
+  if (statusDisplay) return statusDisplay;
+  if (isModified) return { label: UNSAVED_LABEL, className: 'status-unsaved' };
+  return { label: 'No status', className: 'status-none' };
+};
+
 const getWorkflowDisplayFilename = (workflow: UnifiedWorkflowItem, fallbackLabel: string) =>
   workflow.name ? normalizeWorkflowFilename(workflow.name) : fallbackLabel;
 
-const selectAbbreviationPrefix = (stem: string) => {
-  const firstSegment = stem.split(/[-_.]/)[0];
-  if (firstSegment.length >= COMPACT_FILENAME_MIN_SEGMENT_LENGTH) {
-    return firstSegment.slice(0, COMPACT_FILENAME_MAX_PREFIX_LENGTH);
-  }
-  return stem.slice(0, COMPACT_FILENAME_FALLBACK_PREFIX_LENGTH);
+/**
+ * The row's state, in words. Shared by the tooltip and the accessible name so the
+ * two can never drift apart. `modified` is skipped when the status already says
+ * "Unsaved changes", which is what getRowStatus reports for an unsaved draft.
+ */
+const buildStateParts = ({
+  typeLabel = null,
+  status,
+  drifted = false,
+  modified = false,
+  pendingDelete = false,
+}: {
+  typeLabel?: string | null;
+  status: string;
+  drifted?: boolean;
+  modified?: boolean;
+  pendingDelete?: boolean;
+}): string[] =>
+  [
+    typeLabel,
+    status,
+    drifted ? 'Drift detected' : null,
+    pendingDelete ? 'Pending Deletion' : null,
+    modified && status !== UNSAVED_LABEL ? UNSAVED_LABEL : null,
+  ].filter(Boolean) as string[];
+
+interface FileRowProps {
+  icon: string;
+  name: string;
+  /** Full tooltip text — carries the detail the compact row no longer shows. */
+  title: string;
+  ariaLabel: string;
+  /** Secondary inline text, e.g. the source project of a linked workflow. */
+  meta?: string;
+  statusLabel: string;
+  statusClassName: string;
+  selected: boolean;
+  onSelect: () => void;
+  drifted?: boolean;
+  modified?: boolean;
+  pendingDelete?: boolean;
+  testId?: string;
+}
+
+/** Single-line, IDE-style row: icon, filename, indicators, status dot. */
+const FileRow: React.FC<FileRowProps> = ({
+  icon,
+  name,
+  title,
+  ariaLabel,
+  meta,
+  statusLabel,
+  statusClassName,
+  selected,
+  onSelect,
+  drifted,
+  modified,
+  pendingDelete,
+  testId,
+}) => (
+  <li>
+    <button
+      type="button"
+      className={`pf-row ${selected ? 'selected' : ''}`}
+      onClick={onSelect}
+      title={title}
+      aria-label={ariaLabel}
+      aria-current={selected ? 'page' : undefined}
+      data-testid={testId}
+    >
+      <span className="pf-row-icon" aria-hidden="true">{icon}</span>
+      <span className="pf-row-name">{name}</span>
+      {meta && <span className="pf-row-meta">{meta}</span>}
+      {drifted && (
+        <span className="pf-row-drift" data-testid="drift-badge" title="Drift detected">
+          <span aria-hidden="true">⚠️</span>
+        </span>
+      )}
+      {pendingDelete && (
+        <span className="pf-row-pending-delete" title="Pending Deletion" aria-hidden="true">🗑</span>
+      )}
+      {modified && <span className="pf-row-modified" title="Unsaved changes" aria-hidden="true">•</span>}
+      <span className={`pf-row-dot ${statusClassName}`} title={statusLabel} aria-hidden="true" />
+    </button>
+  </li>
+);
+
+interface PanelSectionProps {
+  id: string;
+  count?: number;
+  closed: boolean;
+  onToggle: (id: string) => void;
+  children: React.ReactNode;
+}
+
+const PanelSection: React.FC<PanelSectionProps> = ({ id, count, closed, onToggle, children }) => {
+  const label = SECTION_LABELS[id];
+  return (
+    <section className="pf-section" aria-label={label}>
+      <button
+        type="button"
+        className="pf-section-header"
+        onClick={() => onToggle(id)}
+        aria-expanded={!closed}
+        aria-controls={`pf-section-body-${id}`}
+      >
+        <ChevronDown className={`pf-section-chevron ${closed ? 'closed' : ''}`} aria-hidden="true" />
+        <span className="pf-section-icon" aria-hidden="true">{SECTION_ICONS[id]}</span>
+        <span className="pf-section-label">{label}</span>
+        {count !== undefined && count > 0 && <span className="pf-section-count">{count}</span>}
+      </button>
+      {/* Unmounted rather than hidden so a closed section costs no DOM — the
+          element itself stays so aria-controls always resolves. */}
+      <div className="pf-section-body" id={`pf-section-body-${id}`} hidden={closed}>
+        {!closed && children}
+      </div>
+    </section>
+  );
 };
 
-const abbreviateWorkflowFilename = (filename: string) => {
-  if (filename.length <= COMPACT_FILENAME_MAX_LENGTH) return filename;
+/** Drag handle on the panel's right edge. Mouse events (not pointer) so it works in jsdom. */
+const ResizeHandle: React.FC<{ width: number; onResize: (width: number) => void }> = ({ width, onResize }) => {
+  const [dragOrigin, setDragOrigin] = React.useState<{ x: number; width: number } | null>(null);
 
-  const extensionMatch = filename.match(/\.(ya?ml)$/i);
-  if (extensionMatch) {
-    const extension = extensionMatch[1].toLowerCase();
-    const stem = filename.slice(0, -extensionMatch[0].length);
-    return `${selectAbbreviationPrefix(stem)}…${extension}`;
-  }
+  React.useEffect(() => {
+    if (!dragOrigin) return;
+    const onMove = (event: MouseEvent) =>
+      onResize(clampPanelWidth(dragOrigin.width + event.clientX - dragOrigin.x));
+    const onUp = () => setDragOrigin(null);
 
-  return `${filename.slice(0, COMPACT_FILENAME_NO_EXTENSION_PREFIX_LENGTH)}…`;
+    document.body.classList.add('pf-resizing');
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      document.body.classList.remove('pf-resizing');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragOrigin, onResize]);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowLeft') onResize(clampPanelWidth(width - 16));
+    else if (event.key === 'ArrowRight') onResize(clampPanelWidth(width + 16));
+    else if (event.key === 'Home') onResize(PANEL_MIN_WIDTH);
+    else if (event.key === 'End') onResize(PANEL_MAX_WIDTH);
+    else if (event.key === 'Enter' || event.key === ' ') onResize(PANEL_DEFAULT_WIDTH);
+    else return;
+    event.preventDefault();
+  };
+
+  // The ARIA window-splitter pattern (role="separator" + tabindex + aria-valuenow)
+  // would be the closer semantic fit, but SonarQube's prefer-tag-over-role rule
+  // rejects that role outside a decorative <hr>. A button is the honest
+  // alternative: natively focusable and activatable, so no tabIndex is needed.
+  // The name stays constant — putting the live width in it would make assistive
+  // tech re-announce on every drag frame — and the width rides in the title.
+  return (
+    <button
+      type="button"
+      className="pf-resize-handle"
+      aria-label="Resize Project Files panel"
+      title={`Resize Project Files panel (${width}px). Drag, or use arrow keys.`}
+      onDoubleClick={() => onResize(PANEL_DEFAULT_WIDTH)}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        setDragOrigin({ x: event.clientX, width });
+      }}
+      onKeyDown={handleKeyDown}
+    />
+  );
 };
-
-const getCompactStatus = (workflow: UnifiedWorkflowItem) => {
-  const statusDisplay = getWorkflowStatusDisplay(workflow.workflowStatus);
-  if (statusDisplay) return statusDisplay;
-  if (workflow.isModified) {
-    return { label: 'Unsaved changes', emoji: '', className: 'status-unsaved' };
-  }
-  return { label: 'No status', emoji: '', className: 'status-none' };
-};
-
-const getLinkedWorkflowSourceDetails = (workflow: UnifiedWorkflowItem) => [
-  workflow.rwxProjectName ? `From: ${workflow.rwxProjectName}` : null,
-  workflow.rwxRepo ? `Repo: ${workflow.rwxRepo}` : null,
-].filter(Boolean).join(DETAIL_SEPARATOR);
 
 const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
   unifiedWorkflows,
@@ -169,390 +296,296 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
   onSelectCodeowners,
   codeownersAggregateStatus,
 }) => {
-  const isDrifted = (name?: string) =>
-    !!(name && driftedWorkflowNames?.has(name));
+  const [panelWidth, setPanelWidth] = React.useState(readStoredPanelWidth);
+  const [closedSections, setClosedSections] = React.useState<Set<string>>(readStoredClosedSections);
+
+  React.useEffect(() => {
+    writeStoredPreference(PROJECT_FILES_WIDTH_KEY, String(panelWidth));
+  }, [panelWidth]);
+
+  React.useEffect(() => {
+    writeStoredPreference(PROJECT_FILES_CLOSED_SECTIONS_KEY, JSON.stringify([...closedSections]));
+  }, [closedSections]);
+
+  const toggleSection = (id: string) =>
+    setClosedSections((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  /** From the collapsed rail: reopen the panel with that section showing. */
+  const revealSection = (id: string) => {
+    setClosedSections((previous) => {
+      if (!previous.has(id)) return previous;
+      const next = new Set(previous);
+      next.delete(id);
+      return next;
+    });
+    setIsCollapsed(false);
+  };
+
+  const isDrifted = (name?: string) => !!(name && driftedWorkflowNames?.has(name));
 
   const regularWorkflows = unifiedWorkflows.filter(w => w.type === 'regular');
   const reusableWorkflows = unifiedWorkflows.filter(w => w.type === 'reusable');
   const linkedWorkflows = unifiedWorkflows.filter(w => w.type === 'linked');
 
-  const renderCompactWorkflowItem = (workflow: UnifiedWorkflowItem, fallbackLabel: string) => {
+  const showReusableSection = reusableWorkflowsEnabled && repoExists && reusableWorkflows.length > 0;
+  const showCodeownersSection = !!codeownersRepos && codeownersRepos.length > 0;
+
+  /** The on-GitHub filename, kept in the tooltip since the row shows the bare name. */
+  const getFullFilename = (workflow: UnifiedWorkflowItem, filename: string) =>
+    workflow.name && usePrefix && workflow.type !== 'linked'
+      ? `AM_${(projectCode || '').toUpperCase()}_${filename}`
+      : filename;
+
+  const renderWorkflowRow = (workflow: UnifiedWorkflowItem, fallbackLabel: string) => {
     const filename = getWorkflowDisplayFilename(workflow, fallbackLabel);
-    const status = getCompactStatus(workflow);
-    const sourceDetails = workflow.type === 'linked' ? getLinkedWorkflowSourceDetails(workflow) : '';
+    const fullFilename = getFullFilename(workflow, filename);
+    const status = getRowStatus(workflow.workflowStatus, workflow.isModified);
+    const drifted = workflow.type !== 'linked' && isDrifted(workflow.name);
+    // aria-label replaces the button's content, so every indicator rendered as an
+    // aria-hidden glyph has to be spelled out here or it is lost to assistive tech.
+    const stateParts = buildStateParts({
+      typeLabel: workflow.type === 'linked' ? 'Linked workflow' : null,
+      status: status.label,
+      drifted,
+      modified: workflow.isModified,
+    });
     const titleParts = [
-      filename,
-      workflow.type === 'linked' ? 'Linked workflow' : status.label,
-      sourceDetails || null,
+      fullFilename,
+      ...stateParts,
+      workflow.type === 'linked' && workflow.rwxProjectName ? `From: ${workflow.rwxProjectName}` : null,
+      workflow.type === 'linked' && workflow.rwxRepo ? `Repo: ${workflow.rwxRepo}` : null,
+      workflow.lastModifiedBy ? `Last saved by ${workflow.lastModifiedBy}` : null,
     ].filter(Boolean);
-    const ariaLabel = [filename, workflow.type === 'linked' ? `Linked workflow, ${status.label}` : status.label]
-      .filter(Boolean)
-      .join(', ');
-    const isSelected = selectedWorkflowId === workflow.id;
 
     return (
-      <li key={workflow.id} data-testid={workflow.type === 'linked' ? 'linked-rwx-workflow-card' : undefined}>
-        <button
-          className={`workflow-compact-item ${isSelected ? 'selected' : ''}`}
-          onClick={() => handleSelectWorkflow(workflow.id)}
-          title={titleParts.join(DETAIL_SEPARATOR)}
-          aria-label={ariaLabel}
-          aria-current={isSelected ? 'page' : undefined}
-        >
-          <span className="workflow-compact-icon" aria-hidden="true">
-            {workflow.type === 'linked' ? '🔗' : workflow.type === 'reusable' ? '🔄' : '📄'}
-          </span>
-          <span className="workflow-compact-name">{abbreviateWorkflowFilename(filename)}</span>
-          <span
-            className={`workflow-compact-status-dot ${status.className}`}
-            title={status.label}
-            aria-hidden="true"
-          />
-        </button>
-      </li>
+      <FileRow
+        key={workflow.id}
+        icon={ROW_ICONS[workflow.type]}
+        name={filename}
+        title={titleParts.join(DETAIL_SEPARATOR)}
+        ariaLabel={[filename, ...stateParts].join(', ')}
+        meta={workflow.type === 'linked' ? workflow.rwxProjectName : undefined}
+        statusLabel={status.label}
+        statusClassName={status.className}
+        selected={selectedWorkflowId === workflow.id}
+        onSelect={() => handleSelectWorkflow(workflow.id)}
+        drifted={drifted}
+        modified={workflow.isModified}
+        testId={workflow.type === 'linked' ? 'linked-rwx-workflow-card' : undefined}
+      />
     );
   };
 
-  return (
-    <div className={`unified-workflows-list ${isCollapsed ? 'collapsed' : 'expanded'}`}>
-      <div className="workflows-list-header">
-        <div className="workflows-list-header-content">
-          {!isCollapsed && <h4>📁 Project Files</h4>}
-          {isCollapsed && <h4>📁</h4>}
-        </div>
-        <div className="workflows-list-header-actions">
-          {!isCollapsed && addWorkflowFn && (
+  const renderCustomFileRow = (cf: CustomFile) => {
+    const status = getRowStatus(cf.file_status);
+    const stateParts = buildStateParts({
+      status: status.label,
+      pendingDelete: cf.pending_delete,
+    });
+    const titleParts = [
+      cf.file_path,
+      cf.display_name || null,
+      ...stateParts,
+      cf.last_modified_by ? `Last saved by ${cf.last_modified_by}` : null,
+    ].filter(Boolean);
+
+    return (
+      <FileRow
+        key={cf.id}
+        icon={ROW_ICONS.custom}
+        name={cf.file_path.split('/').pop() || cf.file_path}
+        title={titleParts.join(DETAIL_SEPARATOR)}
+        ariaLabel={[cf.file_path, ...stateParts].join(', ')}
+        statusLabel={status.label}
+        statusClassName={status.className}
+        selected={selectedCustomFileId === cf.id}
+        onSelect={() => onSelectCustomFile?.(cf.id)}
+        pendingDelete={cf.pending_delete}
+        testId="custom-file-row"
+      />
+    );
+  };
+
+  const renderCodeownersRow = () => {
+    const status = getRowStatus(codeownersAggregateStatus);
+    const repoCount = `${codeownersRepos!.length} repo${codeownersRepos!.length !== 1 ? 's' : ''}`;
+
+    return (
+      <FileRow
+        icon={SECTION_ICONS[SECTION_CODEOWNERS]}
+        name=".github/CODEOWNERS"
+        title={['.github/CODEOWNERS', repoCount, status.label].join(DETAIL_SEPARATOR)}
+        ariaLabel={`.github/CODEOWNERS, ${status.label}`}
+        statusLabel={status.label}
+        statusClassName={status.className}
+        selected={!!selectedCodeownersRepo}
+        onSelect={() => onSelectCodeowners?.(codeownersRepos?.[0] ?? selectedRepos[0])}
+      />
+    );
+  };
+
+  if (isCollapsed) {
+    const railSections = [
+      SECTION_WORKFLOWS,
+      showReusableSection ? SECTION_REUSABLE : null,
+      linkedWorkflows.length > 0 ? SECTION_LINKED : null,
+      customFiles !== undefined ? SECTION_CUSTOM : null,
+      showCodeownersSection ? SECTION_CODEOWNERS : null,
+    ].filter(Boolean) as string[];
+
+    return (
+      <div className="unified-workflows-list collapsed">
+        <button
+          type="button"
+          className="workflows-list-toggle pf-rail-toggle"
+          onClick={() => setIsCollapsed(false)}
+          title="Expand Project Files"
+          aria-label="Expand Project Files"
+          aria-expanded={false}
+        >
+          <ChevronRight className="workflows-list-toggle-icon" />
+        </button>
+
+        <nav className="pf-rail" aria-label="Project Files">
+          {railSections.map((id) => (
             <button
-              className="btn btn-primary"
-              style={{ fontSize: '0.8rem', padding: '0.3rem 0.7rem', whiteSpace: 'nowrap' }}
-              onClick={addWorkflowFn}
+              key={id}
+              type="button"
+              className="pf-rail-item"
+              onClick={() => revealSection(id)}
+              title={SECTION_LABELS[id]}
+              aria-label={SECTION_LABELS[id]}
             >
-              + Add File
+              <span aria-hidden="true">{SECTION_ICONS[id]}</span>
+            </button>
+          ))}
+        </nav>
+
+        <button
+          type="button"
+          className="pf-rail-label"
+          onClick={() => setIsCollapsed(false)}
+          title="Expand Project Files"
+        >
+          Project Files
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="unified-workflows-list expanded"
+      style={{ '--pf-panel-width': `${panelWidth}px` } as React.CSSProperties}
+    >
+      <div className="workflows-list-header">
+        <h4 className="pf-panel-title">Project Files</h4>
+        <div className="workflows-list-header-actions">
+          {addWorkflowFn && (
+            <button
+              type="button"
+              className="pf-icon-button"
+              onClick={addWorkflowFn}
+              title="Add File"
+              aria-label="Add File"
+            >
+              <Plus className="pf-icon" />
             </button>
           )}
           <button
+            type="button"
             className="workflows-list-toggle"
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            title={isCollapsed ? 'Expand workflows list' : 'Collapse workflows list'}
+            onClick={() => setIsCollapsed(true)}
+            title="Collapse Project Files"
+            aria-label="Collapse Project Files"
+            aria-expanded
           >
-            {isCollapsed ? (
-              <ChevronRight className="workflows-list-toggle-icon" />
-            ) : (
-              <ChevronLeft className="workflows-list-toggle-icon" />
-            )}
+            <ChevronLeft className="workflows-list-toggle-icon" />
           </button>
         </div>
       </div>
-      
-      {isCollapsed && (
-        <nav className="workflows-list-container compact" aria-label="Compact workflow navigation">
-          {unifiedWorkflows.length === 0 ? (
-            <div className="empty-workflow-list compact">
-              <span>No workflows</span>
-            </div>
-          ) : (
-            <div className="workflow-compact-sections">
-              {(regularWorkflows.length > 0 || (reusableWorkflowsEnabled && repoExists && reusableWorkflows.length > 0)) && (
-                <div className="workflow-compact-section">
-                  <ul className="workflow-compact-items">
-                    {regularWorkflows.map((workflow) =>
-                      renderCompactWorkflowItem(workflow, `Untitled Workflow ${workflow.originalIndex + 1}`)
-                    )}
-                    {reusableWorkflowsEnabled && repoExists && reusableWorkflows.map((workflow) =>
-                      renderCompactWorkflowItem(workflow, `Untitled Reusable Workflow ${workflow.originalIndex + 1}`)
-                    )}
-                  </ul>
-                </div>
-              )}
 
-              {linkedWorkflows.length > 0 && (
-                <section className="workflow-compact-section linked" aria-label="Linked workflows">
-                  <div className="workflow-compact-section-divider" title="Linked Workflows">
-                    <span aria-hidden="true">🔗</span>
-                  </div>
-                  <ul className="workflow-compact-items">
-                    {linkedWorkflows.map((workflow) =>
-                      renderCompactWorkflowItem(workflow, `Untitled Linked Workflow ${workflow.originalIndex + 1}`)
-                    )}
-                  </ul>
-                </section>
-              )}
+      <div className="workflows-list-container">
+        <div className="unified-workflow-sections">
+          <PanelSection
+            id={SECTION_WORKFLOWS}
+            count={regularWorkflows.length}
+            closed={closedSections.has(SECTION_WORKFLOWS)}
+            onToggle={toggleSection}
+          >
+            {regularWorkflows.length === 0 ? (
+              <div className="empty-section-hint">No workflows yet</div>
+            ) : (
+              <ul className="pf-rows">
+                {regularWorkflows.map((workflow) =>
+                  renderWorkflowRow(workflow, `Untitled Workflow ${workflow.originalIndex + 1}`)
+                )}
+              </ul>
+            )}
+          </PanelSection>
 
-              {customFiles && customFiles.length > 0 && (
-                <section className="workflow-compact-section" aria-label="Custom files">
-                  <div className="workflow-compact-section-divider" title="Custom Files">
-                    <span aria-hidden="true">📄</span>
-                  </div>
-                  <ul className="workflow-compact-items">
-                    {customFiles.map((cf) => (
-                      <li key={cf.id}>
-                        <button
-                          className={`workflow-compact-item ${selectedCustomFileId === cf.id ? 'selected' : ''}`}
-                          onClick={() => onSelectCustomFile?.(cf.id)}
-                          title={cf.file_path}
-                          aria-label={cf.file_path}
-                          aria-current={selectedCustomFileId === cf.id ? 'page' : undefined}
-                        >
-                          <span className="workflow-compact-icon" aria-hidden="true">📄</span>
-                          <span className="workflow-compact-name">{cf.file_path.split('/').pop()}</span>
-                          <span
-                            className={`workflow-compact-status-dot ${WORKFLOW_STATUS_LABELS[cf.file_status ?? '']?.className ?? 'status-committed'}`}
-                            aria-hidden="true"
-                          />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-
-              {codeownersRepos && codeownersRepos.length > 0 && (
-                <section className="workflow-compact-section" aria-label="CODEOWNERS">
-                  <div className="workflow-compact-section-divider" title="CODEOWNERS">
-                    <span aria-hidden="true">👥</span>
-                  </div>
-                  <ul className="workflow-compact-items">
-                    <li>
-                      <button
-                        className={`workflow-compact-item ${selectedCodeownersRepo !== null ? 'selected' : ''}`}
-                        onClick={() => onSelectCodeowners?.(codeownersRepos?.[0] ?? selectedRepos[0])}
-                        title="CODEOWNERS"
-                        aria-label="CODEOWNERS"
-                        aria-current={selectedCodeownersRepo !== null ? 'page' : undefined}
-                      >
-                        <span className="workflow-compact-icon" aria-hidden="true">👥</span>
-                        <span className="workflow-compact-name">CODEOWNERS</span>
-                        <span
-                          className={`workflow-compact-status-dot ${codeownersAggregateStatus ? (WORKFLOW_STATUS_LABELS[codeownersAggregateStatus]?.className ?? 'status-none') : 'status-none'}`}
-                          aria-hidden="true"
-                        />
-                      </button>
-                    </li>
-                  </ul>
-                </section>
-              )}
-            </div>
+          {showReusableSection && (
+            <PanelSection
+              id={SECTION_REUSABLE}
+              count={reusableWorkflows.length}
+              closed={closedSections.has(SECTION_REUSABLE)}
+              onToggle={toggleSection}
+            >
+              <ul className="pf-rows">
+                {reusableWorkflows.map((workflow) =>
+                  renderWorkflowRow(workflow, `Untitled Reusable Workflow ${workflow.originalIndex + 1}`)
+                )}
+              </ul>
+            </PanelSection>
           )}
-        </nav>
-      )}
 
-      {!isCollapsed && (
-        <div className="workflows-list-container">
-          <div className="unified-workflow-sections">
+          {linkedWorkflows.length > 0 && (
+            <PanelSection
+              id={SECTION_LINKED}
+              count={linkedWorkflows.length}
+              closed={closedSections.has(SECTION_LINKED)}
+              onToggle={toggleSection}
+            >
+              <ul className="pf-rows">
+                {linkedWorkflows.map((workflow) =>
+                  renderWorkflowRow(workflow, `Untitled Linked Workflow ${workflow.originalIndex + 1}`)
+                )}
+              </ul>
+            </PanelSection>
+          )}
 
-              {/* Workflows Section */}
-              <div className="pf-section">
-                <div className="pf-section-header">
-                  <span className="section-icon" aria-hidden="true">📝</span>
-                  <span>Workflows</span>
-                  {regularWorkflows.length > 0 && <span className="pf-section-count">{regularWorkflows.length}</span>}
-                </div>
-                <div className="pf-section-body">
-                  {regularWorkflows.length === 0 ? (
-                    <div className="empty-section-hint">No workflows yet</div>
-                  ) : (
-                    <ul className="workflow-items">
-                      {regularWorkflows.map((workflow) => (
-                        <li key={workflow.id} className="workflow-item-wrapper">
-                          <button
-                            className={`workflow-item ${selectedWorkflowId === workflow.id ? 'selected' : ''}`}
-                            onClick={() => handleSelectWorkflow(workflow.id)}
-                          >
-                            <div className="workflow-item-content">
-                              <div className="workflow-name">
-                                {workflow.name && usePrefix && (
-                                  <span className="workflow-prefix">
-                                    AM_{(projectCode || '').toUpperCase()}_
-                                  </span>
-                                )}
-                                {workflow.name ? normalizeWorkflowFilename(workflow.name) : `Untitled Workflow ${workflow.originalIndex + 1}`}
-                              </div>
-                              {(() => {
-                                const statusDisplay = getWorkflowStatusDisplay(workflow.workflowStatus);
-                                if (!statusDisplay) return null;
-                                return <WorkflowStatusBadge status={workflow.workflowStatus ?? ''} label={statusDisplay.label} style={{ marginTop: '0.2rem' }} />;
-                              })()}
-                              {isDrifted(workflow.name) && <DriftBadge />}
-                              {workflow.lastModifiedBy && <LastSavedByIndicator username={workflow.lastModifiedBy} />}
-                            </div>
-                            {workflow.isModified && <div className="modified-indicator" title="Unsaved changes">•</div>}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-
-              {/* Reusable Workflows Section */}
-              {reusableWorkflowsEnabled && repoExists && reusableWorkflows.length > 0 && (
-                <div className="pf-section">
-                  <div className="pf-section-header">
-                    <span className="section-icon" aria-hidden="true">🔄</span>
-                    <span>Reusable Workflows</span>
-                    <span className="pf-section-count">{reusableWorkflows.length}</span>
-                  </div>
-                  <div className="pf-section-body">
-                    <ul className="workflow-items">
-                      {reusableWorkflows.map((workflow) => (
-                        <li key={workflow.id} className="workflow-item-wrapper">
-                          <button
-                            className={`workflow-item ${selectedWorkflowId === workflow.id ? 'selected' : ''}`}
-                            onClick={() => handleSelectWorkflow(workflow.id)}
-                          >
-                            <div className="workflow-item-content">
-                              <div className="workflow-name">
-                                {workflow.name && usePrefix && (
-                                  <span className="workflow-prefix">
-                                    AM_{(projectCode || '').toUpperCase()}_
-                                  </span>
-                                )}
-                                {workflow.name ? normalizeWorkflowFilename(workflow.name) : `Untitled Reusable Workflow ${workflow.originalIndex + 1}`}
-                              </div>
-                              {(() => {
-                                const statusDisplay = getWorkflowStatusDisplay(workflow.workflowStatus);
-                                if (!statusDisplay) return null;
-                                return <WorkflowStatusBadge status={workflow.workflowStatus ?? ''} label={statusDisplay.label} style={{ marginTop: '0.2rem' }} />;
-                              })()}
-                              {isDrifted(workflow.name) && <DriftBadge />}
-                              {workflow.lastModifiedBy && <LastSavedByIndicator username={workflow.lastModifiedBy} />}
-                              <div className="workflow-type">
-                                <span className="type-badge reusable">Reusable</span>
-                              </div>
-                            </div>
-                            {workflow.isModified && <div className="modified-indicator" title="Unsaved changes">•</div>}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
+          {customFiles !== undefined && (
+            <PanelSection
+              id={SECTION_CUSTOM}
+              count={customFiles.length}
+              closed={closedSections.has(SECTION_CUSTOM)}
+              onToggle={toggleSection}
+            >
+              {customFiles.length === 0 ? (
+                <div className="empty-section-hint">No custom files yet</div>
+              ) : (
+                <ul className="pf-rows">{customFiles.map(renderCustomFileRow)}</ul>
               )}
+            </PanelSection>
+          )}
 
-              {/* Linked Workflows Section */}
-              {linkedWorkflows.length > 0 && (
-                <div className="pf-section">
-                  <div className="pf-section-header">
-                    <span className="section-icon" aria-hidden="true">🔗</span>
-                    <span>Linked Workflows</span>
-                    <span className="pf-section-count">{linkedWorkflows.length}</span>
-                  </div>
-                  <div className="pf-section-body">
-                    <ul className="workflow-items">
-                      {linkedWorkflows.map((workflow) => (
-                        <li key={workflow.id} className="workflow-item-wrapper" data-testid="linked-rwx-workflow-card">
-                          <button
-                            className={`workflow-item ${selectedWorkflowId === workflow.id ? 'selected' : ''}`}
-                            onClick={() => handleSelectWorkflow(workflow.id)}
-                          >
-                            <div className="workflow-item-content">
-                              <div className="workflow-name">
-                                {workflow.name ? normalizeWorkflowFilename(workflow.name) : `Untitled Linked Workflow ${workflow.originalIndex + 1}`}
-                              </div>
-                              {workflow.rwxProjectName && (
-                                <div className="workflow-prefix">From: {workflow.rwxProjectName}</div>
-                              )}
-                              {(() => {
-                                const statusDisplay = getWorkflowStatusDisplay(workflow.workflowStatus);
-                                if (!statusDisplay) return null;
-                                return <WorkflowStatusBadge status={workflow.workflowStatus ?? ''} label={statusDisplay.label} style={{ marginTop: '0.2rem' }} />;
-                              })()}
-                              <WorkflowStatusBadge status="linked" style={{ marginTop: '0.2rem' }} />
-                            </div>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
-
-              {/* Custom Files Section */}
-              {customFiles !== undefined && (
-                <div className="pf-section">
-                  <div className="pf-section-header">
-                    <span className="section-icon" aria-hidden="true">📄</span>
-                    <span>Custom Files</span>
-                    {customFiles.length > 0 && <span className="pf-section-count">{customFiles.length}</span>}
-                  </div>
-                  <div className="pf-section-body">
-                    {customFiles.length === 0 ? (
-                      <div className="empty-section-hint">No custom files yet</div>
-                    ) : (
-                      <ul className="workflow-items">
-                        {customFiles.map((cf) => (
-                          <li key={cf.id} className="workflow-item-wrapper">
-                            <button
-                              className={`workflow-item ${selectedCustomFileId === cf.id ? 'selected' : ''}`}
-                              onClick={() => onSelectCustomFile?.(cf.id)}
-                              data-testid="custom-file-row"
-                            >
-                              <div className="workflow-item-content">
-                                <div className="workflow-name" style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                                  {cf.file_path}
-                                </div>
-                                {cf.display_name && <div className="workflow-prefix">{cf.display_name}</div>}
-                                <WorkflowStatusBadge status={cf.file_status} style={{ marginTop: '0.2rem' }} />
-                                {cf.pending_delete && (
-                                  <WorkflowStatusBadge
-                                    status="pending_delete"
-                                    label="Pending Deletion"
-                                    style={{ marginTop: '0.2rem', backgroundColor: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.35)', color: '#fbbf24' }}
-                                  />
-                                )}
-                                {cf.last_modified_by && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.25rem' }}>
-                                    <img
-                                      src={`https://github.com/${encodeURIComponent(cf.last_modified_by)}.png?size=32`}
-                                      alt=""
-                                      aria-hidden
-                                      style={{ width: 14, height: 14, borderRadius: '50%' }}
-                                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                                    />
-                                    <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>{cf.last_modified_by}</span>
-                                  </div>
-                                )}
-                              </div>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* CODEOWNERS Section */}
-              {codeownersRepos && codeownersRepos.length > 0 && (
-                <div className="pf-section">
-                  <div className="pf-section-header">
-                    <span className="section-icon" aria-hidden="true">👥</span>
-                    <span>CODEOWNERS</span>
-                    {codeownersAggregateStatus && (
-                      <WorkflowStatusBadge status={codeownersAggregateStatus} style={{ marginLeft: 'auto' }} />
-                    )}
-                  </div>
-                  <div className="pf-section-body">
-                    <ul className="codeowners-repo-list" style={{ padding: 0 }}>
-                      <li>
-                        <button
-                          className={`codeowners-repo-item ${selectedCodeownersRepo !== null ? 'selected' : ''}`}
-                          onClick={() => onSelectCodeowners?.(codeownersRepos?.[0] ?? selectedRepos[0])}
-                          aria-label="CODEOWNERS"
-                          aria-current={selectedCodeownersRepo !== null ? 'page' : undefined}
-                        >
-                          <span className="codeowners-repo-name">.github/CODEOWNERS</span>
-                          <span className="codeowners-repo-path">{codeownersRepos.length} repo{codeownersRepos.length !== 1 ? 's' : ''}</span>
-                        </button>
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-              )}
-          </div>
-
+          {showCodeownersSection && (
+            <PanelSection
+              id={SECTION_CODEOWNERS}
+              closed={closedSections.has(SECTION_CODEOWNERS)}
+              onToggle={toggleSection}
+            >
+              <ul className="pf-rows">{renderCodeownersRow()}</ul>
+            </PanelSection>
+          )}
         </div>
-      )}
+      </div>
+
+      <ResizeHandle width={panelWidth} onResize={setPanelWidth} />
     </div>
   );
 };

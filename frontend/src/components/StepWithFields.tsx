@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react';
 import { WorkflowCallInput } from '../utils/workflowGuiConversion';
 import { getActionInputSchema, partitionActionInputs, ActionInputEntry } from '../utils/actionInputSchemas';
 import { ActionsProject } from '../api/actionsProjects';
+import ResourceTextInput from './ResourceTextInput';
 
 interface TypedWithInputProps {
   fieldId: string;
@@ -35,15 +36,29 @@ const TypedWithInput: React.FC<TypedWithInputProps> = ({ fieldId, inputDef, valu
     );
   }
 
+  if (inputDef.type === 'number') {
+    return (
+      <input
+        id={fieldId}
+        type="number"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={inputDef.default !== undefined ? String(inputDef.default) : ''}
+        className="form-input"
+      />
+    );
+  }
+
   return (
-    <input
-      id={fieldId}
-      type={inputDef.type === 'number' ? 'number' : 'text'}
-      value={value ?? ''}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={inputDef.default !== undefined ? String(inputDef.default) : ''}
-      className="form-input"
-    />
+    <div className="flex items-center gap-2">
+      <ResourceTextInput
+        id={fieldId}
+        value={value ?? ''}
+        onChange={onChange}
+        placeholder={inputDef.default !== undefined ? String(inputDef.default) : ''}
+        className="form-input"
+      />
+    </div>
   );
 };
 
@@ -203,12 +218,12 @@ const StepWithFields: React.FC<StepWithFieldsProps> = ({
                   placeholder="Parameter name"
                   className="with-key"
                 />
-                <input
-                  type="text"
+                <ResourceTextInput
                   value={value}
-                  onChange={(e) => updateWithValue(key, e.target.value)}
+                  onChange={(newValue) => updateWithValue(key, newValue)}
                   placeholder="Parameter value"
                   className="with-value"
+                  ariaLabel={`Value for ${key}`}
                 />
                 <button
                   type="button"

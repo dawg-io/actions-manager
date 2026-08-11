@@ -173,7 +173,8 @@ This same flow covers rolling out a new workflow to a project, retiring an obsol
 - Per-PR branch naming and best-effort branch cleanup after merge
 
 ### ⚙️ Workflow Authoring
-- Visual workflow editor with syntax highlighting (Monaco)
+- Visual workflow editor with syntax highlighting (CodeMirror)
+- Insert existing project secrets, variables and deployment environments straight into workflow YAML — names only, never values
 - Template library for common CI/CD patterns
 - First-class support for both reusable workflow definitions and caller workflows
 

@@ -6,9 +6,17 @@ import { UnifiedWorkflowItem } from '../types/workflow';
 import { WorkflowGUI } from '../utils/workflowGuiConversion';
 import userEvent from '@testing-library/user-event';
 
+// Spy on the imperative handle the real editor exposes, so tests can assert what
+// the resource picker inserts without running CodeMirror in jsdom.
+const insertAtCursorSpy = jest.fn();
+
 // Mock the sub-components
 vi.mock('./YAMLEditor', () => ({
-  default: function YAMLEditor({ value, onChange, onStructuralDiagnostics, placeholder, readOnly }: any) {
+  default: React.forwardRef(function YAMLEditor(
+    { value, onChange, onStructuralDiagnostics, placeholder, readOnly, resources }: any,
+    ref: any
+  ) {
+    React.useImperativeHandle(ref, () => ({ insertAtCursor: insertAtCursorSpy }), []);
     return (
       <>
         <textarea
@@ -18,6 +26,7 @@ vi.mock('./YAMLEditor', () => ({
           placeholder={placeholder}
           readOnly={readOnly}
         />
+        <span data-testid="yaml-editor-resource-count">{(resources ?? []).length}</span>
         <button
           type="button"
           data-testid="emit-structural-diagnostics"
@@ -36,7 +45,11 @@ vi.mock('./YAMLEditor', () => ({
         </button>
       </>
     );
-  },
+  }),
+}));
+
+vi.mock('../api/environments', () => ({
+  getEnvironments: jest.fn().mockResolvedValue([]),
 }));
 
 vi.mock('./GUIWorkflowEditor', () => ({
@@ -910,6 +923,122 @@ describe('UnifiedWorkflowEditor', () => {
 
       expect(screen.queryByTestId('linked-workflow-more-button')).not.toBeInTheDocument();
       expect(screen.queryByTestId('unlink-workflow-button')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('resource picker', () => {
+    const secrets = [{ secret_key: 'AM_TEST_DOCKER_PASSWORD', repo: 'acme/web' }];
+    const envVars = [{ env_key: 'AM_TEST_DOCKER_REGISTRY', repo: 'acme/web' }];
+
+    const renderWithResources = (props: Record<string, unknown> = {}) =>
+      render(
+        <UnifiedWorkflowEditor
+          {...defaultProps}
+          selectedRepos={['acme/web']}
+          secrets={secrets}
+          envVars={envVars}
+          {...props}
+        />
+      );
+
+    test('offers the picker in the YAML editor toolbar', () => {
+      renderWithResources();
+      expect(screen.getByTestId('resource-picker-trigger')).toBeInTheDocument();
+    });
+
+    test('inserts the selected secret at the editor cursor', async () => {
+      renderWithResources();
+
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      await user.click(await screen.findByTestId('resource-item-AM_TEST_DOCKER_PASSWORD'));
+
+      expect(insertAtCursorSpy).toHaveBeenCalledWith('${{ secrets.AM_TEST_DOCKER_PASSWORD }}');
+    });
+
+    test('inserts a variable as a vars expression', async () => {
+      renderWithResources();
+
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      await user.click(await screen.findByTestId('resource-item-AM_TEST_DOCKER_REGISTRY'));
+
+      expect(insertAtCursorSpy).toHaveBeenCalledWith('${{ vars.AM_TEST_DOCKER_REGISTRY }}');
+    });
+
+    test('does not save the workflow after inserting', async () => {
+      renderWithResources();
+
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      await user.click(await screen.findByTestId('resource-item-AM_TEST_DOCKER_PASSWORD'));
+
+      expect(defaultProps.saveDraftWorkflow).not.toHaveBeenCalled();
+      expect(defaultProps.handleWorkflowChange).not.toHaveBeenCalled();
+    });
+
+    test('passes resources to the editor for inline autocomplete', () => {
+      renderWithResources();
+      expect(screen.getByTestId('yaml-editor-resource-count')).toHaveTextContent('2');
+    });
+
+    test('is hidden for read-only users', () => {
+      renderWithResources({ isReadOnly: true });
+      expect(screen.queryByTestId('resource-picker-trigger')).not.toBeInTheDocument();
+    });
+
+    test('is hidden while a workflow is locked under review', () => {
+      renderWithResources({
+        selectedWorkflow: { ...mockRegularWorkflow, workflowStatus: 'under_review' },
+      });
+
+      expect(screen.getByTestId('workflow-lock-overlay')).toBeInTheDocument();
+      expect(screen.queryByTestId('resource-picker-trigger')).not.toBeInTheDocument();
+    });
+
+    test('is hidden in GUI mode, where there is no cursor to insert at', () => {
+      renderWithResources({ editMode: 'gui' });
+      expect(screen.queryByTestId('resource-picker-trigger')).not.toBeInTheDocument();
+    });
+
+    test('is offered for linked workflows, which always edit as YAML', () => {
+      renderWithResources({ selectedWorkflow: mockLinkedWorkflow });
+      expect(screen.getByTestId('resource-picker-trigger')).toBeInTheDocument();
+    });
+
+    test('shows a secret added elsewhere on the page without a remount', async () => {
+      const { rerender } = render(
+        <UnifiedWorkflowEditor {...defaultProps} selectedRepos={['acme/web']} secrets={[]} envVars={[]} />
+      );
+
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      expect(screen.getByTestId('resource-picker-empty')).toBeInTheDocument();
+
+      rerender(
+        <UnifiedWorkflowEditor
+          {...defaultProps}
+          selectedRepos={['acme/web']}
+          secrets={[{ secret_key: 'NEWLY_ADDED', repo: 'acme/web' }]}
+          envVars={[]}
+        />
+      );
+
+      expect(await screen.findByTestId('resource-item-NEWLY_ADDED')).toBeInTheDocument();
+      expect(screen.queryByTestId('resource-picker-empty')).not.toBeInTheDocument();
+    });
+
+    test('never renders a stored value, only names', async () => {
+      render(
+        <UnifiedWorkflowEditor
+          {...defaultProps}
+          selectedRepos={['acme/web']}
+          secrets={[{ secret_key: 'TOKEN', repo: 'acme/web', secret_value: 'hunter2' } as any]}
+          envVars={[{ env_key: 'REGISTRY', repo: 'acme/web', value: 'ghcr.io/acme' } as any]}
+        />
+      );
+
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      await screen.findByTestId('resource-item-TOKEN');
+
+      expect(document.body.innerHTML).not.toContain('hunter2');
+      expect(document.body.innerHTML).not.toContain('ghcr.io/acme');
     });
   });
 });

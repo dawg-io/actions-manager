@@ -89,7 +89,7 @@ test.describe("RWX project – basic workflow display", () => {
 
     // The prefix "AM_RNP_" must NOT appear in the visible workflow name text
     // (it is only injected by the UI when use_prefix=true)
-    const workflowList = page.locator(".workflow-items");
+    const workflowList = page.locator(".pf-rows");
     await expect(workflowList.first()).not.toContainText("AM_RNP_", { timeout: 5_000 });
   });
 
@@ -110,9 +110,10 @@ test.describe("RWX project – basic workflow display", () => {
     await installApiMocks(page, createMockState({ projects: [standardProject] }));
     await page.goto(`/project/${TEST_USER}/standard-prefix`);
 
-    // The prefix span "AM_SPFX_" should appear in the rendered workflow list
+    // The compact row shows the bare filename; the prefixed on-GitHub name that
+    // prefix mode produces is carried in the row's tooltip.
     await expect(
-      page.locator(".workflow-prefix").first(),
+      page.locator('.pf-row[title*="AM_SPFX_"]').first(),
     ).toBeVisible({ timeout: 15_000 });
   });
 });
@@ -166,9 +167,13 @@ test.describe("RWX linked workflow visibility in standard project", () => {
     // Source RWX project name should be shown
     await expect(page.getByTestId("linked-rwx-workflow-card")).toContainText("rwx-project");
 
-    // Linked Workflows is no longer in the Project Configs sidebar
+    // Linked Workflows is no longer in the Project Configs sidebar. Scoped to the
+    // sidebar because the Project Files panel now has its own "Linked Workflows"
+    // section-collapse button.
     await page.getByRole("button", { name: "Project Configs" }).click();
-    await expect(page.getByRole("button", { name: "Linked Workflows" })).toHaveCount(0);
+    await expect(
+      page.locator(".sidebar-nav").getByRole("button", { name: "Linked Workflows" }),
+    ).toHaveCount(0);
   });
 
   test("standard project with no linked workflows does not show linked section in config", async ({
@@ -190,9 +195,13 @@ test.describe("RWX linked workflow visibility in standard project", () => {
 
     await page.goto(`/project/${TEST_USER}/no-links`);
 
-    // Linked Workflows is no longer in the Project Configs sidebar
+    // Linked Workflows is no longer in the Project Configs sidebar. Scoped to the
+    // sidebar because the Project Files panel now has its own "Linked Workflows"
+    // section-collapse button.
     await page.getByRole("button", { name: "Project Configs" }).click();
-    await expect(page.getByRole("button", { name: "Linked Workflows" })).toHaveCount(0);
+    await expect(
+      page.locator(".sidebar-nav").getByRole("button", { name: "Linked Workflows" }),
+    ).toHaveCount(0);
   });
 
   test("standard project can open and use existing link modal from Add Workflow", async ({
@@ -265,7 +274,7 @@ test.describe("RWX linked workflow visibility in standard project", () => {
 
     await page.goto(`/project/${TEST_USER}/workflow-page-links`);
 
-    await page.getByRole("button", { name: "+ Add File" }).click();
+    await page.getByRole("button", { name: "Add File" }).click();
     await expect(
       page.getByRole("button").filter({ has: page.getByRole("heading", { name: "Workflow", exact: true }) }),
     ).toBeVisible();

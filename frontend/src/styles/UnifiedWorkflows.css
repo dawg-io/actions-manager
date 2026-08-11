@@ -9,7 +9,9 @@
 
 /* Unified workflow list on the left */
 .unified-workflows-list {
-  flex: 0 0 260px;
+  /* Project Files sets --pf-panel-width inline; the fallback keeps the Custom
+     Files panel, which reuses this class, at its original width. */
+  flex: 0 0 var(--pf-panel-width, 260px);
   background: var(--container-background-color);
   border: 1px solid var(--border-color);
   border-radius: 0.5rem;
@@ -17,19 +19,50 @@
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  --workflow-compact-status-none-color: #94a3b8;
-  --workflow-compact-status-new-color: #2e7d32;
-  --workflow-compact-status-unsaved-color: #f59e0b;
-  --workflow-compact-status-committed-color: #3b82f6;
-  --workflow-compact-status-review-color: #a855f7;
-  --workflow-compact-status-synced-color: #22c55e;
+  position: relative;
+  --pf-status-none-color: #94a3b8;
+  --pf-status-new-color: #2e7d32;
+  --pf-status-unsaved-color: #f59e0b;
+  --pf-status-committed-color: #3b82f6;
+  --pf-status-review-color: #a855f7;
+  --pf-status-synced-color: #22c55e;
 }
 
 .unified-workflows-list.collapsed {
-  flex: 0 0 128px;
+  flex: 0 0 3rem;
+  align-items: center;
+  padding: 0.5rem 0;
+  gap: 0.5rem;
 }
 
-/* Workflows list header */
+/* Right-edge drag handle. Sits inside the panel so the flex row is untouched. */
+.pf-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  appearance: none;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.pf-resize-handle:hover,
+.pf-resize-handle:focus-visible {
+  background: var(--primary-color);
+  outline: none;
+}
+
+/* Applied to <body> during a drag so text does not select across the app. */
+body.pf-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Workflows list header — also used by the Custom Files panel, so the compact
+   padding is scoped to Project Files via .expanded. */
 .workflows-list-header {
   background: var(--header-background-color, var(--background-color));
   border-bottom: 1px solid var(--border-color);
@@ -42,8 +75,34 @@
   flex-shrink: 0;
 }
 
-.unified-workflows-list.expanded .workflows-list-header-content {
-  flex: 1 0 100%;
+.unified-workflows-list.expanded .workflows-list-header {
+  padding: 0.5rem 0.6rem;
+  flex-wrap: nowrap;
+}
+
+/* Keep the scroll area clear of the resize handle, which is painted over the
+   panel's right edge — otherwise the handle swallows scrollbar drags. */
+.unified-workflows-list.expanded .workflows-list-container {
+  margin-right: 5px;
+}
+
+.workflows-list-header-content h4 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pf-panel-title {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflows-list-header-actions {
@@ -52,15 +111,84 @@
   gap: 0.25rem;
 }
 
-.unified-workflows-list.expanded .workflows-list-header-actions {
-  flex: 1 0 100%;
-  justify-content: space-between;
+.pf-icon-button {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
-.workflows-list-header-content h4 {
-  margin: 0;
-  font-size: 1.1rem;
+.pf-icon-button:hover {
+  background: var(--hover-background-color);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.pf-icon-button:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+
+.pf-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+/* Collapsed icon rail */
+.pf-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pf-rail-item {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.pf-rail-item:hover {
+  background: var(--hover-background-color);
+  border-color: var(--border-color);
+}
+
+.pf-rail-item:focus-visible,
+.pf-rail-label:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+
+/* Vertical "Project Files" affordance pinned to the bottom of the rail. */
+.pf-rail-label {
+  margin-top: auto;
+  padding: 0.5rem 0;
+  writing-mode: vertical-rl;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.pf-rail-label:hover {
   color: var(--text-primary);
 }
 
@@ -102,11 +230,6 @@
   flex-direction: column;
   scrollbar-width: thin;
   scrollbar-color: var(--border-color) transparent;
-}
-
-.workflows-list-container.compact {
-  padding: 0.5rem 0.4rem;
-  gap: 0.5rem;
 }
 
 .workflows-list-container::-webkit-scrollbar {
@@ -177,21 +300,52 @@
 }
 
 .pf-section-header {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
   padding: 0.25rem 0.1rem;
+  border: none;
   border-bottom: 1px solid var(--border-color);
-  font-size: 0.75rem;
+  background: transparent;
+  font-size: 0.7rem;
   font-weight: 600;
   color: var(--text-secondary);
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
 }
 
-.pf-section-header .section-icon {
-  font-size: 0.85rem;
+.pf-section-header:hover {
+  color: var(--text-primary);
+}
+
+.pf-section-header:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+
+.pf-section-chevron {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.pf-section-chevron.closed {
+  transform: rotate(-90deg);
+}
+
+.pf-section-icon {
+  font-size: 0.8rem;
   opacity: 0.8;
+}
+
+.pf-section-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pf-section-count {
@@ -208,7 +362,128 @@
 }
 
 .pf-section-body {
-  padding: 0.35rem 0;
+  padding: 0.25rem 0;
+}
+
+/* Compact single-line file rows */
+.pf-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Flex, not grid: the meta/drift/modified slots are all optional. */
+.pf-row {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.4rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.3rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.pf-row:hover {
+  background: var(--hover-background-color);
+}
+
+/* Concrete colour, not var(--primary-background-color) — that variable is
+   referenced elsewhere in this file but defined nowhere, so it paints nothing. */
+.pf-row.selected {
+  background: rgba(59, 130, 246, 0.15);
+  box-shadow: inset 2px 0 0 var(--primary-color);
+  font-weight: 600;
+}
+
+.pf-row:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: -1px;
+}
+
+.pf-row-icon {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.pf-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+/* Secondary text on a row (e.g. the source project of a linked workflow). */
+.pf-row-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.pf-row-drift {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.pf-row-pending-delete {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.pf-row-modified {
+  flex: 0 0 auto;
+  color: var(--pf-status-unsaved-color);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+/* margin-left:auto pins the dot right whether or not a meta slot is present. */
+.pf-row-dot {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: var(--text-secondary);
+}
+
+.pf-row-dot.status-none {
+  background: var(--pf-status-none-color);
+}
+
+.pf-row-dot.status-new {
+  background: var(--pf-status-new-color);
+}
+
+.pf-row-dot.status-unsaved {
+  background: var(--pf-status-unsaved-color);
+}
+
+.pf-row-dot.status-committed {
+  background: var(--pf-status-committed-color);
+}
+
+.pf-row-dot.status-review {
+  background: var(--pf-status-review-color);
+}
+
+.pf-row-dot.status-synced {
+  background: var(--pf-status-synced-color);
 }
 
 /* Section dividers */
@@ -268,64 +543,6 @@
   line-height: 1.4;
 }
 
-/* Compact CODEOWNERS repo list */
-.codeowners-repo-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 0.5rem 0.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.codeowners-repo-item {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.05rem;
-  padding: 0.3rem 0.5rem;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 0.35rem;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.12s, border-color 0.12s;
-}
-
-.codeowners-repo-item:hover {
-  background: var(--hover-bg, rgba(0, 0, 0, 0.04));
-  border-color: var(--border-color);
-}
-
-.codeowners-repo-item.selected {
-  background: var(--selected-bg, rgba(59, 130, 246, 0.1));
-  border-color: rgba(59, 130, 246, 0.35);
-}
-
-.dark .codeowners-repo-item.selected {
-  background: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.4);
-}
-
-.codeowners-repo-name {
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  font-family: monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-
-.codeowners-repo-path {
-  font-size: 0.68rem;
-  color: var(--text-secondary);
-  font-family: monospace;
-  opacity: 0.75;
-}
-
 /* Workflow items */
 .workflow-items {
   list-style: none;
@@ -334,111 +551,6 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-}
-
-.workflow-compact-sections,
-.workflow-compact-section,
-.workflow-compact-items {
-  display: flex;
-  flex-direction: column;
-}
-
-.workflow-compact-sections {
-  gap: 0.5rem;
-}
-
-.workflow-compact-items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  gap: 0.35rem;
-}
-
-.workflow-compact-section-divider {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  padding: 0.35rem 0 0.25rem;
-  margin-top: 0.15rem;
-  border-top: 1px solid var(--border-color);
-}
-
-.workflow-compact-item {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.45rem 0.4rem;
-  background: var(--background-color);
-  border: 1px solid var(--border-color);
-  border-radius: 0.4rem;
-  color: var(--text-primary);
-  cursor: pointer;
-  text-align: left;
-  transition: all 0.2s ease;
-}
-
-.workflow-compact-item:hover {
-  background: var(--hover-background-color);
-  border-color: var(--primary-color);
-  box-shadow: var(--shadow-sm);
-}
-
-.workflow-compact-item.selected {
-  background: var(--primary-background-color);
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px var(--primary-color-alpha);
-}
-
-.workflow-compact-icon {
-  font-size: 0.85rem;
-  line-height: 1;
-}
-
-.workflow-compact-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.workflow-compact-status-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 9999px;
-  background: var(--text-secondary);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
-}
-
-.workflow-compact-status-dot.status-none {
-  background: var(--workflow-compact-status-none-color);
-}
-
-.workflow-compact-status-dot.status-new {
-  background: var(--workflow-compact-status-new-color);
-}
-
-.workflow-compact-status-dot.status-unsaved {
-  background: var(--workflow-compact-status-unsaved-color);
-}
-
-.workflow-compact-status-dot.status-committed {
-  background: var(--workflow-compact-status-committed-color);
-}
-
-.workflow-compact-status-dot.status-review {
-  background: var(--workflow-compact-status-review-color);
-}
-
-.workflow-compact-status-dot.status-synced {
-  background: var(--workflow-compact-status-synced-color);
 }
 
 .workflow-item {
@@ -546,32 +658,6 @@
   background: rgba(99, 102, 241, 0.1);
   color: #6366f1;
   border: 1px solid #6366f1;
-}
-
-/* Workflow lifecycle status badge — base layout used by DriftBadge */
-.workflow-lifecycle-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.7rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 0.375rem;
-  font-weight: 500;
-  margin-top: 0.2rem;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}
-
-.workflow-lifecycle-status .lifecycle-label {
-  display: inline;
-}
-
-.modified-indicator {
-  color: var(--warning-color);
-  font-weight: bold;
-  font-size: 1.25rem;
-  margin-left: 0.5rem;
-  flex-shrink: 0;
 }
 
 /* Empty state */
@@ -1029,6 +1115,12 @@
     max-height: 300px;
   }
 
+  /* The panel stacks above the editor here, so a horizontal drag is meaningless
+     and the width it would set is overridden by `flex: none` anyway. */
+  .pf-resize-handle {
+    display: none;
+  }
+
   .unified-workflows-editor {
     flex: none;
     height: 500px;
@@ -1067,11 +1159,11 @@
   }
 
   .unified-workflows-list {
-    flex: 0 0 250px;
+    flex: 0 0 var(--pf-panel-width, 250px);
   }
 
   .unified-workflows-list.collapsed {
-    flex: 0 0 128px;
+    flex: 0 0 3rem;
   }
 
   .workflows-list-header {

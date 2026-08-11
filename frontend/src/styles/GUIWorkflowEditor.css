@@ -1,7 +1,9 @@
 /* GUI Workflow Editor Styles */
+/* No max-width: the GUI editor is the primary editing surface on this page and
+   fills its pane, the same as the YAML editor. Capping it here left the step
+   detail panel a narrow column with the rest of the window unused. */
 .gui-workflow-editor {
   padding: 1rem;
-  max-width: 1200px;
   margin: 0 0;
   font-family: var(--font-family);
 }

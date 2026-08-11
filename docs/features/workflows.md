@@ -110,6 +110,7 @@ ActionsManager includes a YAML editor for creating and modifying workflow conten
 - Syntax highlighting
 - YAML validation
 - Template selection
+- Insertion of existing project secrets, variables and deployment environments
 
 ![Workflow page view showing the project file browser and YAML editor](../assets/screenshots/workflows/workflow-page-view.png)
 
@@ -122,6 +123,35 @@ Switching the editor to **GUI** mode gives you a form-based view of the same wor
 **Steps** are listed as compact rows. Click a row to open that step in the detail panel, which stays open while you move between steps — it sits to the right of the job list, or below it on narrower screens, where selecting a step scrolls it into view. The panel is the only place a step is edited, so there's never a question of where to make a change. Renaming a step updates its row title immediately.
 
 Adding or duplicating a step opens it in the panel straight away, ready to edit.
+
+### Inserting secrets and variables
+
+The secrets, variables and deployment environments you create under **Repository Configs** can be referenced from the editor without typing their names by hand.
+
+In YAML mode, **Insert Resource** in the editor toolbar opens a searchable list grouped by type, with the repository each entry belongs to shown beside it. Choosing one writes the reference at the cursor:
+
+{% raw %}
+
+| Resource | Inserted |
+|---|---|
+| Secret | `${{ secrets.NAME }}` |
+| Variable | `${{ vars.NAME }}` |
+| Deployment environment | `environment: NAME` |
+
+Typing `${{` in the editor offers the same secrets and variables as inline suggestions.
+
+{% endraw %}
+
+In GUI mode the same picker sits beside the free-text fields — a step's **Script**, its environment variable values, and action parameter values — and inserts at the cursor in that field. Deployment environments are not offered there: `environment:` is a job-level key, so it only makes sense in the YAML document.
+
+This matters most in **Prefix Mode**, where the name stored in GitHub carries the project prefix. A secret you created as `DOCKER_PASSWORD` in project `REG1` is stored as `AM_REG1_DOCKER_PASSWORD`, and that full name is what a workflow has to reference. The picker inserts exactly the name GitHub holds, so the prefix is never something you have to remember or get right by hand.
+
+Two things worth knowing:
+
+- **Secret values are never shown.** GitHub does not return stored secret values, and ActionsManager only ever displays and inserts names. The same applies to variables — the picker lists names only.
+- **Inserting does not save.** The workflow is marked **Unsaved** and nothing is written until you commit it, so an insertion can always be undone or edited first.
+
+The picker is not offered when you have read-only access to the project, or while a workflow is locked for review.
 
 ## Related Topics
 

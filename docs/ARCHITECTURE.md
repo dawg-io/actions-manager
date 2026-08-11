@@ -112,7 +112,7 @@ Actions Manager is a web application for managing GitHub Actions workflows acros
 - **ProjectDetails**: Shows project configuration and repos
 
 #### 3. Workflow Management
-- **WorkflowEditor**: Monaco editor for YAML editing
+- **WorkflowEditor**: CodeMirror editor for YAML editing, with a picker for inserting project secrets and variables
 - **TemplateSelection**: Browse and select workflow templates
 - **WorkflowCreation**: Guided workflow creation wizard
 
@@ -335,7 +335,7 @@ Actions Manager is a web application for managing GitHub Actions workflows acros
 - **React 19**: UI framework
 - **TypeScript**: Type safety (migration in progress)
 - **Tailwind CSS v3**: Styling framework
-- **Monaco Editor**: Code editor for YAML
+- **CodeMirror 6**: Code editor for YAML
 - **Axios**: HTTP client
 - **React Router**: Navigation
 

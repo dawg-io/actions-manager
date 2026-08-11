@@ -147,4 +147,9 @@ export interface UnifiedWorkflowsProps {
   importedActions?: import('../api/actionsProjects').ActionsProject[];
   /** Shared, workspace-wide Action Groups, used to filter the GUI step editor's action picker. */
   actionGroups?: import('../api/actionGroups').ActionGroup[];
+
+  /** Project secrets, surfaced in the editor's resource picker. Names only — values are never carried here. */
+  secrets?: Array<{ secret_key?: string; name?: string; repo?: string }>;
+  /** Project variables, surfaced in the editor's resource picker. Names only. */
+  envVars?: Array<{ env_key?: string; repo?: string }>;
 }
