@@ -332,10 +332,10 @@ test.describe("Workflow locking – synced workflow is not locked", () => {
 
     await page.getByText(PHASE2_WORKFLOWS.CI, { exact: false }).first().click();
 
-    // Clicking the workflow opens the editor header, which adds a second
-    // workflow-status-badge alongside the one already visible in the list.
-    // Waiting for count = 2 proves the editor panel has fully rendered.
-    await expect(page.getByTestId("workflow-status-badge")).toHaveCount(2, { timeout: 15_000 });
+    // Clicking the workflow opens the editor header, which is the only place a
+    // workflow-status-badge renders — the Project Files row carries a status dot
+    // instead. Waiting for count = 1 proves the editor panel has fully rendered.
+    await expect(page.getByTestId("workflow-status-badge")).toHaveCount(1, { timeout: 15_000 });
     await expect(page.getByTestId("workflow-lock-overlay")).toHaveCount(0);
     await expect(page.getByTestId("update-pr-button")).toHaveCount(0);
   });

@@ -12,5 +12,5 @@ pytest
 pytest-cov
 pytest-asyncio
 PyYAML
-cryptography>=49.0.0
+cryptography>=50.0.0
 

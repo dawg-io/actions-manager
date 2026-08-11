@@ -2,7 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FileText, FilePlus2, Upload } from 'lucide-react';
 import { Button } from './ui/button';
 import YAMLEditor from './YAMLEditor';
-import type { WorkflowDiagnostic } from './YAMLEditor';
+import type { WorkflowDiagnostic, YamlEditorHandle } from './YAMLEditor';
+import WorkflowResourcePicker from './WorkflowResourcePicker';
+import { WorkflowResourcesProvider, useWorkflowResources } from './WorkflowResourcesContext';
 import ValidationPanel from './ValidationPanel';
 import ReusableGUIWorkflowEditor from './ReusableGUIWorkflowEditor';
 import GUIWorkflowEditor from './GUIWorkflowEditor';
@@ -124,6 +126,10 @@ interface UnifiedWorkflowEditorProps {
   selectedRepos?: string[];
   importedActions: ActionsProject[];
   actionGroups: ActionGroup[];
+  /** Project secrets — names only; values are never carried into the editor. */
+  secrets?: Array<{ secret_key?: string; name?: string; repo?: string }>;
+  /** Project variables — names only. */
+  envVars?: Array<{ env_key?: string; repo?: string }>;
   setEditMode: (mode: 'yaml' | 'gui') => void;
   setRegularGuiWorkflow: (workflow: WorkflowGUI) => void;
   setGuiWorkflow: (workflow: WorkflowGUI) => void;
@@ -166,12 +172,15 @@ interface WorkflowEditorHeaderProps {
   onUnlinkWorkflow?: (workflowId: number) => void;
   setEditMode: (mode: 'yaml' | 'gui') => void;
   onShowVersionHistory: () => void;
+  /** Inserts a resource reference at the YAML editor's caret. */
+  onInsertResource?: (text: string) => void;
 }
 
 interface WorkflowEditorContentProps {
   selectedWorkflow: UnifiedWorkflowItem;
   editMode: 'yaml' | 'gui';
   disableEditing?: boolean;
+  yamlEditorRef?: React.Ref<YamlEditorHandle>;
   regularGuiWorkflow: WorkflowGUI;
   guiWorkflow: WorkflowGUI;
   handleWorkflowChange: (field: string, value: string) => void;
@@ -199,7 +208,8 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   onRequestDelete,
   onUnlinkWorkflow,
   setEditMode,
-  onShowVersionHistory
+  onShowVersionHistory,
+  onInsertResource
 }) => {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [githubModalOpen, setGithubModalOpen] = useState(false);
@@ -394,6 +404,11 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   const buildRepoUrlForRepo = (repo: string) => {
     return buildGithubRepoUrl(repo);
   };
+
+  // Mirrors the condition under which WorkflowEditorContent renders the YAML
+  // editor, minus the states where that editor is read-only.
+  const showResourcePicker =
+    !!onInsertResource && !isReadOnly && !isLocked && (editMode === 'yaml' || isLinked);
 
   return (
     <>
@@ -613,6 +628,12 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
             </div>
           )}
 
+          {/* Insert an existing project secret, variable or environment at the
+              caret. Only offered while the YAML editor is actually editable. */}
+          {showResourcePicker && (
+            <WorkflowResourcePicker onInsert={onInsertResource!} variant="toolbar" />
+          )}
+
           {/* Docs link */}
           <a
             className="docs-help-link"
@@ -643,6 +664,7 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
   selectedWorkflow,
   editMode,
   disableEditing = false,
+  yamlEditorRef,
   regularGuiWorkflow,
   guiWorkflow,
   handleWorkflowChange,
@@ -652,6 +674,7 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
   actionGroups
 }) => {
   const [yamlDiagnostics, setYamlDiagnostics] = useState<WorkflowDiagnostic[]>([]);
+  const { resources } = useWorkflowResources();
   const isRegular = selectedWorkflow.type === 'regular';
   const isLinked = selectedWorkflow.type === 'linked';
   const yamlPlaceholder = isRegular 
@@ -667,6 +690,8 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
       <>
         <YAMLEditor
           key={selectedWorkflow.id}
+          ref={yamlEditorRef}
+          resources={resources}
           value={selectedWorkflow.content || ''}
           onChange={(value: string) => {
             if (!disableEditing) {
@@ -738,6 +763,8 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   selectedRepos = [],
   importedActions,
   actionGroups,
+  secrets,
+  envVars,
   setEditMode,
   setRegularGuiWorkflow,
   setGuiWorkflow,
@@ -756,6 +783,11 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ index: number; type: 'regular' | 'reusable'; name: string } | null>(null);
   const [pendingUnlink, setPendingUnlink] = useState<{ workflowId: number; name: string } | null>(null);
+  const yamlEditorRef = useRef<YamlEditorHandle>(null);
+
+  const handleInsertResource = React.useCallback((text: string) => {
+    yamlEditorRef.current?.insertAtCursor(text);
+  }, []);
 
   // Reset lock state whenever the selected workflow changes
   useEffect(() => {
@@ -846,6 +878,12 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   const isUnlockedPR = isUnlocked && selectedWorkflow?.workflowStatus === 'under_review';
 
   return (
+    <WorkflowResourcesProvider
+      user={user}
+      selectedRepos={selectedRepos}
+      secrets={secrets}
+      envVars={envVars}
+    >
     <div className="unified-workflows-editor">
       <div className={workflowClass}>
         <WorkflowEditorHeader
@@ -867,12 +905,14 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
           onUnlinkWorkflow={unlinkWorkflow ? (workflowId) => setPendingUnlink({ workflowId, name: selectedWorkflow.name }) : undefined}
           setEditMode={setEditMode}
           onShowVersionHistory={handleShowVersionHistory}
+          onInsertResource={handleInsertResource}
         />
         <div className="workflow-editor-content workflow-editor-content--lockable">
           <WorkflowEditorContent
             selectedWorkflow={selectedWorkflow}
             editMode={editMode}
             disableEditing={isReadOnly || showLockOverlay}
+            yamlEditorRef={yamlEditorRef}
             regularGuiWorkflow={regularGuiWorkflow}
             guiWorkflow={guiWorkflow}
             handleWorkflowChange={handleWorkflowChange}
@@ -972,6 +1012,7 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
         />
       )}
     </div>
+    </WorkflowResourcesProvider>
   );
 };
 

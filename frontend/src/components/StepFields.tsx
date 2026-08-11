@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
 import StepWithFields from './StepWithFields';
+import ResourceTextInput from './ResourceTextInput';
 import { ActionsProject } from '../api/actionsProjects';
 import { ActionGroup } from '../api/actionGroups';
 import { ActionBrandingIcon } from '../utils/actionBranding';
@@ -274,13 +275,15 @@ const StepFields: React.FC<StepFieldsProps> = ({
               <span className="field-error">{getFieldError('run')!.message}</span>
             )}
           </label>
-          <textarea
+          <ResourceTextInput
             id={`step-run-${step.id}`}
             value={step.run ?? ''}
-            onChange={(e) => handleFieldChange('run', e.target.value)}
+            onChange={(value) => handleFieldChange('run', value)}
             placeholder="Enter your script commands here..."
             className={`form-textarea ${getFieldError('run') ? 'error' : ''}`}
+            multiline
             rows={4}
+            pickerClassName="mt-1 inline-block"
           />
         </div>
 
@@ -400,16 +403,16 @@ const StepFields: React.FC<StepFieldsProps> = ({
                       placeholder="Variable name"
                       className="env-var-key"
                     />
-                    <input
-                      type="text"
+                    <ResourceTextInput
                       value={value}
-                      onChange={(e) => {
+                      onChange={(newValue) => {
                         const newEnv = { ...step.env };
-                        newEnv[key] = e.target.value;
+                        newEnv[key] = newValue;
                         handleEnvChange(newEnv);
                       }}
                       placeholder="Variable value"
                       className="env-var-value"
+                      ariaLabel={`Value for ${key}`}
                     />
                     <button
                       type="button"

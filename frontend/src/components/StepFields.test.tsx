@@ -1,11 +1,13 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import StepFields from './StepFields';
 import type { WorkflowStep, ValidationError } from '../utils/workflowGuiConversion';
 import type { ActionsProject } from '../api/actionsProjects';
 import type { ActionGroup } from '../api/actionGroups';
+import { WorkflowResourcesRawProvider } from './WorkflowResourcesContext';
+import type { WorkflowResource } from '../utils/workflowResources';
 
 function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   return { id: 'step-1', uses: '', ...overrides };
@@ -170,5 +172,95 @@ describe('StepFields step environment variables', () => {
     expect(remaining).toHaveLength(1);
     expect(remaining[0]).toHaveValue('BAR');
     expect(remaining[0]).not.toHaveFocus();
+  });
+
+  describe('resource picker in free-text fields', () => {
+    const resources: WorkflowResource[] = [
+      { kind: 'secret', name: 'AM_TEST_TOKEN', repo: 'acme/web' },
+    ];
+
+    const renderWithResources = (
+      props: Partial<React.ComponentProps<typeof StepFields>> = {},
+      available: WorkflowResource[] = resources
+    ) =>
+      render(
+        <WorkflowResourcesRawProvider
+          value={{
+            resources: available,
+            loadingEnvironments: false,
+            environmentsError: null,
+            requestEnvironments: vi.fn(),
+          }}
+        >
+          <StepFields {...baseProps(props)} />
+        </WorkflowResourcesRawProvider>
+      );
+
+    test('inserts at the caret in the run script, preserving the rest of it', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderWithResources({ step: makeStep({ uses: undefined, run: 'echo  && npm ci' }), onChange });
+
+      await user.click(screen.getByRole('radio', { name: /Run Script/ }));
+
+      const script = screen.getByPlaceholderText('Enter your script commands here...') as HTMLTextAreaElement;
+      script.focus();
+      script.setSelectionRange(5, 5); // just after "echo "
+      fireEvent.keyUp(script, { key: 'ArrowRight' });
+
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      await user.click(await screen.findByTestId('resource-item-AM_TEST_TOKEN'));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ run: 'echo ${{ secrets.AM_TEST_TOKEN }} && npm ci' })
+      );
+    });
+
+    test('appends at the end when the field was never focused', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderWithResources({ step: makeStep({ uses: undefined, run: 'echo ' }), onChange });
+
+      await user.click(screen.getByRole('radio', { name: /Run Script/ }));
+      await user.click(screen.getByTestId('resource-picker-trigger'));
+      await user.click(await screen.findByTestId('resource-item-AM_TEST_TOKEN'));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ run: 'echo ${{ secrets.AM_TEST_TOKEN }}' })
+      );
+    });
+
+    test('inserts into a step environment variable value', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderWithResources({ step: makeStep({ env: { FOO: '' } }), onChange });
+
+      await user.click(screen.getByRole('button', { name: /Advanced Settings/ }));
+
+      // The run script has its own trigger, so scope this to the env row.
+      const envRow = screen.getByLabelText('Value for FOO').closest('.env-var-item') as HTMLElement;
+      await user.click(within(envRow).getByTestId('resource-picker-trigger'));
+      await user.click(await screen.findByTestId('resource-item-AM_TEST_TOKEN'));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ env: { FOO: '${{ secrets.AM_TEST_TOKEN }}' } })
+      );
+    });
+
+    test('offers no trigger when the project has no resources', async () => {
+      const user = userEvent.setup();
+      renderWithResources({ step: makeStep({ uses: undefined, run: 'echo' }) }, []);
+
+      await user.click(screen.getByRole('radio', { name: /Run Script/ }));
+
+      expect(screen.queryByTestId('resource-picker-trigger')).not.toBeInTheDocument();
+    });
+
+    test('renders normally with no provider at all', () => {
+      render(<StepFields {...baseProps({ step: makeStep({ uses: undefined, run: 'echo' }) })} />);
+
+      expect(screen.getByPlaceholderText('Enter your script commands here...')).toBeInTheDocument();
+      expect(screen.queryByTestId('resource-picker-trigger')).not.toBeInTheDocument();
+    });
   });
 });

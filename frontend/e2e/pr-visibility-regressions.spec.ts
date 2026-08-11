@@ -326,10 +326,14 @@ test.describe("Under-review state persistence regression", () => {
     await installApiMocks(page, state);
     await page.goto(`/project/${TEST_USER}/badge-review`);
 
-    // The workflow status badge should show "Under Review"
-    await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Under Review/i, {
+    // In the compact Project Files list the status is a dot, not a badge; the
+    // full label is carried on the row for hover/assistive tech.
+    await expect(page.locator(".pf-row-dot.status-review").first()).toBeVisible({
       timeout: 15_000,
     });
+    await expect(
+      page.locator('.pf-row[aria-label*="Under Review"]').first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 });
 

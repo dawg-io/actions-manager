@@ -1,6 +1,7 @@
-import { 
-  yamlToGui, 
-  guiToYaml, 
+import {
+  yamlToGui,
+  yamlToGuiResult,
+  guiToYaml,
   WorkflowGUI,
   DEFAULT_WORKFLOW_GUI,
   DEFAULT_REUSABLE_WORKFLOW_GUI
@@ -610,6 +611,48 @@ jobs:
       expect(convertedYaml).toContain('tags:');
       expect(guiAgain.events[0].type).toBe('push');
       expect(guiAgain.events[0].tags).toEqual(['v*']);
+    });
+  });
+
+  describe('yamlToGuiResult', () => {
+    test('reports no error and a populated model for valid YAML', () => {
+      const { gui, error } = yamlToGuiResult('name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci\n');
+
+      expect(error).toBeNull();
+      expect(gui.name).toBe('CI');
+      expect(gui.jobs).toHaveLength(1);
+      expect(gui.jobs[0].steps[0].run).toBe('npm ci');
+    });
+
+    test('reports an error for YAML that does not parse', () => {
+      const { error } = yamlToGuiResult('name: [unclosed\non: push');
+
+      expect(error).toBeTruthy();
+      expect(typeof error).toBe('string');
+    });
+
+    test('reports an error when the document is not a mapping', () => {
+      expect(yamlToGuiResult('just a bare string').error).toBeTruthy();
+    });
+
+    test('treats empty content as a new workflow, not a failure', () => {
+      expect(yamlToGuiResult('').error).toBeNull();
+      expect(yamlToGuiResult('   \n  ').error).toBeNull();
+      expect(yamlToGuiResult('').gui).toEqual(DEFAULT_WORKFLOW_GUI);
+    });
+
+    test('yamlToGui keeps swallowing failures for existing callers', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      expect(yamlToGui('name: [unclosed')).toEqual(DEFAULT_WORKFLOW_GUI);
+      expect(() => yamlToGui('name: [unclosed')).not.toThrow();
+
+      warn.mockRestore();
+    });
+
+    test('yamlToGui still converts valid YAML identically', () => {
+      const content = 'name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci\n';
+      expect(yamlToGui(content)).toEqual(yamlToGuiResult(content).gui);
     });
   });
 

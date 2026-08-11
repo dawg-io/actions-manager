@@ -24,7 +24,7 @@ This guide covers frontend development for Actions Manager, including React, Typ
 - **TypeScript 4.9.5** - Type safety (gradual migration in progress)
 - **Tailwind CSS v3** - Utility-first CSS framework
 - **React Router** - Client-side routing
-- **Monaco Editor** - Code editor for YAML workflow editing
+- **CodeMirror 6** - Code editor for YAML workflow editing
 - **Axios** - HTTP client for API calls
 
 ### Development Tools

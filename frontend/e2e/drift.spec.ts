@@ -444,6 +444,10 @@ test.describe("Drift resolution – workflow status badge stays in sync without 
 
     await page.goto(`/project/${TEST_USER}/drift-pr-badge`);
 
+    // The status badge lives in the editor header; the Project Files row carries
+    // only a status dot. Select the workflow so the header is rendered.
+    await page.getByText(PHASE2_WORKFLOWS.CI, { exact: false }).first().click();
+
     // Starting state: Synced - makes the transition below meaningful.
     await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Synced/i, {
       timeout: 15_000,
@@ -491,6 +495,10 @@ test.describe("Drift resolution – workflow status badge stays in sync without 
     await installApiMocks(page, createMockState({ projects: [project] }));
 
     await page.goto(`/project/${TEST_USER}/drift-direct-badge`);
+
+    // The status badge lives in the editor header; the Project Files row carries
+    // only a status dot. Select the workflow so the header is rendered.
+    await page.getByText(PHASE2_WORKFLOWS.CI, { exact: false }).first().click();
 
     await expect(page.getByTestId("workflow-status-badge").first()).toContainText(/Under Review/i, {
       timeout: 15_000,

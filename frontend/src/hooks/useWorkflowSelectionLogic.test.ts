@@ -8,11 +8,18 @@ vi.mock('../utils/workflowGuiConversion', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/workflowGuiConversion')>();
   return {
     ...actual,
-    yamlToGui: vi.fn(),
+    yamlToGuiResult: vi.fn(),
   };
 });
 
-import { yamlToGui } from '../utils/workflowGuiConversion';
+import { yamlToGuiResult } from '../utils/workflowGuiConversion';
+
+// The hook converts through yamlToGuiResult so it can report a failure; these
+// helpers keep the tests reading in terms of the model, not the wrapper shape.
+const mockConversion = (gui: WorkflowGUI) =>
+  (yamlToGuiResult as jest.Mock).mockReturnValue({ gui, error: null });
+const mockConversionFailure = (error: string) =>
+  (yamlToGuiResult as jest.Mock).mockReturnValue({ gui: DEFAULT_WORKFLOW_GUI, error });
 
 describe('useWorkflowSelectionLogic', () => {
   const mockSetSelectedWorkflowId = jest.fn();
@@ -21,10 +28,7 @@ describe('useWorkflowSelectionLogic', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (yamlToGui as jest.Mock).mockImplementation((content: string) => ({
-      ...DEFAULT_WORKFLOW_GUI,
-      name: 'Parsed Workflow'
-    }));
+    mockConversion({ ...DEFAULT_WORKFLOW_GUI, name: 'Parsed Workflow' });
   });
 
   test('should initialize with correct props', () => {
@@ -70,7 +74,7 @@ describe('useWorkflowSelectionLogic', () => {
     });
 
     expect(mockSetSelectedWorkflowId).toHaveBeenCalledWith('regular-0');
-    expect(yamlToGui).toHaveBeenCalledWith('name: Test\non: push');
+    expect(yamlToGuiResult).toHaveBeenCalledWith('name: Test\non: push');
     expect(mockSetRegularGuiWorkflow).toHaveBeenCalled();
   });
 
@@ -80,7 +84,7 @@ describe('useWorkflowSelectionLogic', () => {
       name: 'Reusable Workflow'
     };
     
-    (yamlToGui as jest.Mock).mockReturnValue(mockGuiWorkflow);
+    mockConversion(mockGuiWorkflow);
 
     const unifiedWorkflows: UnifiedWorkflowItem[] = [
       {
@@ -168,9 +172,7 @@ describe('useWorkflowSelectionLogic', () => {
   });
 
   test('should handle YAML parsing errors gracefully', () => {
-    (yamlToGui as jest.Mock).mockImplementation(() => {
-      throw new Error('Parse error');
-    });
+    mockConversionFailure('Parse error');
 
     const unifiedWorkflows: UnifiedWorkflowItem[] = [
       {
@@ -214,7 +216,7 @@ describe('useWorkflowSelectionLogic', () => {
       jobs: []
     };
     
-    (yamlToGui as jest.Mock).mockReturnValue(mockGuiWithoutWorkflowCall);
+    mockConversion(mockGuiWithoutWorkflowCall);
 
     const unifiedWorkflows: UnifiedWorkflowItem[] = [
       {
@@ -368,5 +370,65 @@ describe('useWorkflowSelectionLogic', () => {
         name: ''
       })
     );
+  });
+
+  // The mode switch writes the resulting model back over the document on the
+  // first GUI edit, so it needs to know whether the conversion actually worked.
+  describe('initializeWorkflowGUI conversion reporting', () => {
+    const workflow = (overrides: Partial<UnifiedWorkflowItem> = {}): UnifiedWorkflowItem => ({
+      id: 'regular-0',
+      name: 'Test Workflow',
+      content: 'name: Test\non: push',
+      isReusable: false,
+      isModified: false,
+      originalIndex: 0,
+      type: 'regular',
+      ...overrides
+    });
+
+    const renderSubject = () =>
+      renderHook(() =>
+        useWorkflowSelectionLogic({
+          unifiedWorkflows: [],
+          setSelectedWorkflowId: mockSetSelectedWorkflowId,
+          setGuiWorkflow: mockSetGuiWorkflow,
+          setRegularGuiWorkflow: mockSetRegularGuiWorkflow
+        })
+      );
+
+    test('returns null when the YAML converts', () => {
+      const { result } = renderSubject();
+
+      let outcome: string | null = 'unset';
+      act(() => {
+        outcome = result.current.initializeWorkflowGUI(workflow());
+      });
+
+      expect(outcome).toBeNull();
+      expect(mockSetRegularGuiWorkflow).toHaveBeenCalled();
+    });
+
+    test('returns the error when the YAML does not convert', () => {
+      mockConversionFailure('bad indentation');
+      const { result } = renderSubject();
+
+      let outcome: string | null = null;
+      act(() => {
+        outcome = result.current.initializeWorkflowGUI(workflow({ content: 'name: [unclosed' }));
+      });
+
+      expect(outcome).toBe('bad indentation');
+    });
+
+    test('returns null for a new workflow with no content', () => {
+      const { result } = renderSubject();
+
+      let outcome: string | null = 'unset';
+      act(() => {
+        outcome = result.current.initializeWorkflowGUI(workflow({ content: '' }));
+      });
+
+      expect(outcome).toBeNull();
+    });
   });
 });

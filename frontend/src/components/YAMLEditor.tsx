@@ -1,5 +1,5 @@
 /* eslint-disable no-restricted-syntax, no-restricted-imports -- Legacy: TODO migrate inline styles and CSS imports to Tailwind CSS classes */
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useImperativeHandle, useMemo } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { yaml } from '@codemirror/lang-yaml';
@@ -11,6 +11,7 @@ import { indentWithTab } from '@codemirror/commands';
 import { keymap } from '@codemirror/view';
 import { foldKeymap } from '@codemirror/language';
 import * as yamlParser from 'js-yaml';
+import { WorkflowResource } from '../utils/workflowResources';
 import '../styles/YAMLEditor.css';
 
 // Structured validation diagnostic exposed to parent components
@@ -37,6 +38,13 @@ interface YAMLEditorProps {
   placeholder?: string;
   readOnly?: boolean;
   theme?: 'dark' | 'light';
+  /** Project secrets/variables offered as completions inside `${{ }}` expressions. */
+  resources?: WorkflowResource[];
+}
+
+/** Imperative handle used to insert text without disturbing the caret. */
+export interface YamlEditorHandle {
+  insertAtCursor: (text: string) => void;
 }
 
 // GitHub Actions workflow autocomplete suggestions
@@ -228,52 +236,107 @@ function createYamlLinter(onStructuralDiagnostics: (diags: WorkflowDiagnostic[])
   });
 }
 
-// Custom autocomplete source for GitHub Actions
-const githubActionsAutocompletion = autocompletion({
-  override: [
-    (context) => {
-      const word = context.matchBefore(/\w*/);
-      if (!word) return null;
-      
-      const options: Completion[] = githubActionsCompletions
-        .filter(completion => 
-          completion.label.toLowerCase().includes(word.text.toLowerCase())
-        )
-        .map(completion => ({
-          label: completion.label,
-          type: completion.type,
-          info: completion.info,
-          apply: completion.label
-        }));
-      
+// Completions for project secrets and variables, offered only while the caret
+// sits inside an unclosed `${{ ... }}` expression. Deployment environments are
+// deliberately excluded: `environment:` is a job key, not an expression.
+export function resourceCompletions(resources: WorkflowResource[]): Completion[] {
+  return resources
+    .filter(resource => resource.kind !== 'environment')
+    .map(resource => {
+      const label = `${resource.kind === 'secret' ? 'secrets' : 'vars'}.${resource.name}`;
       return {
-        from: word.from,
-        options: options.slice(0, 20) // Limit to 20 suggestions
+        label,
+        type: 'variable',
+        info: resource.repo
+          ? `Project ${resource.kind} in ${resource.repo}`
+          : `Project ${resource.kind}`,
+        apply: label
       };
-    }
-  ]
-});
+    });
+}
 
-const YAMLEditor: React.FC<YAMLEditorProps> = ({ 
-  value = '', 
-  onChange, 
+// Custom autocomplete source for GitHub Actions. `resourcesRef` is read at
+// completion time rather than captured, so refreshed project resources never
+// force the EditorView to be torn down and recreated.
+function createGithubActionsAutocompletion(resourcesRef: React.RefObject<WorkflowResource[]>) {
+  return autocompletion({
+    override: [
+      (context) => {
+        const insideExpression = context.matchBefore(/\$\{\{[^}]*$/);
+
+        // Inside an expression the token spans the `secrets.`/`vars.` prefix, so
+        // the dot has to be part of it. Everywhere else the original word
+        // pattern is kept, leaving the existing keyword completions untouched.
+        const word = context.matchBefore(insideExpression ? /[\w.]*/ : /\w*/);
+        if (!word) return null;
+
+        const candidates: Completion[] = insideExpression
+          ? resourceCompletions(resourcesRef.current ?? [])
+          : githubActionsCompletions.map(completion => ({
+              label: completion.label,
+              type: completion.type,
+              info: completion.info,
+              apply: completion.label
+            }));
+
+        const options = candidates.filter(option =>
+          option.label.toLowerCase().includes(word.text.toLowerCase())
+        );
+
+        return {
+          from: word.from,
+          options: options.slice(0, 20) // Limit to 20 suggestions
+        };
+      }
+    ]
+  });
+}
+
+const YAMLEditor = React.forwardRef<YamlEditorHandle, YAMLEditorProps>(({
+  value = '',
+  onChange,
   onStructuralDiagnostics,
   height = '400px',
   placeholder = 'Enter your GitHub Actions workflow YAML here...',
   readOnly = false,
-  theme = 'dark' 
-}) => {
+  theme = 'dark',
+  resources
+}, ref) => {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const valueRef = useRef<string>(value);
   const isInternalChangeRef = useRef<boolean>(false);
   const isProgrammaticUpdateRef = useRef<boolean>(false);
   const onStructuralDiagnosticsRef = useRef(onStructuralDiagnostics);
+  const resourcesRef = useRef<WorkflowResource[]>(resources ?? []);
+
+  // Built once so the extension identity - and therefore the EditorView - stays
+  // stable while the resource list behind it changes.
+  const githubActionsAutocompletion = useMemo(
+    () => createGithubActionsAutocompletion(resourcesRef),
+    []
+  );
 
   // Keep callback ref in sync
   useEffect(() => {
     onStructuralDiagnosticsRef.current = onStructuralDiagnostics;
   }, [onStructuralDiagnostics]);
+
+  useEffect(() => {
+    resourcesRef.current = resources ?? [];
+  }, [resources]);
+
+  // Inserts at the caret by dispatching on the view directly. Routing this
+  // through the `value` prop instead would hit the external-sync effect below,
+  // which resets the selection to the start of the document.
+  useImperativeHandle(ref, () => ({
+    insertAtCursor: (text: string) => {
+      const view = viewRef.current;
+      if (!view || readOnly) return;
+      view.dispatch(view.state.replaceSelection(text));
+      view.focus();
+    }
+  }), [readOnly]);
 
   // Update value ref when prop changes
   useEffect(() => {
@@ -424,6 +487,8 @@ const YAMLEditor: React.FC<YAMLEditorProps> = ({
       />
     </div>
   );
-};
+});
+
+YAMLEditor.displayName = 'YAMLEditor';
 
 export default YAMLEditor;

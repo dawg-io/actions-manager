@@ -1541,6 +1541,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
             onCodeownersSaved={() => setCodeownersRefreshCounter(prev => prev + 1)}
             importedActions={importedActions}
             actionGroups={actionGroups}
+            secrets={secrets}
+            envVars={envVars}
           />
         </div>
       </div>

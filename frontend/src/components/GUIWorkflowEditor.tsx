@@ -233,7 +233,9 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
         </div>
         
         <StepSelectionProvider value={{ selected, onSelect: setSelected }}>
-          <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-4">
+          {/* The detail panel is where steps are actually edited, so it takes the
+              larger share; the 420px floor keeps it usable at narrow desktop widths. */}
+          <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(420px,1.2fr)] lg:items-start lg:gap-4">
             <JobList
               jobs={workflow.jobs}
               onChange={handleJobsChange}

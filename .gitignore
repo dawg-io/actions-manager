@@ -64,6 +64,9 @@ coverage.xml
 *.cover
 frontend/coverage/
 
+# ESLint report written by the frontend-lint CI job and uploaded as an artifact
+frontend/eslint-report.json
+
 # Playwright
 frontend/playwright-report/
 frontend/test-results/

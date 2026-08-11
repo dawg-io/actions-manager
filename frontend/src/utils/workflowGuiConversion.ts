@@ -137,12 +137,27 @@ export const DEFAULT_REUSABLE_WORKFLOW_GUI: WorkflowGUI = {
   ]
 };
 
-// Convert YAML string to GUI structure
-export function yamlToGui(yamlContent: string): WorkflowGUI {
+/**
+ * Convert YAML to the GUI structure, reporting failure instead of hiding it.
+ *
+ * `yamlToGui` below silently substitutes the default template when conversion
+ * fails, which is fine for rendering but dangerous for the YAML→GUI mode switch:
+ * the first GUI edit serialises whatever model is loaded straight back over the
+ * document, so a swallowed error turns into lost work. Callers that need to act
+ * on the failure use this and check `error`.
+ *
+ * Empty content is a success with the default model — that is a new workflow,
+ * not a broken one.
+ */
+export function yamlToGuiResult(yamlContent: string): { gui: WorkflowGUI; error: string | null } {
+  if (!yamlContent?.trim()) {
+    return { gui: DEFAULT_WORKFLOW_GUI, error: null };
+  }
+
   try {
     const parsed = yaml.load(yamlContent) as any;
     if (!parsed || typeof parsed !== 'object') {
-      return DEFAULT_WORKFLOW_GUI;
+      return { gui: DEFAULT_WORKFLOW_GUI, error: 'Workflow YAML is not a mapping.' };
     }
 
     const result: WorkflowGUI = {
@@ -161,11 +176,22 @@ export function yamlToGui(yamlContent: string): WorkflowGUI {
       }
     });
 
-    return result;
+    return { gui: result, error: null };
   } catch (error) {
-    console.warn('Failed to parse YAML, using default template:', error);
-    return DEFAULT_WORKFLOW_GUI;
+    return {
+      gui: DEFAULT_WORKFLOW_GUI,
+      error: error instanceof Error ? error.message : 'Failed to parse workflow YAML.'
+    };
   }
+}
+
+// Convert YAML string to GUI structure
+export function yamlToGui(yamlContent: string): WorkflowGUI {
+  const { gui, error } = yamlToGuiResult(yamlContent);
+  if (error) {
+    console.warn('Failed to parse YAML, using default template:', error);
+  }
+  return gui;
 }
 
 // Convert GUI structure to YAML string
