@@ -1,6 +1,6 @@
 ## Database Schema
 
-This document describes the database schema for ActionsManager.xyz, including all tables, columns, relationships, and behavioral notes for developers and contributors.
+This document describes the database schema for ActionsManager, including all tables, columns, relationships, and behavioral notes for developers and contributors.
 
 ### Table of Contents
 

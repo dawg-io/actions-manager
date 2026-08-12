@@ -1,5 +1,5 @@
 """
-Database Models for ActionsManager.xyz
+Database Models for ActionsManager
 
 Defines SQLAlchemy models for:
 - Account: User accounts with GitHub OAuth

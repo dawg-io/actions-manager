@@ -1,5 +1,5 @@
 """
-Notification SMTP endpoints for ActionsManager.xyz
+Notification SMTP endpoints for ActionsManager
 
 Provides:
 - POST /api/notifications/test-email — sends a test email using the

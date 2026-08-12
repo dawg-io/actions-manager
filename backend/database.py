@@ -1,7 +1,7 @@
 """
 Database Configuration Module
 
-Handles database connection and session management for ActionsManager.xyz.
+Handles database connection and session management for ActionsManager.
 Supports both PostgreSQL (production) and SQLite (development/self-hosted).
 """
 

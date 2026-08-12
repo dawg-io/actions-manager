@@ -1,5 +1,5 @@
 """
-Admin Router for ActionsManager.xyz
+Admin Router for ActionsManager
 
 Provides administrative endpoints for managing the application.
 Includes:
@@ -1894,7 +1894,7 @@ async def admin_webhooks(
                         Marketplace webhook functionality is disabled as it's not needed for self-hosted installations.
                     </p>
                     <p>
-                        <strong>To use marketplace features:</strong> Deploy ActionsManager.xyz in cloud mode with 
+                        <strong>To use marketplace features:</strong> Deploy ActionsManager in cloud mode with 
                         <code>INSTALLATION_MODE=cloud</code> environment variable.
                     </p>
                 </div>

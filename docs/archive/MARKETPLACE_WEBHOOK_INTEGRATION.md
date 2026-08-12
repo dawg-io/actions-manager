@@ -1,6 +1,6 @@
 # GitHub Marketplace Webhook Integration
 
-This document describes the GitHub Marketplace webhook integration for ActionsManager.xyz, which enables automatic billing plan updates based on GitHub Marketplace events.
+This document describes the GitHub Marketplace webhook integration for ActionsManager, which enables automatic billing plan updates based on GitHub Marketplace events.
 
 ## Overview
 

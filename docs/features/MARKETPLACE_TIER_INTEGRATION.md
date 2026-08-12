@@ -1,6 +1,6 @@
 # Marketplace Subscription + Tier System Integration
 
-This document describes the integration between GitHub Marketplace subscriptions and the ActionsManager.xyz tier system.
+This document describes the integration between GitHub Marketplace subscriptions and the ActionsManager tier system.
 
 ## Overview
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Successfully integrated GitHub Marketplace subscription logic with the existing ActionsManager.xyz tier system. The implementation provides comprehensive tier enforcement that respects marketplace subscriptions, admin overrides, free trials, and retention policies.
+Successfully integrated GitHub Marketplace subscription logic with the existing ActionsManager tier system. The implementation provides comprehensive tier enforcement that respects marketplace subscriptions, admin overrides, free trials, and retention policies.
 
 ## Implementation Order
 

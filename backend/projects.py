@@ -59,7 +59,7 @@ _ERR_NO_ACCESS = "You do not have access to this project"
 _ERR_INTERNAL_VALIDATION = "Internal server error during project validation"
 _ERR_INSUFFICIENT_PROJECT_ROLE = "Insufficient project permissions. Required: project_editor"
 BACKUP_SCHEMA_VERSION = "1.1"
-APP_NAME = "ActionsManager.xyz"
+APP_NAME = "ActionsManager"
 
 
 def _read_app_version() -> str:

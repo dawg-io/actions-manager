@@ -1,6 +1,6 @@
 # Database Migrations
 
-This directory contains database migration scripts for ActionsManager.xyz. These migrations ensure your database schema stays in sync with the application models.
+This directory contains database migration scripts for ActionsManager. These migrations ensure your database schema stays in sync with the application models.
 
 ## Quick Start
 
@@ -132,7 +132,7 @@ The migrations automatically detect which database you're using based on the `DA
 
 ## For Docker Deployments
 
-If you're running ActionsManager.xyz in Docker, you can run migrations inside the container:
+If you're running ActionsManager in Docker, you can run migrations inside the container:
 
 ```bash
 # Docker Compose

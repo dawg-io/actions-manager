@@ -1,5 +1,5 @@
 """
-Workspace Members Router for ActionsManager.xyz
+Workspace Members Router for ActionsManager
 
 Provides API endpoints for managing workspace members:
 - GET  /api/workspace/members         — List all workspace members

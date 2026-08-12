@@ -1,4 +1,4 @@
-# ActionsManager.xyz Licensing Model
+# ActionsManager Licensing Model
 
 This page explains the product licensing structure in engineering terms. It is not legal advice. Final license notices, EULA, Terms of Service, Privacy Policy, and commercial terms should be reviewed by a qualified attorney before public launch.
 

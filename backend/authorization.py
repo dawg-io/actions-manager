@@ -1,5 +1,5 @@
 """
-Authorization module for ActionsManager.xyz
+Authorization module for ActionsManager
 
 Provides:
 - get_current_user: FastAPI dependency to resolve the authenticated user from the request

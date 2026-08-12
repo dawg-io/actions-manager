@@ -1,5 +1,5 @@
 """
-ActionsManager.xyz Backend API
+ActionsManager Backend API
 
 A FastAPI application for managing GitHub Actions workflows with features including:
 - GitHub OAuth authentication
@@ -52,7 +52,7 @@ _redoc_url = None if config.API_DOCS_DISABLED else "/redoc"
 _openapi_url = None if config.API_DOCS_DISABLED else "/openapi.json"
 
 app = FastAPI(
-    title="ActionsManager.xyz API",
+    title="ActionsManager API",
     description="API for managing GitHub Actions workflows",
     version="1.0.0",
     docs_url=_docs_url,
@@ -253,7 +253,7 @@ if config.INSTALLATION_MODE == "cloud":
 async def startup_event():
     """Log application startup information"""
     print("=" * 60)
-    print("🚀 ActionsManager.xyz API Starting")
+    print("🚀 ActionsManager API Starting")
     print(f"📦 Installation Mode: {config.INSTALLATION_MODE}")
 
     # Strict mode validation — fail closed for unsafe configurations.
@@ -337,7 +337,7 @@ async def shutdown_event():
 async def root():
     """Health check endpoint"""
     return {
-        "message": "ActionsManager.xyz API is running",
+        "message": "ActionsManager API is running",
         "version": "1.0.0",
         "allow_insecure_http": auth.ALLOW_INSECURE_HTTP,
     }

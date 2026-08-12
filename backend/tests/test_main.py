@@ -70,7 +70,7 @@ class TestMainEndpoints:
         response = self.client.get("/")
         assert response.status_code == 200
         data = response.json()
-        assert data["message"] == "ActionsManager.xyz API is running"
+        assert data["message"] == "ActionsManager API is running"
         assert data["version"] == "1.0.0"
         assert isinstance(data["allow_insecure_http"], bool)
 
@@ -79,7 +79,7 @@ class TestMainEndpoints:
         response = self.client.get("/healthz")
         assert response.status_code == 200
         data = response.json()
-        assert data["message"] == "ActionsManager.xyz API is running"
+        assert data["message"] == "ActionsManager API is running"
         assert data["version"] == "1.0.0"
         assert isinstance(data["allow_insecure_http"], bool)
 

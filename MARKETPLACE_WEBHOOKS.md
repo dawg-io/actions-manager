@@ -74,7 +74,7 @@ The marketplace webhook implementation provides the following features:
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ActionsManager.xyz Backend                    │
+│                     ActionsManager Backend                      │
 │                                                                   │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │         POST /webhooks/marketplace                        │  │
@@ -1169,7 +1169,7 @@ Test the complete flow from GitHub Marketplace to account updates:
 - Error message: "User not found"
 
 **Causes**:
-- User hasn't logged in to ActionsManager.xyz yet
+- User hasn't logged in to ActionsManager yet
 - GitHub username mismatch
 
 **Solutions**:
@@ -1946,4 +1946,4 @@ def check_rate_limit(source_ip: str, limit: int = 60) -> bool:
 
 **Document Version**: 1.0  
 **Last Updated**: 2025-11-04  
-**Maintained By**: ActionsManager.xyz Team
+**Maintained By**: ActionsManager Team

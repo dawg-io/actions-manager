@@ -1,5 +1,5 @@
 """
-Rulesets API Module for ActionsManager.xyz
+Rulesets API Module for ActionsManager
 
 Handles GitHub repository ruleset management including:
 - Uploading ruleset JSON files

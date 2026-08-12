@@ -1,5 +1,5 @@
 """
-CODEOWNERS Management API for ActionsManager.xyz
+CODEOWNERS Management API for ActionsManager
 
 Manages the GitHub ``CODEOWNERS`` file for repositories within a project.
 Mirrors the conventions used by ``rulesets`` and ``workflows``:
