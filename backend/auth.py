@@ -16,7 +16,6 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 import config
@@ -30,6 +29,7 @@ from github_permissions import (
     format_permission_issues_for_user,
 )
 from models import Account, AuthSession, WorkspaceMember, SEED_ACCOUNT_GITHUB_USER  # ✅ Import the Account and WorkspaceMember models
+from authorization import lock_first_member_decision, workspace_is_uninitialized
 
 router = APIRouter()
 
@@ -1063,22 +1063,11 @@ def _ensure_workspace_membership(user: Account, db: Session) -> None:
     if existing:
         return
 
-    # Serialize the count+insert on PostgreSQL with a transaction-level advisory
-    # lock so two concurrent first-time logins can't both see member_count==0 and
-    # both receive the admin role. SQLite serializes writes natively so the call
-    # is a no-op there (caught and ignored).
-    try:
-        db.execute(text("SELECT pg_advisory_xact_lock(1465)"))
-    except Exception:
-        pass
+    # Held across the count and the insert so two concurrent first-time logins
+    # can't both observe an empty workspace and both take the admin role.
+    lock_first_member_decision(db)
 
-    member_count = (
-        db.query(WorkspaceMember)
-        .join(Account, Account.user_id == WorkspaceMember.user_id)
-        .filter(Account.github_user != SEED_ACCOUNT_GITHUB_USER)
-        .count()
-    )
-    role = "admin" if member_count == 0 else "read_only"
+    role = "admin" if workspace_is_uninitialized(db) else "read_only"
 
     membership = WorkspaceMember(
         user_id=user.user_id,

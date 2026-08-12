@@ -17,6 +17,54 @@ import subprocess
 from pathlib import Path
 from migration_utils import get_database_type
 
+# List of migration scripts to run in order
+# These are the critical migrations needed for the application to work
+MIGRATION_SCRIPTS = [
+    "migrate_add_pr_tracking.py",                    # Adds pr_state column
+    "migrate_fix_project_code_length.py",            # Fixes project_code VARCHAR length
+    "migrate_add_linked_reusable_workflows.py",      # Adds linked_reusable_workflows table
+    "migrate_add_workflow_status.py",                # Adds workflow_status column to workflows
+    "migrate_add_workflow_versions.py",              # Adds workflow_versions table
+    "migrate_add_pr_history_fields.py",              # Adds PR history fields (title, author, body, merged_at, closed_at, workflow_names)
+    "migrate_add_workspace_members.py",             # Adds workspace_members table for multi-user support
+    "migrate_co_admin_to_admin.py",                # Normalizes legacy co_admin workspace role to admin
+    "migrate_add_last_modified_by.py",              # Adds last_modified_by audit column to workflows and projects
+    "add_permission_tracking_fields.py",            # Adds GitHub permission tracking fields (github_permission_status, github_permission_checked_at)
+    "migrate_add_codeowners.py",                    # Adds codeowners table for CODEOWNERS file management
+    "migrate_add_repo_workflow_overrides.py",       # Adds repo_workflow_overrides table for per-repo workflow overrides
+    "migrate_add_repository_visibility_scope.py",   # Adds repository_visibility_scope column to projects (public/private)
+    "migrate_add_project_color.py",                # Adds project_color column to projects (identity accent key)
+    "migrate_add_project_drift_summary.py",        # Adds cached project-level drift summary columns
+    "migrate_add_validation_preflight.py",         # Adds validation repository preflight columns to projects
+    "migrate_add_preflight_content_hash.py",       # Adds last_preflight_content_hash column to projects
+    "migrate_add_github_pat_fields.py",            # Adds encrypted PAT fields to accounts
+    "migrate_add_auth_sessions.py",                # Adds hashed server-side auth sessions
+    "migrate_add_pr_campaigns.py",                 # Adds project_pr_campaigns table and campaign_id column on project_pull_requests
+    "migrate_add_custom_files.py",                 # Adds custom_files table for project-level managed text files
+    "migrate_add_pr_file_names.py",                # Adds file_names column to project_pull_requests for per-PR custom file + CODEOWNERS tracking
+    "migrate_add_actions_projects.py",             # Adds actions_projects table for custom GitHub Actions (issue #1687)
+    "migrate_seed_default_actions_projects.py",    # Seeds the shared Actions Projects catalog with 7 common actions
+    "migrate_add_action_branding.py",              # Adds branding_icon/branding_color columns to actions_projects
+    "migrate_add_action_groups.py",                # Adds action_groups and action_group_memberships tables
+    "migrate_add_notifications_schema.py",         # Adds notification_events/deliveries/subscriptions/settings tables (issue #1790)
+    "migrate_add_workflow_drift_states.py",        # Adds workflow_drift_states table for drift transition detection (issue #1793)
+    "migrate_add_campaign_last_known_status.py",   # Adds last_known_status column to project_pr_campaigns (issue #1794)
+    "migrate_add_project_display_order.py",        # Adds project_display_order table for per-user grid ordering (issue #1804)
+    # After the drift-states table exists, since it rebuilds that table.
+    "migrate_add_drift_state_branch.py",           # Keys drift state by branch as well as repo (drift hardening PR 5)
+    "migrate_add_workflow_tree_cache.py",          # Caches tree listings + ETags so unchanged branches cost no rate limit
+    "migrate_add_drift_state_display_fields.py",   # Lets the drift panel render from stored state without calling GitHub
+    "migrate_add_drift_check_failure_count.py",    # Adds a consecutive-failure counter to projects, for sweep backoff
+    "migrate_add_workflow_runs.py",                # Stores GitHub Actions runs for build metrics (issue #689)
+    # After the seed account exists, so it repairs the same boot that creates it.
+    "migrate_revoke_seed_workspace_membership.py", # Takes workspace admin off the seed account and restores it to the installer
+    # Must stay last: purges rows orphaned while SQLite foreign keys were
+    # disabled, so every table it cleans has to exist by the time it runs.
+    "migrate_add_project_workflow_unique.py",      # Enforces one project per workflow (drift hardening PR 4)
+    "migrate_purge_orphaned_rows.py",              # Removes pre-existing orphaned rows (issue #1811)
+]
+
+
 def run_migration_script(script_path):
     """Run a migration script and return success/failure."""
     script_name = script_path.name
@@ -61,51 +109,7 @@ def main():
     # Get the backend directory
     backend_dir = Path(__file__).parent
     
-    # List of migration scripts to run in order
-    # These are the critical migrations needed for the application to work
-    migration_scripts = [
-        "migrate_add_pr_tracking.py",                    # Adds pr_state column
-        "migrate_fix_project_code_length.py",            # Fixes project_code VARCHAR length
-        "migrate_add_linked_reusable_workflows.py",      # Adds linked_reusable_workflows table
-        "migrate_add_workflow_status.py",                # Adds workflow_status column to workflows
-        "migrate_add_workflow_versions.py",              # Adds workflow_versions table
-        "migrate_add_pr_history_fields.py",              # Adds PR history fields (title, author, body, merged_at, closed_at, workflow_names)
-        "migrate_add_workspace_members.py",             # Adds workspace_members table for multi-user support
-        "migrate_co_admin_to_admin.py",                # Normalizes legacy co_admin workspace role to admin
-        "migrate_add_last_modified_by.py",              # Adds last_modified_by audit column to workflows and projects
-        "add_permission_tracking_fields.py",            # Adds GitHub permission tracking fields (github_permission_status, github_permission_checked_at)
-        "migrate_add_codeowners.py",                    # Adds codeowners table for CODEOWNERS file management
-        "migrate_add_repo_workflow_overrides.py",       # Adds repo_workflow_overrides table for per-repo workflow overrides
-        "migrate_add_repository_visibility_scope.py",   # Adds repository_visibility_scope column to projects (public/private)
-        "migrate_add_project_color.py",                # Adds project_color column to projects (identity accent key)
-        "migrate_add_project_drift_summary.py",        # Adds cached project-level drift summary columns
-        "migrate_add_validation_preflight.py",         # Adds validation repository preflight columns to projects
-        "migrate_add_preflight_content_hash.py",       # Adds last_preflight_content_hash column to projects
-        "migrate_add_github_pat_fields.py",            # Adds encrypted PAT fields to accounts
-        "migrate_add_auth_sessions.py",                # Adds hashed server-side auth sessions
-        "migrate_add_pr_campaigns.py",                 # Adds project_pr_campaigns table and campaign_id column on project_pull_requests
-        "migrate_add_custom_files.py",                 # Adds custom_files table for project-level managed text files
-        "migrate_add_pr_file_names.py",                # Adds file_names column to project_pull_requests for per-PR custom file + CODEOWNERS tracking
-        "migrate_add_actions_projects.py",             # Adds actions_projects table for custom GitHub Actions (issue #1687)
-        "migrate_seed_default_actions_projects.py",    # Seeds the shared Actions Projects catalog with 7 common actions
-        "migrate_add_action_branding.py",              # Adds branding_icon/branding_color columns to actions_projects
-        "migrate_add_action_groups.py",                # Adds action_groups and action_group_memberships tables
-        "migrate_add_notifications_schema.py",         # Adds notification_events/deliveries/subscriptions/settings tables (issue #1790)
-        "migrate_add_workflow_drift_states.py",        # Adds workflow_drift_states table for drift transition detection (issue #1793)
-        "migrate_add_campaign_last_known_status.py",   # Adds last_known_status column to project_pr_campaigns (issue #1794)
-        "migrate_add_project_display_order.py",        # Adds project_display_order table for per-user grid ordering (issue #1804)
-        # After the drift-states table exists, since it rebuilds that table.
-        "migrate_add_drift_state_branch.py",           # Keys drift state by branch as well as repo (drift hardening PR 5)
-        "migrate_add_workflow_tree_cache.py",          # Caches tree listings + ETags so unchanged branches cost no rate limit
-        "migrate_add_drift_state_display_fields.py",   # Lets the drift panel render from stored state without calling GitHub
-        "migrate_add_drift_check_failure_count.py",    # Adds a consecutive-failure counter to projects, for sweep backoff
-        # After the seed account exists, so it repairs the same boot that creates it.
-        "migrate_revoke_seed_workspace_membership.py", # Takes workspace admin off the seed account and restores it to the installer
-        # Must stay last: purges rows orphaned while SQLite foreign keys were
-        # disabled, so every table it cleans has to exist by the time it runs.
-        "migrate_add_project_workflow_unique.py",      # Enforces one project per workflow (drift hardening PR 4)
-        "migrate_purge_orphaned_rows.py",              # Removes pre-existing orphaned rows (issue #1811)
-    ]
+    migration_scripts = MIGRATION_SCRIPTS
     
     # Check which migrations exist
     existing_migrations = []

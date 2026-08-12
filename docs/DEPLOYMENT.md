@@ -364,71 +364,122 @@ docker compose logs -f
 
 ## Backup & Recovery
 
-### Backup Strategy
+ActionsManager has a supported backup format covering everything needed to rebuild an
+installation: every table, the schema version it was written at, and saved credentials in
+their encrypted form. Take one before every upgrade.
 
-#### Self-Hosted (SQLite)
+This section is the operator reference — scheduling, automation, and recovery. For a walkthrough
+of the screens with screenshots, see [Backup & Restore](features/backup-restore.md).
+
+### Creating a backup
+
+**From the UI** — sign in as a workspace admin, open the account menu, and choose
+**Backup**. The panel shows what the archive will contain and downloads it in one click.
+
+**From the command line:**
 
 ```bash
-# Backup database (stop app first to avoid an inconsistent copy, then copy to host)
+docker compose -f docker-compose.self-hosted.yml exec app \
+  python backup_cli.py backup --out /app/data/backup-$(date +%Y%m%d).tar.gz
+
+docker compose -f docker-compose.self-hosted.yml cp \
+  app:/app/data/backup-$(date +%Y%m%d).tar.gz ./
+```
+
+The same command works against SQLite and PostgreSQL — the archive is interchangeable, so a
+backup taken from SQLite restores into PostgreSQL and vice versa.
+
+### SECRET_KEY
+
+Saved GitHub tokens are stored encrypted and are backed up **still encrypted**. They can only
+be decrypted by an installation using the same `SECRET_KEY`.
+
+- Store `SECRET_KEY` somewhere separate from your backups. A backup without it cannot recover
+  saved tokens; a backup *with* it in the same place defeats the encryption.
+- Restoring under a different key still works — everything except saved tokens is recovered,
+  and each user re-enters their PAT. The restore warns you when it detects this.
+
+Backup archives contain your full application data. Treat them as sensitive.
+
+### Checking a backup
+
+Verifies checksums and schema compatibility without changing anything:
+
+```bash
+docker compose -f docker-compose.self-hosted.yml exec app \
+  python backup_cli.py validate --in /app/data/backup-20260811.tar.gz
+```
+
+### Restoring
+
+**Into a fresh installation** — start the new container and browse to it. Before the first
+account signs in, the sign-in screen offers **Restore from a backup**: upload the archive,
+review the summary, and confirm. Once anyone signs in, that option disappears and restoring
+becomes a command-line operation.
+
+**From the command line**, which also covers an installation that no longer starts:
+
+```bash
+# Report what would happen, without writing
+docker compose -f docker-compose.self-hosted.yml exec app \
+  python backup_cli.py restore --in /app/data/backup-20260811.tar.gz --dry-run
+
+# Apply it
+docker compose -f docker-compose.self-hosted.yml exec app \
+  python backup_cli.py restore --in /app/data/backup-20260811.tar.gz
+```
+
+Restoring replaces all existing data. It refuses an installation that already has users
+unless you pass `--force`.
+
+A restore validates integrity and schema compatibility *before* changing anything, applies
+the data in a single transaction, and runs any migrations the backup predates. A backup from
+a newer version of ActionsManager is refused — upgrade first, then restore.
+
+Sign-in sessions are deliberately not carried across a restore, so everyone signs in again
+afterwards.
+
+### Recovering from a failed upgrade
+
+1. Roll the image back to the version you upgraded from.
+2. Restore the backup you took before upgrading.
+3. Confirm the application starts and your projects are present.
+4. Report the failure with the migration output before retrying the upgrade.
+
+### Automated backups
+
+```bash
+# Daily: write inside the container, copy it out, then prune the host copies.
+0 2 * * * cd /path/to/actions-manager && \
+  docker compose -f docker-compose.self-hosted.yml exec -T app \
+  python backup_cli.py backup --out /app/data/backup-$(date +\%Y\%m\%d).tar.gz && \
+  docker compose -f docker-compose.self-hosted.yml cp \
+  app:/app/data/backup-$(date +\%Y\%m\%d).tar.gz ./backups/ && \
+  docker compose -f docker-compose.self-hosted.yml exec -T app \
+  rm -f /app/data/backup-$(date +\%Y\%m\%d).tar.gz && \
+  find ./backups -name 'backup-*.tar.gz' -mtime +14 -delete
+```
+
+Keep the archives off the data volume. Left in `/app/data` they grow without
+bound and eventually fill the volume the database lives on.
+
+### Raw database copies
+
+A cold copy of the database file or a `pg_dump` is still a valid disaster-recovery artifact,
+and remains the right tool for point-in-time snapshots at the infrastructure layer:
+
+```bash
+# SQLite — stop the app first so the copy is consistent
 docker compose -f docker-compose.self-hosted.yml stop app
-docker cp $(docker compose -f docker-compose.self-hosted.yml ps -q app):/app/data/actions_manager.db ./actions_manager.db.backup.$(date +%Y%m%d)
+docker compose -f docker-compose.self-hosted.yml cp app:/app/data/actions_manager.db ./actions_manager.db.backup
 docker compose -f docker-compose.self-hosted.yml start app
 
-# Backup environment
-cp .env.self-hosted .env.self-hosted.backup
-
-# Start application
-docker compose -f docker-compose.self-hosted.yml up -d
+# PostgreSQL
+docker compose -f docker-compose.cloud.yml exec postgres pg_dump -U actionsmanager actionsmanager | gzip > backup.sql.gz
 ```
 
-#### Cloud (PostgreSQL)
-
-```bash
-# Backup database
-docker exec postgres pg_dump -U actionsmanager actionsmanager > backup.sql
-
-# Or with docker compose
-docker compose -f docker-compose.cloud.yml exec postgres pg_dump -U actionsmanager actionsmanager > backup.sql
-
-# Compress backup
-gzip backup.sql
-```
-
-### Restore Procedure
-
-#### Self-Hosted (SQLite)
-
-```bash
-# Stop application
-docker compose -f docker-compose.self-hosted.yml down
-
-# Restore database (copy backup back into the named volume)
-docker compose -f docker-compose.self-hosted.yml run --rm app \
-  cp /app/data/actions_manager.db.backup.20260214 /app/data/actions_manager.db
-
-# Start application
-docker compose -f docker-compose.self-hosted.yml up -d
-```
-
-#### Cloud (PostgreSQL)
-
-```bash
-# Restore database
-gunzip backup.sql.gz
-docker compose -f docker-compose.cloud.yml exec -T postgres psql -U actionsmanager actionsmanager < backup.sql
-```
-
-### Automated Backups
-
-**Cron job example (daily backups):**
-
-```bash
-# Self-hosted (backs up database inside the named volume)
-0 2 * * * docker compose -f /path/to/actions-manager/docker-compose.self-hosted.yml exec -T app cp /app/data/actions_manager.db /app/data/actions_manager.db.$(date +\%Y\%m\%d).backup
-
-# Cloud (PostgreSQL)
-0 2 * * * cd /path/to/actions-manager && docker compose -f docker-compose.cloud.yml exec -T postgres pg_dump -U actionsmanager actionsmanager | gzip > backups/backup-$(date +\%Y\%m\%d).sql.gz
-```
+Unlike a `backup_cli.py` archive, these carry no schema-version metadata and no integrity
+check, so nothing warns you when a dump predates your current schema or was truncated.
 
 ## Troubleshooting
 

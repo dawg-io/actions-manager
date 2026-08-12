@@ -12,6 +12,11 @@ vi.mock(
     useNavigate: () => mockNavigate,
     useParams: () => mockUseParams(),
     useLocation: () => ({ pathname: "/", search: "", hash: "", state: null, key: "test" }),
+    Link: ({ to, children, ...rest }: any) => (
+      <a href={to} {...rest}>
+        {children}
+      </a>
+    ),
   }),
   { virtual: true }
 );
@@ -256,7 +261,7 @@ describe("ProjectMgmt deploy environments header", () => {
     expect(screen.queryByText("🔙 Cancel")).not.toBeInTheDocument();
   });
 
-  test("shows disabled import placeholder in Backup & Export section", async () => {
+  test("offers export only, with no dead import control", async () => {
     const user = userEvent.setup();
     render(
       <ProjectMgmt
@@ -277,11 +282,15 @@ describe("ProjectMgmt deploy environments header", () => {
     await user.click(screen.getByText("Go Backup"));
 
     expect(screen.getByText("⬇️ Export Project Backup (JSON)")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Import support is planned for a future release. Exported backups are being structured with an import-safe schema now so they can be reused later."
-      )
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Import Project Backup" })).toBeDisabled();
+
+    // A permanently-disabled control promising a future release is worse than
+    // no control, and there is now a working restore elsewhere in the product
+    // to be confused with. Guard against it coming back.
+    expect(screen.queryByRole("button", { name: /import/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/planned for a future release/i)).not.toBeInTheDocument();
+
+    // Say plainly that this is not an installation backup, and where that lives.
+    expect(screen.getByText(/not an installation backup/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Backup" })).toHaveAttribute("href", "/workspace/backup");
   });
 });

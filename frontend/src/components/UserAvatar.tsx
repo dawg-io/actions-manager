@@ -489,6 +489,15 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
           <span>Notifications</span>
         </DropdownMenuItem>
 
+        {/* Backup Link */}
+        <DropdownMenuItem
+          onClick={() => { navigate('/workspace/backup'); }}
+          className="cursor-pointer"
+        >
+          <span className="mr-2">💾</span>
+          <span>Backup</span>
+        </DropdownMenuItem>
+
         {/* Theme Toggle */}
         <DropdownMenuItem 
           onClick={handleThemeToggle}
