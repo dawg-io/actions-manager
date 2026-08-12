@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.exc import OperationalError
-import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups, notifications_smtp, notification_subscriptions
+import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups, notifications_smtp, notification_subscriptions, build_metrics, workspace_backup, setup_restore
 from database import engine, Base, SessionLocal
 from models import Account, WorkspaceMember
 import config
@@ -208,7 +208,12 @@ app.add_middleware(
     allow_credentials=config.CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Upgrade", "Connection"],
+    # Content-Disposition is not CORS-safelisted, so a split-origin deployment
+    # (frontend and backend on different hosts) receives the header but cannot
+    # read it from JS — every download silently falls back to a generic
+    # filename. Both backup downloads name their file this way, and for backups
+    # the timestamp is how an operator tells one archive from another.
+    expose_headers=["Upgrade", "Connection", "Content-Disposition"],
 )
 
 # Create database tables
@@ -235,6 +240,9 @@ app.include_router(actions_projects.router)
 app.include_router(action_groups.router)
 app.include_router(notifications_smtp.router)
 app.include_router(notification_subscriptions.router)
+app.include_router(build_metrics.router)
+app.include_router(workspace_backup.router)
+app.include_router(setup_restore.router)
 
 # Conditionally include marketplace webhooks router only in cloud mode
 if config.INSTALLATION_MODE == "cloud":
@@ -305,6 +313,8 @@ async def startup_event():
         print(f"🔗 GitHub OAuth callback: {auth.BACKEND_URL}/auth/callback")
 
     print("=" * 60)
+
+    setup_restore.discard_staged_uploads()
 
     app.state.notification_worker_task = start_notification_worker(SessionLocal)
     app.state.drift_worker_task = start_drift_worker(SessionLocal)

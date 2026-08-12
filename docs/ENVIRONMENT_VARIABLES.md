@@ -208,6 +208,29 @@ GitHub. Nothing needs configuring for this to work — the defaults are sensible
 
 ---
 
+### Build Metrics Sync
+
+Workflow runs are stored locally so the [Build Metrics](features/build-metrics.md)
+panel can be opened without spending GitHub API calls. Runs are re-fetched only
+when the stored copy is stale, or when someone presses **Refresh**.
+
+| Variable | Required | Default | Description | Mode | Example |
+|----------|----------|---------|-------------|------|---------|
+| `BUILD_METRICS_SYNC_INTERVAL_MINUTES` | ❌ No | `15` | How stale stored runs must be before opening the panel triggers a sync | Both | `30` |
+
+**Details:**
+- **A sync costs one call per repository**, not one per workflow — a single
+  listing returns every workflow's runs. Raise the interval if you run many
+  projects against a tight rate limit.
+- Unlike the drift sweep, this is not a background worker: nothing is fetched
+  until someone opens the panel. There is no switch to disable it, because a
+  project nobody looks at never syncs.
+- **Refresh always syncs**, regardless of the interval.
+- A failed sync does not advance the staleness cursor, so the next open retries
+  rather than reporting stale numbers as fresh.
+
+---
+
 ### License Configuration (Self-Hosted Only)
 
 | Variable | Required | Default | Description | Mode | Example |

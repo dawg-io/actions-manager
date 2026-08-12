@@ -303,6 +303,26 @@ Classic PAT guidance:
 
 ## Updating
 
+### Back up first
+
+Take a backup before every upgrade, so a failed migration is recoverable:
+
+```bash
+docker exec actions-manager python backup_cli.py backup --out /app/data/backup-$(date +%Y%m%d).tar.gz
+docker cp actions-manager:/app/data/backup-$(date +%Y%m%d).tar.gz ./
+```
+
+Workspace admins can also download one from the account menu under **Backup**.
+
+If an upgrade fails, roll the image back and restore that archive:
+
+```bash
+docker exec actions-manager python backup_cli.py restore --in /app/data/backup-20260811.tar.gz
+```
+
+Restoring needs the same `SECRET_KEY` to recover saved tokens. See
+[Backup & Recovery](docs/DEPLOYMENT.md#backup--recovery) for the full procedure.
+
 ### Docker Run
 
 ```bash

@@ -11,11 +11,12 @@ Roles (highest → lowest):
 """
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from database import get_db as _get_db
-from models import Account, WorkspaceMember, ProjectMembership
+from models import Account, WorkspaceMember, ProjectMembership, SEED_ACCOUNT_GITHUB_USER
 
 # Ordered from lowest to highest privilege
 ROLE_HIERARCHY = ["read_only", "member", "admin"]
@@ -23,6 +24,41 @@ VALID_ROLES = set(ROLE_HIERARCHY)
 
 # Valid project-level roles
 PROJECT_ROLES = {"project_editor", "project_viewer"}
+
+
+# Two callers decide something important from this one answer: who becomes
+# workspace admin on first login, and whether an unauthenticated first-boot
+# restore is still allowed. They must never drift apart — the restore endpoint
+# is safe to leave open precisely *because* its window is the same window in
+# which the next person to sign in would be made admin anyway.
+FIRST_MEMBER_LOCK_ID = 1465
+
+
+def lock_first_member_decision(db: Session) -> None:
+    """Serialize the count-then-write on PostgreSQL, so two concurrent callers
+    can't both observe an empty workspace and both act on it. SQLite serializes
+    writes natively, so the call is a no-op there (raised and ignored)."""
+    try:
+        db.execute(text(f"SELECT pg_advisory_xact_lock({FIRST_MEMBER_LOCK_ID})"))
+    except Exception:
+        pass
+
+
+def workspace_is_uninitialized(db: Session) -> bool:
+    """True when nobody has ever signed in.
+
+    The seed account is created by a migration before first boot, so counting it
+    would make an untouched installation look occupied — which is exactly the
+    bug migrate_revoke_seed_workspace_membership.py exists to repair.
+    """
+    member_count = (
+        db.query(WorkspaceMember)
+        .join(Account, Account.user_id == WorkspaceMember.user_id)
+        .filter(Account.github_user != SEED_ACCOUNT_GITHUB_USER)
+        .count()
+    )
+    return member_count == 0
+
 
 
 def get_current_user(

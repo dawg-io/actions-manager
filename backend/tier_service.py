@@ -26,8 +26,9 @@ import license
 # Pricing model is workflow-first: every tier can use the core product
 # (workflow editor, multi-repo rollout, drift detection, reusable workflows,
 # and private repositories). Paid tiers exist to unlock SCALE, not core
-# functionality. Only project counts, repos-per-project and secrets-per-project
-# are gated.
+# functionality. Only project counts, repos-per-project, secrets-per-project and
+# build-metrics history depth are gated — every tier can see build metrics,
+# higher tiers simply keep more history.
 TIER_LIMITS = {
     "free": {
         "projects": 3,
@@ -35,6 +36,7 @@ TIER_LIMITS = {
         "secrets_per_project": 2,
         "private_repos": True,
         "reusable_workflows": True,
+        "run_history_days": 30,
     },
     "professional": {
         "projects": 10,
@@ -42,6 +44,7 @@ TIER_LIMITS = {
         "secrets_per_project": 10,
         "private_repos": True,
         "reusable_workflows": True,
+        "run_history_days": 90,
     },
     "enterprise": {
         "projects": None,  # Unlimited
@@ -49,6 +52,7 @@ TIER_LIMITS = {
         "secrets_per_project": None,  # Unlimited
         "private_repos": True,
         "reusable_workflows": True,
+        "run_history_days": None,  # Unlimited
     }
 }
 
@@ -60,6 +64,7 @@ SELF_HOSTED_BETA_LIMITS = {
     "secrets_per_project": 6,
     "env_vars_per_project": 6,
     "environments_per_project": 6,
+    "run_history_days": 30,
 }
 
 
@@ -211,6 +216,22 @@ def get_tier_limits(tier: str) -> dict:
     """
     normalized_tier = normalize_tier_name(tier)
     return TIER_LIMITS.get(normalized_tier, TIER_LIMITS["free"])
+
+
+def get_run_history_days(account: Account) -> Optional[int]:
+    """How many days of workflow-run history this account can see.
+
+    Returns a value instead of the usual ``(allowed, message)`` pair because the
+    requested window is clamped rather than rejected: asking for a year of
+    history on a tier that keeps a month should show the month, not an error.
+
+    ``None`` means unlimited.
+    """
+    if is_self_hosted_beta():
+        return SELF_HOSTED_BETA_LIMITS["run_history_days"]
+
+    limits = get_tier_limits(get_effective_tier(account))
+    return limits["run_history_days"]
 
 
 def check_project_limit(account: Account, current_count: int) -> Tuple[bool, Optional[str]]:

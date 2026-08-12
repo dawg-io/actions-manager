@@ -5,7 +5,7 @@ import '@testing-library/jest-dom';
 import Sidebar from './Sidebar';
 
 // Top-level (always visible) section labels
-const topLevelSections = ['Project Files', 'PR Campaigns'];
+const topLevelSections = ['Project Files', 'PR Campaigns', 'Build Metrics'];
 
 describe('Sidebar', () => {
   const user = userEvent.setup();
@@ -97,6 +97,14 @@ describe('Sidebar', () => {
 
     await user.click(screen.getByRole('button', { name: /Project Files/i }));
     expect(onSectionChange).toHaveBeenCalledWith('workflows');
+  });
+
+  test('clicking Build Metrics routes to the build metrics view', async () => {
+    const onSectionChange = jest.fn();
+    render(<Sidebar onSectionChange={onSectionChange} isCollapsed={false} />);
+
+    await user.click(screen.getByRole('button', { name: /Build Metrics/i }));
+    expect(onSectionChange).toHaveBeenCalledWith('build-metrics');
   });
 
   test('sidebar shows PR Campaigns and routes to PR campaign view', async () => {

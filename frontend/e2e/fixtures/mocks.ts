@@ -1145,3 +1145,88 @@ export async function overrideUserAccountType(
       jsonResponse(route, { ...TEST_USER_DETAILS, github_user: user, username: user, account_type: accountType }),
   );
 }
+
+export interface BuildMetricsWorkflowStub {
+  workflow_name: string;
+  workflow_filename: string;
+  total: number;
+  success_rate: number | null;
+  avg_duration_seconds: number | null;
+  actions_url?: string | null;
+}
+
+export interface BuildMetricsRunStub {
+  github_run_id: number;
+  run_number: number;
+  workflow_name: string;
+  repo: string;
+  branch: string;
+  conclusion: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+  html_url?: string | null;
+}
+
+/**
+ * Override the build-metrics endpoint with a canned summary.
+ *
+ * Must be called AFTER `installApiMocks` so this handler wins (LIFO order).
+ *
+ * The panel scopes server-side, so `scoped` supplies the summary to serve when
+ * a given `?workflow=` is requested. Anything omitted from an entry falls back
+ * to the unscoped summary, which keeps a scoped fixture to just the fields that
+ * actually differ.
+ */
+export async function mockBuildMetricsResponse(
+  page: Page,
+  options: {
+    summary?: Record<string, unknown>;
+    workflows?: BuildMetricsWorkflowStub[];
+    recentRuns?: BuildMetricsRunStub[];
+    scoped?: Record<string, Record<string, unknown>>;
+    failWithStatus?: number;
+  } = {},
+): Promise<void> {
+  const { summary = {}, workflows = [], recentRuns = [], scoped = {}, failWithStatus } = options;
+
+  const base = {
+    project_id: 1,
+    project_name: "Payments Platform",
+    window_days: 30,
+    last_synced: new Date().toISOString(),
+    total_runs: 0,
+    decided_runs: 0,
+    conclusion_counts: {},
+    success_rate: null,
+    avg_duration_seconds: null,
+    p50_duration_seconds: null,
+    p95_duration_seconds: null,
+    avg_queue_seconds: null,
+    selected_workflow: null,
+    trend: [],
+    workflows: workflows.map((w) => ({ actions_url: null, ...w })),
+    recent_runs: recentRuns.map((r) => ({
+      event: "push",
+      status: "completed",
+      html_url: `https://github.com/${r.repo}/actions/runs/${r.github_run_id}`,
+      ...r,
+    })),
+    sync_failed: false,
+    sync_message: null,
+    ...summary,
+  };
+
+  await page.route(
+    apiPath((p) => /^\/api\/projects\/[^/]+\/build-metrics$/.test(p)),
+    (route) => {
+      if (failWithStatus) {
+        return jsonResponse(route, { detail: "build metrics unavailable" }, failWithStatus);
+      }
+      const requested = new URL(route.request().url()).searchParams.get("workflow");
+      const override = requested ? scoped[requested] : undefined;
+      return jsonResponse(route, override
+        ? { ...base, selected_workflow: requested, ...override }
+        : base);
+    },
+  );
+}

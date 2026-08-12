@@ -10,9 +10,12 @@ import DarkModeToggle from "./components/DarkModeToggle";
 import BrandLogo from "./components/BrandLogo";
 import WorkspaceMembers from "./components/WorkspaceMembers";
 import WorkspaceNotifications from "./components/WorkspaceNotifications";
+import WorkspaceBackup from "./components/WorkspaceBackup";
+import FirstBootRestore from "./components/FirstBootRestore";
 import { ThemeProvider } from "./components/ThemeContext";
 import { checkGitHubPermissions, getUserDetails, loginWithGitHubToken, logout, PermissionValidationResult, UserDetails } from "./api/user";
 import config from "./config";
+import { isUninitialized } from "./api/setup";
 import PermissionAlert from "./components/PermissionAlert";
 import ToastContainer from "./components/Toast";
 import { getDocsUrl } from "./help/helpLinks";
@@ -201,6 +204,25 @@ function App(): React.ReactElement {
     }
   }, [user]);
 
+  const [canRestore, setCanRestore] = useState(false);
+  const [showRestore, setShowRestore] = useState(false);
+  // Bumped when a restore finishes. `user` is still null at that point, so
+  // without this the probe never re-runs and the sign-in screen keeps offering
+  // a restore the server will now refuse.
+  const [setupProbe, setSetupProbe] = useState(0);
+
+  useEffect(() => {
+    if (user) {
+      setCanRestore(false);
+      return;
+    }
+    let cancelled = false;
+    isUninitialized()
+      .then((uninitialized) => { if (!cancelled) setCanRestore(uninitialized); })
+      .catch(() => { if (!cancelled) setCanRestore(false); });
+    return () => { cancelled = true; };
+  }, [user, setupProbe]);
+
   return (
     <ThemeProvider>
       <Router>
@@ -240,6 +262,10 @@ function App(): React.ReactElement {
                   element={<WorkspaceNotificationsWrapper currentUser={user || ""} currentUserRole={userDetails?.workspace_role} onLogout={handleLogout} />}
                 />
                 <Route
+                  path="/workspace/backup"
+                  element={<WorkspaceBackupWrapper currentUser={user || ""} currentUserRole={userDetails?.workspace_role} onLogout={handleLogout} />}
+                />
+                <Route
                   path="/project/:user/actions-projects/new"
                   element={<AddActionsProjectWrapper />}
                 />
@@ -265,6 +291,12 @@ function App(): React.ReactElement {
                         ✅ {logoutMessage}
                       </div>
                     )}
+                    {showRestore ? (
+                      <FirstBootRestore
+                        onCancel={() => setShowRestore(false)}
+                        onRestored={() => setSetupProbe((n) => n + 1)}
+                      />
+                    ) : (
                     <div className="flex flex-col items-center justify-center bg-container dark:bg-container-dark p-12 rounded-2xl shadow-xl border border-border dark:border-border-dark max-w-sm w-full gap-8">
                       <BrandLogo variant="full" size="lg" />
                       <button
@@ -348,8 +380,23 @@ function App(): React.ReactElement {
                             {githubTokenLoginError}
                           </div>
                         )}
+                        {canRestore && (
+                          <div className="border-t border-border dark:border-border-dark pt-3">
+                            <p className="text-xs text-text-secondary dark:text-secondary-dark">
+                              Setting this installation up from an existing backup?
+                            </p>
+                            <button
+                              className="mt-1 text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+                              onClick={() => setShowRestore(true)}
+                              type="button"
+                            >
+                              Restore from a backup →
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
+                    )}
                   </>
                 } />
               </Routes>
@@ -486,6 +533,39 @@ function WorkspaceNotificationsWrapper({ currentUser, currentUserRole, onLogout 
       </div>
       <div className="p-6">
         <WorkspaceNotifications currentUser={currentUser} currentUserRole={currentUserRole} />
+      </div>
+    </div>
+  );
+}
+
+interface WorkspaceBackupWrapperProps {
+  readonly currentUser: string;
+  readonly currentUserRole?: string;
+  readonly onLogout: () => void;
+}
+
+function WorkspaceBackupWrapper({ currentUser, currentUserRole, onLogout }: WorkspaceBackupWrapperProps): React.ReactElement {
+  return (
+    <div className="w-full min-h-screen bg-background dark:bg-background-dark">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border dark:border-border-dark">
+        <BrandLogo variant="full" size="sm" />
+        <div className="flex items-center gap-4">
+          <Link
+            to={`/project/${currentUser}`}
+            className="text-sm text-text-secondary dark:text-secondary-dark hover:text-text-primary dark:hover:text-text-primary-dark transition-colors"
+          >
+            ← Back to Projects
+          </Link>
+          <button
+            className="text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 transition-colors"
+            onClick={onLogout}
+          >
+            Log out
+          </button>
+        </div>
+      </div>
+      <div className="p-6">
+        <WorkspaceBackup currentUserRole={currentUserRole} />
       </div>
     </div>
   );

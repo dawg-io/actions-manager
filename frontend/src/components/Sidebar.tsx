@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   GitPullRequest,
+  BarChart3,
   FolderGit2,
   Rocket,
   Variable,
@@ -64,14 +65,14 @@ const repoConfigSections: NavSection[] = [
 const standardProjectConfigSections: NavSection[] = [
   { key: 'project-info', label: 'Project Info', Icon: Info },
   { key: 'project-members', label: 'Project Members', Icon: Users },
-  { key: 'backup-export', label: 'Backup & Export', Icon: Download },
+  { key: 'backup-export', label: 'Export Config', Icon: Download },
   { key: 'danger-zone', label: 'Danger Zone', Icon: AlertTriangle },
 ];
 const rwxProjectConfigSections: NavSection[] = [
   { key: 'project-info', label: 'Project Info', Icon: Info },
   { key: 'project-members', label: 'Project Members', Icon: Users },
   { key: 'linked-projects', label: 'Linked Projects', Icon: Link2 },
-  { key: 'backup-export', label: 'Backup & Export', Icon: Download },
+  { key: 'backup-export', label: 'Export Config', Icon: Download },
   { key: 'danger-zone', label: 'Danger Zone', Icon: AlertTriangle },
 ];
 const allProjectConfigKeys = [
@@ -222,6 +223,17 @@ const Sidebar: React.FC<SidebarProps> = ({
           >
             <span className="sidebar-icon" aria-hidden="true"><GitPullRequest size={18} strokeWidth={1.75} /></span>
             {!isCollapsed && <span className="sidebar-label">PR Campaigns</span>}
+          </button>
+
+          {/* Build Metrics – GitHub Actions run success rates, durations, trend */}
+          <button
+            className={`sidebar-item ${activeSection === 'build-metrics' ? 'active' : ''}`}
+            aria-label="Build Metrics"
+            onClick={() => handleSectionChange('build-metrics')}
+            title={isCollapsed ? 'Build Metrics' : ''}
+          >
+            <span className="sidebar-icon" aria-hidden="true"><BarChart3 size={18} strokeWidth={1.75} /></span>
+            {!isCollapsed && <span className="sidebar-label">Build Metrics</span>}
           </button>
 
           {/* CONFIGURATION Section Label */}

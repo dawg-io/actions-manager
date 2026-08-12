@@ -13,7 +13,7 @@ Defines SQLAlchemy models for:
 
 import secrets
 import string
-from sqlalchemy import Column, Index, Integer, String, DateTime, ForeignKey, Boolean, UniqueConstraint, Text
+from sqlalchemy import BigInteger, Column, Index, Integer, String, DateTime, ForeignKey, Boolean, UniqueConstraint, Text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
@@ -22,6 +22,7 @@ _FK_ACCOUNTS_USER_ID = "accounts.user_id"
 _FK_REPOS_REPO_ID = "repos.repo_id"
 _FK_WORKFLOWS_WORKFLOW_ID = "workflows.workflow_id"
 _FK_PROJECTS_PROJECT_ID = "projects.project_id"
+_ON_DELETE_SET_NULL = "SET NULL"
 
 
 def generate_random_id():
@@ -214,7 +215,7 @@ class Project(Base):
     project_type = Column(String(20), nullable=False, default="standard")  # Project type: standard, rwx
     repository_visibility_scope = Column(String(10), nullable=False, default="public")  # Project repository visibility scope: public, private
     project_color = Column(String(20), nullable=True)  # Project identity color key (blue, purple, etc.)
-    validation_repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="SET NULL"), nullable=True)
+    validation_repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete=_ON_DELETE_SET_NULL), nullable=True)
     preflight_required = Column(Boolean, default=False, nullable=False)
     last_preflight_status = Column(String(40), nullable=True)
     last_preflight_run_at = Column(DateTime, nullable=True)
@@ -226,6 +227,10 @@ class Project(Base):
     last_drift_check_at = Column(DateTime, nullable=True)
     drift_error_summary = Column(String(500), nullable=True)
     drift_check_failure_count = Column(Integer, nullable=False, default=0)  # Consecutive check_failed results, for sweep backoff; reset on clean/drifted
+    # Build-metrics sync cursor. Kept here rather than derived from workflow_runs
+    # because a project with no runs yet has no row to read a timestamp from, and
+    # would re-hit GitHub on every panel open.
+    last_run_sync_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now()) 
 
@@ -379,7 +384,7 @@ class ProjectPullRequest(Base):
     project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
     # Campaign this PR row belongs to. Nullable so legacy rows created before
     # campaign tracking remain valid (they are grouped heuristically instead).
-    campaign_id = Column(Integer, ForeignKey("project_pr_campaigns.campaign_id", ondelete="SET NULL"), nullable=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("project_pr_campaigns.campaign_id", ondelete=_ON_DELETE_SET_NULL), nullable=True, index=True)
     repo_name = Column(String(255), nullable=False)  # Full repository name (owner/repo)
     pr_number = Column(Integer, nullable=False)  # GitHub PR number
     pr_url = Column(String(500), nullable=False)  # GitHub PR URL
@@ -779,4 +784,59 @@ class WorkflowTreeCache(Base):
 
     __table_args__ = (
         UniqueConstraint('repo_id', 'branch', name='uq_workflow_tree_cache_repo_branch'),
+    )
+
+
+class WorkflowRun(Base):
+    """A GitHub Actions run, stored so build metrics can be computed without GitHub.
+
+    Runs are listed per repository — one call returns every workflow's runs — and
+    then attributed to the project that owns the matching workflow file. A repo
+    can belong to several projects, but a workflow belongs to exactly one, so
+    filtering by filename lands each row under a single project.
+
+    ``duration_seconds`` and ``queue_seconds`` are derived once here rather than
+    at query time because the alternative is GitHub's ``/timing`` endpoint, which
+    costs one call per run.
+
+    ``workflow_id`` is SET NULL, not CASCADE: deleting a workflow must not erase
+    the history of what it did, or removing a workflow would silently rewrite
+    past success rates.
+    """
+    __tablename__ = "workflow_runs"
+
+    run_row_id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey(_FK_PROJECTS_PROJECT_ID, ondelete="CASCADE"), nullable=False, index=True)
+    repo_id = Column(Integer, ForeignKey(_FK_REPOS_REPO_ID, ondelete="CASCADE"), nullable=False, index=True)
+    workflow_id = Column(Integer, ForeignKey(_FK_WORKFLOWS_WORKFLOW_ID, ondelete=_ON_DELETE_SET_NULL), nullable=True, index=True)
+    github_run_id = Column(BigInteger, nullable=False)
+    run_number = Column(Integer, nullable=True)
+    run_attempt = Column(Integer, nullable=True)
+    # Basename of the run's ``path`` (".github/workflows/ci.yml" -> "ci.yml"),
+    # which is what ties a run back to a project's workflow.
+    workflow_filename = Column(String(255), nullable=False)
+    workflow_name = Column(String(255), nullable=True)
+    # Same rationale as WorkflowDriftState.branch: empty string rather than NULL
+    # so rows without a resolved branch still compare equal to each other.
+    branch = Column(String(255), nullable=False, default="", server_default="")
+    event = Column(String(50), nullable=True)
+    status = Column(String(30), nullable=True)  # queued, in_progress, completed
+    conclusion = Column(String(30), nullable=True)  # success, failure, cancelled, skipped, timed_out, ... ; NULL while running
+    run_created_at = Column(DateTime, nullable=True)
+    run_started_at = Column(DateTime, nullable=True)
+    run_updated_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    queue_seconds = Column(Integer, nullable=True)
+    html_url = Column(String(500), nullable=True)
+    # Doubles as the staleness cursor, so no separate sync-state table is needed.
+    synced_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        # Scoped by project, not just (repo, run): a repo can belong to several
+        # projects, and two of them may each own a workflow that delivers under
+        # the same filename. Keyed on (repo, run) alone, whichever project synced
+        # first would own the row and the other's panel would stay empty forever.
+        UniqueConstraint('project_id', 'repo_id', 'github_run_id',
+                         name='uq_workflow_runs_project_repo_run'),
+        Index('ix_workflow_runs_project_created', 'project_id', 'run_created_at'),
     )

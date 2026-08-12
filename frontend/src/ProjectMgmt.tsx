@@ -2,7 +2,7 @@
 import UserAvatar from "./components/UserAvatar";
 import PlanUsagePill from "./components/PlanUsagePill";
 import BrandLogo from "./components/BrandLogo";
-import { useParams, useNavigate, useLocation } from "react-router";
+import { useParams, useNavigate, useLocation, Link } from "react-router";
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectName, updateProjectOrder, exportProjectBackup } from "./api/projects";
 import { deleteProjectEnhanced } from "./api/projectDeletion";
@@ -29,6 +29,7 @@ import type { WorkflowDriftDetail } from "./api/drift";
 import Sidebar from "./components/Sidebar";
 import PRStatusPanel from "./components/PRStatusPanel";
 import PRHistoryPanel from "./components/PRHistoryPanel";
+import BuildMetricsPanel from "./components/BuildMetricsPanel";
 import CreatePRModal from "./components/CreatePRModal";
 import LinkedWorkflowsModal from "./components/LinkedWorkflowsModal";
 import ProjectColorSelector from "./components/ProjectColorSelector";
@@ -1806,9 +1807,10 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     return (
       <div className="section-content">
         <div className="section-card-content">
-          <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 600 }}>💾 Backup &amp; Export</h3>
+          <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 600 }}>💾 Export Project Config</h3>
           <p style={{ margin: "0 0 0.75rem", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
-            Download a versioned JSON backup of this project configuration and workflow definitions.
+            Download a versioned JSON copy of this project&apos;s configuration and workflow definitions —
+            useful for moving the project to another installation, or for a snapshot before a large change.
           </p>
           <p style={{ margin: "0 0 1rem", color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.6 }}>
             Includes project metadata, linked repositories, branch configuration, workflows, workflow YAML, status/hash metadata,
@@ -1822,17 +1824,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           <Button variant="outline" onClick={handleExportBackup} disabled={!projectId}>
             ⬇️ Export Project Backup (JSON)
           </Button>
-          <div style={{ marginTop: "1.25rem" }}>
-            <p style={{ margin: "0 0 0.5rem", color: "var(--text-secondary)", fontSize: "0.9rem", fontWeight: 600 }}>
-              Import Project Backup
-            </p>
-            <Button variant="outline" disabled>
-              Import Project Backup
-            </Button>
-            <p style={{ margin: "0.6rem 0 0", color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.6 }}>
-              Import support is planned for a future release. Exported backups are being structured with an import-safe schema now so they can be reused later.
-            </p>
-          </div>
+          <p style={{ margin: "1.25rem 0 0", color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.6 }}>
+            This is a configuration export, not an installation backup — it carries no accounts, credentials,
+            pull request history, or drift state. To back up the whole installation, use{" "}
+            <Link to="/workspace/backup" style={{ color: "var(--link-color, #60a5fa)" }}>Backup</Link>{" "}
+            (workspace admins only).
+          </p>
         </div>
       </div>
     );
@@ -1886,6 +1883,14 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     );
   };
 
+  const renderBuildMetrics = (): React.ReactElement => {
+    const numericProjectId = typeof projectId === 'number' ? projectId : Number(projectId);
+    if (!user || !numericProjectId) {
+      return renderWorkflows();
+    }
+    return <BuildMetricsPanel projectId={numericProjectId} user={user} />;
+  };
+
   // Main section content renderer with reduced complexity
   const renderSectionContent = (): React.ReactElement => {
     if (!projectName) {
@@ -1909,6 +1914,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
             onCampaignStateRefresh={refreshProjectCampaignState}
           />
         ) : renderWorkflows();
+      case 'build-metrics':
+        return renderBuildMetrics();
       case 'project-info':
         return renderProjectInfo();
       case 'linked-workflows':

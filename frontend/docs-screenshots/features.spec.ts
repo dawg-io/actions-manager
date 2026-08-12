@@ -4,6 +4,7 @@ import {
   installApiMocks,
   makeProject,
   makeWorkflow,
+  mockBuildMetricsResponse,
   mockDriftResponse,
   seedAuthenticatedSession,
 } from "../e2e/fixtures/mocks";
@@ -40,9 +41,138 @@ const DOCS_DRIFT_PROJECT = {
   selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
 } as const;
 
+const DOCS_BUILD_METRICS_PROJECT = {
+  project_name: "Payments Platform",
+  project_code: "PAY",
+  github_user: DOCS_USER,
+  last_modified_by: DOCS_USER,
+  updated_at: "2026-07-24T00:00:00Z",
+  pr_state: "synced",
+  selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+} as const;
+
+/** A fortnight of plausible build history: mostly green, with a bad Tuesday
+ *  on deploy-production so the trend and the failures view have something
+ *  real to show. */
+const DOCS_BUILD_METRICS = (() => {
+  // Relative to capture time, not a fixed date: this panel renders *relative*
+  // times ("synced 4 minutes ago"), so a pinned fixture would publish a
+  // screenshot reading "3 weeks ago" the moment it was committed.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const day = (offset: number) => new Date(Date.now() - offset * DAY_MS).toISOString();
+  const trend = Array.from({ length: 14 }, (_, i) => {
+    const offset = 13 - i;
+    const total = [6, 8, 7, 9, 6, 4, 3, 8, 11, 9, 7, 8, 6, 9][i];
+    const failure = offset === 8 ? 4 : [0, 1, 0, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0, 1][i];
+    return { date: day(offset).slice(0, 10), total, success: total - failure, failure };
+  });
+
+  return {
+    summary: {
+      window_days: 30,
+      last_synced: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
+      total_runs: 101,
+      decided_runs: 98,
+      conclusion_counts: { success: 86, failure: 12, cancelled: 3 },
+      success_rate: 87.8,
+      avg_duration_seconds: 268,
+      p50_duration_seconds: 241,
+      p95_duration_seconds: 612,
+      avg_queue_seconds: 14,
+      trend,
+    },
+    workflows: [
+      {
+        workflow_name: "build-and-test",
+        workflow_filename: "build-and-test.yml",
+        total: 68,
+        success_rate: 94.1,
+        avg_duration_seconds: 214,
+        actions_url:
+          "https://github.com/acme-corp/payments-service/actions/workflows/build-and-test.yml",
+      },
+      {
+        workflow_name: "deploy-production",
+        workflow_filename: "deploy-production.yml",
+        total: 33,
+        success_rate: 75.8,
+        avg_duration_seconds: 379,
+        actions_url:
+          "https://github.com/acme-corp/payments-service/actions/workflows/deploy-production.yml",
+      },
+    ],
+    recentRuns: [
+      { github_run_id: 4821, run_number: 214, workflow_name: "build-and-test", repo: "acme-corp/payments-service", branch: "main", conclusion: "success", duration_seconds: 203, created_at: day(0) },
+      { github_run_id: 4820, run_number: 96, workflow_name: "deploy-production", repo: "acme-corp/payments-service", branch: "main", conclusion: "failure", duration_seconds: 412, created_at: day(0) },
+      { github_run_id: 4816, run_number: 213, workflow_name: "build-and-test", repo: "acme-corp/payments-worker", branch: "main", conclusion: "success", duration_seconds: 188, created_at: day(1) },
+      { github_run_id: 4810, run_number: 95, workflow_name: "deploy-production", repo: "acme-corp/payments-service", branch: "release/4.2", conclusion: "success", duration_seconds: 366, created_at: day(1) },
+      { github_run_id: 4804, run_number: 212, workflow_name: "build-and-test", repo: "acme-corp/payments-service", branch: "main", conclusion: "success", duration_seconds: 221, created_at: day(2) },
+    ],
+    scoped: {
+      "deploy-production.yml": {
+        total_runs: 33,
+        decided_runs: 33,
+        conclusion_counts: { success: 25, failure: 8 },
+        success_rate: 75.8,
+        avg_duration_seconds: 379,
+        p50_duration_seconds: 361,
+        p95_duration_seconds: 640,
+        avg_queue_seconds: 22,
+        // The real endpoint scopes the trend too. Without this the published
+        // image would show the project-wide chart under a scoped heading.
+        trend: Array.from({ length: 14 }, (_, i) => {
+          const total = [2, 3, 2, 3, 2, 1, 1, 2, 4, 3, 2, 3, 2, 3][i];
+          const failure = [0, 1, 0, 0, 1, 0, 0, 0, 3, 0, 1, 0, 0, 2][i];
+          return { date: day(13 - i).slice(0, 10), total, success: total - failure, failure };
+        }),
+        recent_runs: [
+          { github_run_id: 4820, run_number: 96, workflow_name: "deploy-production", repo: "acme-corp/payments-service", branch: "main", event: "push", status: "completed", conclusion: "failure", duration_seconds: 412, created_at: day(0), html_url: "https://github.com/acme-corp/payments-service/actions/runs/4820" },
+          { github_run_id: 4810, run_number: 95, workflow_name: "deploy-production", repo: "acme-corp/payments-service", branch: "release/4.2", event: "push", status: "completed", conclusion: "success", duration_seconds: 366, created_at: day(1), html_url: "https://github.com/acme-corp/payments-service/actions/runs/4810" },
+          { github_run_id: 4795, run_number: 94, workflow_name: "deploy-production", repo: "acme-corp/payments-service", branch: "main", event: "workflow_dispatch", status: "completed", conclusion: "success", duration_seconds: 344, created_at: day(3), html_url: "https://github.com/acme-corp/payments-service/actions/runs/4795" },
+        ],
+      },
+    },
+  };
+})();
+
 test.describe("docs screenshots", () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthenticatedSession(page, DOCS_USER);
+  });
+
+  test("workspace backup page", async ({ page }) => {
+    await installApiMocks(page, createMockState());
+    await seedDocsUserProfile(page);
+    await page.route("**/api/workspace/backup/info", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          backup_format_version: "1.0",
+          table_count: 31,
+          total_rows: 1284,
+          tables: {
+            accounts: 12,
+            projects: 8,
+            repos: 46,
+            workflows: 122,
+            workflow_versions: 940,
+            project_workflows: 122,
+            rulesets: 6,
+            codeowners: 8,
+            custom_files: 14,
+            project_pull_requests: 6,
+          },
+          excluded_tables: ["auth_sessions"],
+        }),
+      })
+    );
+
+    await page.goto("/workspace/backup");
+    await page.getByText(/1284 row\(s\)/).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/backup-restore/workspace-backup.png" });
   });
 
   test("workflow editor page view", async ({ page }) => {
@@ -375,5 +505,183 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({ path: "../docs/assets/screenshots/notifications/notifications-settings.png" });
+  });
+
+  test("build metrics — project overview", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_BUILD_METRICS_PROJECT,
+      workflows: [
+        makeWorkflow({ name: "build-and-test.yml", lastModifiedBy: DOCS_USER }),
+        makeWorkflow({ name: "deploy-production.yml", lastModifiedBy: DOCS_USER }),
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+    await mockDriftResponse(page, { lastChecked: DOCS_LAST_CHECKED });
+    await mockBuildMetricsResponse(page, DOCS_BUILD_METRICS);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page.getByRole("button", { name: "Build Metrics" }).click();
+    await page.getByTestId("build-metrics-trend").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/build-metrics/build-metrics-overview.png" });
+  });
+
+  test("build metrics — scoped to one workflow", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_BUILD_METRICS_PROJECT,
+      workflows: [makeWorkflow({ name: "deploy-production.yml", lastModifiedBy: DOCS_USER })],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+    await mockDriftResponse(page, { lastChecked: DOCS_LAST_CHECKED });
+    await mockBuildMetricsResponse(page, DOCS_BUILD_METRICS);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page.getByRole("button", { name: "Build Metrics" }).click();
+    await page.getByTestId("build-metrics-workflow-filter").waitFor({ timeout: 15000 });
+    await page
+      .getByTestId("build-metrics-workflow-filter")
+      .selectOption("deploy-production.yml");
+    await page.getByText("Last 30 days · deploy-production").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/build-metrics/build-metrics-by-workflow.png" });
+  });
+});
+
+/**
+ * First-boot restore scenes.
+ *
+ * Deliberately outside the describe above: that block seeds an authenticated
+ * session in beforeEach, and these shots are of the sign-in screen, before any
+ * account exists.
+ */
+test.describe("docs screenshots — first-boot restore", () => {
+  const REPORT_BODY = {
+    upload_token: "docs",
+    ok: true,
+    errors: [],
+    warnings: [],
+    total_rows: 1284,
+    tables: {
+      accounts: 12,
+      projects: 8,
+      repos: 46,
+      workflows: 122,
+      workflow_versions: 940,
+      project_workflows: 122,
+      rulesets: 6,
+      codeowners: 8,
+      custom_files: 14,
+      project_pull_requests: 6,
+    },
+    app_version: "1.0.0",
+    created_at: "2026-08-11T18:30:00+00:00",
+    dialect: "postgresql",
+  };
+
+  const backupFile = {
+    name: "actionsmanager-backup-2026-08-11.tar.gz",
+    mimeType: "application/gzip",
+    buffer: Buffer.from("archive-bytes"),
+  };
+
+  async function uninitialisedInstall(page: import("@playwright/test").Page) {
+    await installApiMocks(page, createMockState());
+    await page.route("**/api/setup/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ uninitialized: true }),
+      })
+    );
+  }
+
+  async function mockReport(page: import("@playwright/test").Page, warnings: string[]) {
+    await page.route("**/api/setup/restore/validate", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...REPORT_BODY, warnings }),
+      })
+    );
+  }
+
+
+  test("sign-in screen offering restore", async ({ page }) => {
+    await uninitialisedInstall(page);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /restore from a backup/i }).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-prompt.png",
+    });
+  });
+
+  test("restore report before confirming", async ({ page }) => {
+    await uninitialisedInstall(page);
+    await mockReport(page, []);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /restore from a backup/i }).click();
+    await page.getByLabel(/backup archive/i).setInputFiles(backupFile);
+    await page.getByText(/1284 row\(s\)/).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-report.png",
+    });
+  });
+
+  test("restore report warning about a different SECRET_KEY", async ({ page }) => {
+    await uninitialisedInstall(page);
+    await mockReport(page, [
+      "SECRET_KEY differs from the one this backup was written under. Saved personal access tokens will not decrypt and must be re-entered after restoring.",
+    ]);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /restore from a backup/i }).click();
+    await page.getByLabel(/backup archive/i).setInputFiles(backupFile);
+    await page.getByText(/SECRET_KEY differs/).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-warning.png",
+    });
+  });
+
+  test("restore complete", async ({ page }) => {
+    await uninitialisedInstall(page);
+    await mockReport(page, []);
+    await page.route("**/api/setup/restore/apply", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          restored_rows: 1284,
+          restored_tables: 31,
+          skipped_tables: [],
+          warnings: [],
+          migrations_ran: true,
+        }),
+      })
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /restore from a backup/i }).click();
+    await page.getByLabel(/backup archive/i).setInputFiles(backupFile);
+    await page.getByText(/1284 row\(s\)/).waitFor({ timeout: 15000 });
+    await page.getByLabel(/type restore to confirm/i).fill("restore");
+    await page.getByRole("button", { name: /restore this backup/i }).click();
+    await page.getByText(/restore complete/i).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-complete.png",
+    });
   });
 });
