@@ -35,7 +35,7 @@ of running with weakened billing/security guarantees.
 
 ## Overview
 
-ActionsManager.xyz supports two distinct deployment configurations optimized for different use cases:
+ActionsManager supports two distinct deployment configurations optimized for different use cases:
 
 | Aspect | Self-Hosted | Cloud |
 |--------|-------------|-------|

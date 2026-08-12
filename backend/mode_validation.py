@@ -1,5 +1,5 @@
 """
-Strict runtime mode validation for ActionsManager.xyz.
+Strict runtime mode validation for ActionsManager.
 
 This module is the single source of truth for deployment-mode-specific
 configuration rules. It is invoked at application startup and **fails closed**

@@ -1,5 +1,5 @@
 """
-Configuration Module for ActionsManager.xyz
+Configuration Module for ActionsManager
 
 Handles application configuration including installation mode detection.
 """

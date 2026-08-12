@@ -310,7 +310,7 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
                         🏠 Database Only
                       </strong>
                       <p className="text-slate-600 text-sm leading-relaxed dark:text-slate-400">
-                        Remove the project from ActionsManager.xyz database only. All GitHub resources (workflows, secrets, environments) will remain untouched in your repositories.
+                        Remove the project from ActionsManager database only. All GitHub resources (workflows, secrets, environments) will remain untouched in your repositories.
                       </p>
                     </div>
                   </label>

@@ -6,7 +6,7 @@ This guide explains environment variables used by Actions Manager. The first pub
 
 ### Deployment Modes
 
-ActionsManager.xyz supports two distinct deployment modes, each with different environment variable requirements:
+ActionsManager supports two distinct deployment modes, each with different environment variable requirements:
 
 | Aspect | Self-Hosted | Cloud |
 |--------|-------------|-------|

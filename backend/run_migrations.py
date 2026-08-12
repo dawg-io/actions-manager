@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Master migration script for ActionsManager.xyz database schema updates.
+Master migration script for ActionsManager database schema updates.
 
 This script runs all necessary database migrations to ensure the database schema
 is up to date with the application models.
@@ -100,7 +100,7 @@ def run_migration_script(script_path):
 def main():
     """Run all necessary database migrations in order."""
     print("="*60)
-    print("ActionsManager.xyz Database Migration Tool")
+    print("ActionsManager Database Migration Tool")
     print("="*60)
     
     db_type = get_database_type()

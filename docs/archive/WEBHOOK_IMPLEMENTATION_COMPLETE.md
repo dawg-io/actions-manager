@@ -1,7 +1,7 @@
 # GitHub Marketplace Webhook Event Handlers - Implementation Summary
 
 ## Overview
-This document summarizes the complete implementation of GitHub Marketplace webhook event handlers for the ActionsManager.xyz application.
+This document summarizes the complete implementation of GitHub Marketplace webhook event handlers for the ActionsManager application.
 
 ## What Was Already Implemented
 The codebase already had a comprehensive marketplace webhook implementation that was discovered during the assessment phase:

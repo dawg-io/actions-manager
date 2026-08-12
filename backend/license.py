@@ -1,5 +1,5 @@
 """
-License Key Validation Module for ActionsManager.xyz
+License Key Validation Module for ActionsManager
 
 Provides JWT-based license key validation for self-hosted installations.
 Validates license tier and expiration without requiring network calls.

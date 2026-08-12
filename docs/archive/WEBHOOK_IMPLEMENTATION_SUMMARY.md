@@ -1,7 +1,7 @@
 # GitHub Marketplace Webhook Implementation Summary
 
 ## Overview
-This implementation adds comprehensive GitHub Marketplace webhook support to ActionsManager.xyz, enabling automatic billing plan management and subscription handling as required for GitHub Marketplace app compliance.
+This implementation adds comprehensive GitHub Marketplace webhook support to ActionsManager, enabling automatic billing plan management and subscription handling as required for GitHub Marketplace app compliance.
 
 ## ✅ Acceptance Criteria Met
 

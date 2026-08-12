@@ -1,5 +1,5 @@
 """
-Tier Service for ActionsManager.xyz
+Tier Service for ActionsManager
 
 Provides centralized tier enforcement logic that integrates:
 - Installation mode (self-hosted with license keys or cloud with marketplace)

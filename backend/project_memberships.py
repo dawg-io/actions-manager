@@ -1,5 +1,5 @@
 """
-Project Memberships Router for ActionsManager.xyz
+Project Memberships Router for ActionsManager
 
 Provides API endpoints for managing project-level access control:
 - GET    /api/projects/{project_id}/members          — List members of a project

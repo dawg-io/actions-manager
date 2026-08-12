@@ -245,7 +245,7 @@ def test_export_project_backup_success_includes_expected_shape(setup_database):
     assert payload["metadata"]["source_metadata"]["project_id"] == project_id
     assert payload["metadata"]["project_name"] == "Backup Project"
     assert payload["metadata"]["exported_by"] == "owner-user"
-    assert payload["metadata"]["app_name"] == "ActionsManager.xyz"
+    assert payload["metadata"]["app_name"] == "ActionsManager"
     assert payload["metadata"]["app_version"] == "1.0.0"
     assert payload["import_policy"]["id_strategy"] == "remap"
     assert payload["import_policy"]["github_sync_strategy"] == "verify_after_import"

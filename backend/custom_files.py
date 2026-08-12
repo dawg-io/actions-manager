@@ -1,5 +1,5 @@
 """
-Custom Files API for ActionsManager.xyz
+Custom Files API for ActionsManager
 
 Manages workflow-adjacent text files (scripts, action definitions, config
 files, etc.) at the project level.  Custom files are deployed to every

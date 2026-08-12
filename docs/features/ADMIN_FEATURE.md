@@ -1,6 +1,6 @@
 # Admin Users Page
 
-This feature adds an administrative interface to view and manage user accounts in ActionsManager.xyz.
+This feature adds an administrative interface to view and manage user accounts in ActionsManager.
 
 ## Features
 

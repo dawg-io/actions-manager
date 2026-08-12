@@ -1,6 +1,6 @@
 # License Key Validation for Self-Hosted Installations
 
-This document explains how to use JWT-based license key validation for self-hosted installations of ActionsManager.xyz.
+This document explains how to use JWT-based license key validation for self-hosted installations of ActionsManager.
 
 ## Overview
 
@@ -54,7 +54,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 You should see output like:
 ```
 ============================================================
-🚀 ActionsManager.xyz API Starting
+🚀 ActionsManager API Starting
 📦 Installation Mode: self-hosted
 🔑 License Tier: professional
 ============================================================

@@ -1,5 +1,5 @@
 """
-GitHub Permission Management Module for ActionsManager.xyz
+GitHub Permission Management Module for ActionsManager
 
 This module defines and validates GitHub OAuth scopes and permissions required
 for the application to function correctly. It provides:
