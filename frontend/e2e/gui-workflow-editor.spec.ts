@@ -198,3 +198,113 @@ test.describe("GUI workflow editor — step detail panel", () => {
     await expect(panel(page)).toContainText("Select a step to edit it.");
   });
 });
+
+/**
+ * The editor's chrome: the toolbar's control cluster and the expanded
+ * (pop-out) surface.
+ *
+ * These live here rather than in a jsdom unit test because they assert things
+ * jsdom cannot model: real stacking against the fixed sidebar, real layout
+ * geometry, and Radix's real dismiss behaviour under an actual mouse.
+ */
+test.describe("GUI workflow editor — toolbar and expanded surface", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedAuthenticatedSession(page);
+    await installApiMocks(
+      page,
+      createMockState({ projects: [makeProject({ project_name: PROJECT, workflows: [SAMPLE_WORKFLOW] })] })
+    );
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await openGuiEditor(page);
+  });
+
+  test("the editor controls sit as one right-aligned cluster", async ({ page }) => {
+    // Two competing margin-left:auto used to split the row's free space and
+    // strand the mode toggle in the middle of the page.
+    const cluster = page.locator(".workflow-editor-controls");
+    const row = page.locator(".workflow-toolbar-status");
+
+    const c = (await cluster.boundingBox())!;
+    const r = (await row.boundingBox())!;
+    const rightGap = r.x + r.width - (c.x + c.width);
+
+    expect(rightGap).toBeLessThan(40);
+    expect(c.x - r.x).toBeGreaterThan(rightGap);
+  });
+
+  test("the Expand icon sits beside its label, not above it", async ({ page }) => {
+    // .mode-btn declared no display, so the button stayed inline-block while
+    // Tailwind preflight sets svg{display:block} - which stacked them.
+    const box = (await page.getByRole("button", { name: /Expand/ }).boundingBox())!;
+    expect(box.height).toBeLessThan(40);
+  });
+
+  test("the expanded editor covers the fixed sidebar", async ({ page }) => {
+    await page.getByRole("button", { name: /Expand/ }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    const box = (await dialog.boundingBox())!;
+    expect(box.x).toBe(0);
+    expect(box.width).toBe(1600);
+
+    // .sidebar is position:fixed z-index:1000; the dialog has to win.
+    const owner = await page.evaluate(() =>
+      document.elementFromPoint(60, 300)?.closest(".sidebar") ? "sidebar" : "dialog"
+    );
+    expect(owner).toBe("dialog");
+  });
+
+  // Deliberately no "outside click" test here. The dialog is inset-0 w-screen
+  // h-screen, so every coordinate is inside it and Radix's dismiss layer has
+  // no reachable outside surface to fire from - any such test passes whether
+  // or not the guards exist. The dismissal contract is covered in jsdom
+  // (UnifiedWorkflowEditor.test.tsx, "does NOT close on an outside click"),
+  // where the events can be dispatched directly and the test genuinely fails
+  // without onPointerDownOutside/onInteractOutside.
+
+  test("Escape deselects a step before it collapses the editor", async ({ page }) => {
+    // Radix listens for Escape at the document in the CAPTURE phase, so it
+    // always beats the step panel's own bubble listener - the dialog has to
+    // stand down explicitly rather than rely on stopPropagation.
+    await page.getByRole("button", { name: /Expand/ }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    await dialog.locator('[id^="step-row-"]').first().click();
+    await expect(dialog.locator('[data-step-selected="true"]')).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    // First press deselects; the editor stays expanded.
+    await expect(dialog.locator('[data-step-selected="true"]')).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+
+    // Second press, nothing selected, collapses it.
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+
+  test("expanded YAML fills the dialog instead of staying 400px", async ({ page }) => {
+    // YAMLEditor's height default is an inline style, so without an explicit
+    // override the expanded view showed a short editor in a 100vh dialog.
+    await page.getByRole("button", { name: "YAML", exact: true }).click();
+    await page.getByRole("button", { name: /Expand/ }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    const box = (await page.getByTestId("yaml-editor").boundingBox())!;
+    expect(box.height).toBeGreaterThan(600);
+  });
+
+  test("expanding does not duplicate step row ids", async ({ page }) => {
+    const before = await page.locator('[id^="step-row-"]').count();
+    expect(before).toBeGreaterThan(0);
+
+    await page.getByRole("button", { name: /Expand/ }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    // One surface is mounted at a time, so the count must not double.
+    expect(await page.locator('[id^="step-row-"]').count()).toBe(before);
+  });
+});

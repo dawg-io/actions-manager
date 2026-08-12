@@ -1,18 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FileText, FilePlus2, Upload } from 'lucide-react';
+import { FileText, FilePlus2, Upload, Maximize2, X } from 'lucide-react';
 import { Button } from './ui/button';
 import YAMLEditor from './YAMLEditor';
 import type { WorkflowDiagnostic, YamlEditorHandle } from './YAMLEditor';
 import WorkflowResourcePicker from './WorkflowResourcePicker';
 import { WorkflowResourcesProvider, useWorkflowResources } from './WorkflowResourcesContext';
 import ValidationPanel from './ValidationPanel';
-import ReusableGUIWorkflowEditor from './ReusableGUIWorkflowEditor';
 import GUIWorkflowEditor from './GUIWorkflowEditor';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import OpenInGitHubModal from './OpenInGitHubModal';
 import EditableNameField from './EditableNameField';
 import WorkflowStatusBadge, { WorkflowStatus } from './WorkflowStatusBadge';
 import ConfirmDialog from './ConfirmDialog';
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { WorkflowGUI, guiToYaml } from '../utils/workflowGuiConversion';
 import { UnifiedWorkflowItem, ProjectPRState } from '../types/workflow';
 import { ActionsProject } from '../api/actionsProjects';
@@ -174,6 +174,8 @@ interface WorkflowEditorHeaderProps {
   onShowVersionHistory: () => void;
   /** Inserts a resource reference at the YAML editor's caret. */
   onInsertResource?: (text: string) => void;
+  /** Opens the full-screen GUI editing surface. */
+  onExpand?: () => void;
 }
 
 interface WorkflowEditorContentProps {
@@ -181,6 +183,8 @@ interface WorkflowEditorContentProps {
   editMode: 'yaml' | 'gui';
   disableEditing?: boolean;
   yamlEditorRef?: React.Ref<YamlEditorHandle>;
+  /** Passed through to YAMLEditor; omit to keep its own default. */
+  height?: string;
   regularGuiWorkflow: WorkflowGUI;
   guiWorkflow: WorkflowGUI;
   handleWorkflowChange: (field: string, value: string) => void;
@@ -209,7 +213,8 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   onUnlinkWorkflow,
   setEditMode,
   onShowVersionHistory,
-  onInsertResource
+  onInsertResource,
+  onExpand
 }) => {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [githubModalOpen, setGithubModalOpen] = useState(false);
@@ -604,46 +609,84 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
             </div>
           )}
 
-          {/* Editor mode toggle */}
-          {!isLinked && (
-            <div className="editor-mode-selector">
-              <span className="mode-label">Editor:</span>
-              <button
-                className={`mode-btn ${editMode === 'yaml' ? 'mode-btn-active' : ''}`}
-                onClick={() => setEditMode('yaml')}
-                disabled={isReadOnly || isLocked}
-                title={isReadOnly ? readOnlyTooltip : 'YAML editor'}
-              >
-                YAML
-              </button>
-              <span className="mode-separator">|</span>
-              <button
-                className={`mode-btn ${editMode === 'gui' ? 'mode-btn-active' : ''}`}
-                onClick={() => setEditMode('gui')}
-                disabled={isReadOnly || isLocked}
-                title={isReadOnly ? readOnlyTooltip : 'GUI editor'}
-              >
-                GUI
-              </button>
-            </div>
-          )}
+          {/* One right-aligned cluster for everything interactive in this row.
+              Previously the mode selector and the Help link each carried their
+              own margin-left:auto; flex splits free space across every auto
+              margin, so the selector ended up stranded mid-row rather than
+              grouped with the other controls. */}
+          <div className="workflow-editor-controls">
+            {/* Editor mode toggle */}
+            {!isLinked && (
+              <div className="editor-mode-selector">
+                <span className="mode-label" aria-hidden="true">Editor:</span>
+                {/* role=group + aria-pressed rather than a bare pair of
+                    buttons: selection used to be conveyed by colour alone, so
+                    assistive tech heard two identical unlabelled buttons. */}
+                {/* fieldset + sr-only legend, not role="group": a native
+                    grouping element (same pattern as StepFields). */}
+                <fieldset className="mode-switch">
+                  <legend className="sr-only">Editor mode</legend>
+                  <button
+                    type="button"
+                    aria-pressed={editMode === 'yaml'}
+                    className={`mode-btn ${editMode === 'yaml' ? 'mode-btn-active' : ''}`}
+                    onClick={() => setEditMode('yaml')}
+                    disabled={isReadOnly || isLocked}
+                    title={isReadOnly ? readOnlyTooltip : 'YAML editor'}
+                  >
+                    YAML
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={editMode === 'gui'}
+                    className={`mode-btn ${editMode === 'gui' ? 'mode-btn-active' : ''}`}
+                    onClick={() => setEditMode('gui')}
+                    disabled={isReadOnly || isLocked}
+                    title={isReadOnly ? readOnlyTooltip : 'GUI editor'}
+                  >
+                    GUI
+                  </button>
+                </fieldset>
+              </div>
+            )}
 
-          {/* Insert an existing project secret, variable or environment at the
-              caret. Only offered while the YAML editor is actually editable. */}
-          {showResourcePicker && (
-            <WorkflowResourcePicker onInsert={onInsertResource!} variant="toolbar" />
-          )}
+            {/* Expand the editor into a full-screen surface. Offered in both
+                modes so the control keeps its place when switching between
+                them. Styled to match WorkflowResourcePicker's toolbar
+                variant, its neighbour. Not offered while locked: the lock
+                overlay's "Unlock to Edit" opens a non-Radix modal rendered
+                outside the dialog, below its z-index and behind
+                body{pointer-events:none}, so it would be a dead control.
+                Read-only is fine - that overlay is static. */}
+            {!isLinked && !isLocked && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text-secondary hover:bg-hover-bg disabled:opacity-50 dark:border-border-dark dark:text-text-secondary-dark dark:hover:bg-hover-dark-bg"
+                onClick={onExpand}
+                title="Expand the editor to full screen"
+              >
+                <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                Expand
+              </button>
+            )}
 
-          {/* Docs link */}
-          <a
-            className="docs-help-link"
-            href={getDocsUrl("workflows")}
-            rel="noreferrer"
-            target="_blank"
-            title="Open workflow editor documentation"
-          >
-            Help
-          </a>
+            {/* Insert an existing project secret, variable or environment at the
+                caret. Only offered while the YAML editor is actually editable. */}
+            {showResourcePicker && (
+              <WorkflowResourcePicker onInsert={onInsertResource!} variant="toolbar" />
+            )}
+
+            {/* Docs link */}
+            <a
+              className="docs-help-link"
+              href={getDocsUrl("workflows")}
+              rel="noreferrer"
+              target="_blank"
+              title="Open workflow editor documentation"
+            >
+              Help
+            </a>
+          </div>
         </div>
       </div>
 
@@ -665,6 +708,7 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
   editMode,
   disableEditing = false,
   yamlEditorRef,
+  height,
   regularGuiWorkflow,
   guiWorkflow,
   handleWorkflowChange,
@@ -691,6 +735,7 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
         <YAMLEditor
           key={selectedWorkflow.id}
           ref={yamlEditorRef}
+          {...(height ? { height } : {})}
           resources={resources}
           value={selectedWorkflow.content || ''}
           onChange={(value: string) => {
@@ -730,24 +775,187 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
     }
   };
 
-  return isRegular ? (
+  // Keyed on kind as well as id: regular and reusable workflows number their
+  // ids separately, so id alone no longer forces a remount when switching
+  // between the two now that both render the same component.
+  return (
     <GUIWorkflowEditor
-      key={selectedWorkflow.id}
-      workflow={regularGuiWorkflow}
-      onChange={handleGUIChange}
-      importedActions={importedActions}
-      actionGroups={actionGroups}
-    />
-  ) : (
-    <ReusableGUIWorkflowEditor
-      key={selectedWorkflow.id}
-      workflow={guiWorkflow}
+      key={`${isRegular ? 'regular' : 'reusable'}-${selectedWorkflow.id}`}
+      variant={isRegular ? 'regular' : 'reusable'}
+      workflow={isRegular ? regularGuiWorkflow : guiWorkflow}
       onChange={handleGUIChange}
       importedActions={importedActions}
       actionGroups={actionGroups}
     />
   );
 };
+
+interface EditorSurfaceProps {
+  selectedWorkflow: UnifiedWorkflowItem;
+  editMode: 'yaml' | 'gui';
+  isReadOnly: boolean;
+  showLockOverlay: boolean;
+  /** Drives the YAML editor's height; see the note on the height prop below. */
+  expanded: boolean;
+  yamlEditorRef: React.Ref<YamlEditorHandle>;
+  regularGuiWorkflow: WorkflowGUI;
+  guiWorkflow: WorkflowGUI;
+  handleWorkflowChange: (field: string, value: string) => void;
+  setRegularGuiWorkflow: (workflow: WorkflowGUI) => void;
+  setGuiWorkflow: (workflow: WorkflowGUI) => void;
+  importedActions: ActionsProject[];
+  actionGroups: ActionGroup[];
+  onRequestUnlock: () => void;
+}
+
+/**
+ * The editor plus its lock/read-only overlays.
+ *
+ * Rendered either inline or inside the expanded dialog - never both, or the
+ * step-row DOM ids collide. A component rather than inline JSX so that
+ * UnifiedWorkflowEditor stays under SonarQube's cognitive-complexity ceiling.
+ */
+const EditorSurface: React.FC<EditorSurfaceProps> = ({
+  selectedWorkflow,
+  editMode,
+  isReadOnly,
+  showLockOverlay,
+  expanded,
+  yamlEditorRef,
+  regularGuiWorkflow,
+  guiWorkflow,
+  handleWorkflowChange,
+  setRegularGuiWorkflow,
+  setGuiWorkflow,
+  importedActions,
+  actionGroups,
+  onRequestUnlock,
+}) => (
+    <div className="workflow-editor-content workflow-editor-content--lockable">
+      <WorkflowEditorContent
+        selectedWorkflow={selectedWorkflow}
+        editMode={editMode}
+        disableEditing={isReadOnly || showLockOverlay}
+        yamlEditorRef={yamlEditorRef}
+        // The default 400px is an inline style and would strand a short
+        // editor in a 100vh dialog; percentage resolves against h-screen.
+        height={expanded ? '100%' : undefined}
+        regularGuiWorkflow={regularGuiWorkflow}
+        guiWorkflow={guiWorkflow}
+        handleWorkflowChange={handleWorkflowChange}
+        setRegularGuiWorkflow={setRegularGuiWorkflow}
+        setGuiWorkflow={setGuiWorkflow}
+        importedActions={importedActions}
+        actionGroups={actionGroups}
+      />
+      {showLockOverlay && (
+        <div className="workflow-lock-overlay" data-testid="workflow-lock-overlay">
+          <button
+            className="workflow-lock-btn"
+            onClick={onRequestUnlock}
+            title="This workflow has an open pull request. Click to unlock editing."
+            data-testid="unlock-workflow-button"
+          >
+            <span className="workflow-lock-icon">🔒</span>
+            <span className="workflow-lock-label">Unlock to Edit</span>
+          </button>
+        </div>
+      )}
+      {isReadOnly && !showLockOverlay && (
+        <div className="workflow-lock-overlay">
+          <div className="workflow-lock-btn workflow-lock-btn-static" role="status" aria-live="polite" tabIndex={0}>
+            <span className="workflow-lock-icon">🔒</span>
+            <span className="workflow-lock-label workflow-lock-label-strong">Read Only Mode</span>
+            <span className="workflow-lock-label">You can view workflows but cannot make changes.</span>
+          </div>
+        </div>
+      )}
+    </div>
+);
+
+interface ExpandedEditorDialogProps {
+  open: boolean;
+  title: string;
+  onRequestCollapse: () => void;
+  showResourcePicker: boolean;
+  onInsertResource: (text: string) => void;
+  children: React.ReactNode;
+}
+
+/**
+ * Full-screen editing surface.
+ *
+ * Extracted from UnifiedWorkflowEditor to keep that component under
+ * SonarQube's cognitive-complexity ceiling; it owns no state, it is the
+ * dialog's markup and its deliberate refusal to self-dismiss.
+ */
+const ExpandedEditorDialog: React.FC<ExpandedEditorDialogProps> = ({
+  open,
+  title,
+  onRequestCollapse,
+  showResourcePicker,
+  onInsertResource,
+  children,
+}) => (
+  <Dialog open={open} onOpenChange={(next) => { if (!next) onRequestCollapse(); }}>
+    <DialogContent
+      hideClose
+      // Deliberately undismissable. Radix closes on outside pointer-down
+      // and Escape by default; both are cancelled here so the only way out
+      // is the explicit control below, which runs the unsaved-work check.
+      onPointerDownOutside={(e) => e.preventDefault()}
+      onInteractOutside={(e) => e.preventDefault()}
+      onEscapeKeyDown={(e) => {
+        e.preventDefault();
+        // The step panel owns Escape while a step is selected. Radix runs at
+        // document capture, before the panel's own bubble listener, so the
+        // panel cannot stop us - we stand down instead.
+        if (document.querySelector('[data-step-selected="true"]')) return;
+        onRequestCollapse();
+      }}
+      aria-label="Expanded workflow editor"
+      className="flex h-screen w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 inset-0 left-0 top-0 rounded-none p-0"
+    >
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2 dark:border-border-dark">
+        <DialogTitle className="text-sm font-semibold text-text-primary dark:text-text-primary-dark">
+          {title}
+        </DialogTitle>
+        <div className="flex items-center gap-2">
+          {/* The toolbar's own copy is behind the overlay while expanded.
+              Without this, deployment environments become unreachable -
+              they are picker-only, unlike secrets and variables which the
+              editor also offers as ${{ }} autocomplete. */}
+          {showResourcePicker && (
+            <WorkflowResourcePicker onInsert={onInsertResource} variant="toolbar" />
+          )}
+          <button
+            type="button"
+            onClick={onRequestCollapse}
+            aria-label="Collapse editor"
+            className="rounded-md p-1 text-text-secondary hover:bg-hover-bg dark:text-text-secondary-dark dark:hover:bg-hover-dark-bg"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      {/* The portal escapes .workflow-editor-content, which supplied the
+          scrolling for the inline layout - so it has to be re-supplied. */}
+      <div
+        // Capped and centred: the point of expanding is a wider step
+        // panel, not 2000px-wide text inputs, which are harder to read
+        // than the cramped ones this replaces. flex column + min-h-0 so a
+        // percentage-height YAML editor resolves against the dialog.
+        // --step-panel-max-h is set as an arbitrary-property utility rather
+        // than an inline style, which the Tailwind-only policy forbids. Dialog
+        // chrome is its own header plus this padding, not the page header the
+        // panel's default assumes. See StepDetailPanel.
+        className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col overflow-y-auto p-4 [--step-panel-max-h:calc(100vh-6rem)]"
+      >
+        {children}
+      </div>
+    </DialogContent>
+  </Dialog>
+);
 
 const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   selectedWorkflow,
@@ -783,16 +991,37 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ index: number; type: 'regular' | 'reusable'; name: string } | null>(null);
   const [pendingUnlink, setPendingUnlink] = useState<{ workflowId: number; name: string } | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [pendingCollapse, setPendingCollapse] = useState(false);
+
+  // Every close path funnels through here. Nothing dismisses the expanded
+  // editor implicitly - no backdrop click, no focus loss - because the work in
+  // it is unsaved by definition and people have lost drafts to that pattern.
+  const requestCollapse = () => {
+    if (selectedWorkflow?.isModified) {
+      setPendingCollapse(true);
+      return;
+    }
+    setIsExpanded(false);
+  };
   const yamlEditorRef = useRef<YamlEditorHandle>(null);
 
   const handleInsertResource = React.useCallback((text: string) => {
     yamlEditorRef.current?.insertAtCursor(text);
   }, []);
 
-  // Reset lock state whenever the selected workflow changes
+  // Reset per-workflow view state whenever the selected workflow changes.
+  // isExpanded belongs here too: ids are positional (`regular-${index}`), so a
+  // refetch or reorder can swap the workflow underneath an open dialog - which
+  // would silently change what's being edited without the unsaved-changes gate
+  // ever running for the workflow the user was actually in. If the selection
+  // goes null the dialog unmounts, and a stale `true` would make the next
+  // workflow the user picks open full-screen unasked.
   useEffect(() => {
     setIsUnlocked(false);
     setShowUnlockModal(false);
+    setIsExpanded(false);
+    setPendingCollapse(false);
   }, [selectedWorkflow?.id]);
 
   const handleShowVersionHistory = () => {
@@ -877,6 +1106,35 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   const showLockOverlay = selectedWorkflow?.workflowStatus === 'under_review' && !isUnlocked;
   const isUnlockedPR = isUnlocked && selectedWorkflow?.workflowStatus === 'under_review';
 
+  // Mirrors WorkflowEditorHeader's own showResourcePicker: that one is scoped
+  // to the header, and the expanded dialog needs the same decision.
+  const showResourcePicker =
+    !isReadOnly &&
+    !showLockOverlay &&
+    (editMode === 'yaml' || selectedWorkflow?.type === 'linked');
+
+  // Single instance, rendered either inline or inside the expanded dialog.
+  // Carries its own lock/read-only overlays so the expanded view isn't an
+  // editable-looking surface with no lock affordance.
+  const editorSurface = (
+    <EditorSurface
+      selectedWorkflow={selectedWorkflow}
+      editMode={editMode}
+      isReadOnly={isReadOnly}
+      showLockOverlay={showLockOverlay}
+      expanded={isExpanded}
+      yamlEditorRef={yamlEditorRef}
+      regularGuiWorkflow={regularGuiWorkflow}
+      guiWorkflow={guiWorkflow}
+      handleWorkflowChange={handleWorkflowChange}
+      setRegularGuiWorkflow={setRegularGuiWorkflow}
+      setGuiWorkflow={setGuiWorkflow}
+      importedActions={importedActions}
+      actionGroups={actionGroups}
+      onRequestUnlock={() => setShowUnlockModal(true)}
+    />
+  );
+
   return (
     <WorkflowResourcesProvider
       user={user}
@@ -906,45 +1164,47 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
           setEditMode={setEditMode}
           onShowVersionHistory={handleShowVersionHistory}
           onInsertResource={handleInsertResource}
+          onExpand={() => setIsExpanded(true)}
         />
-        <div className="workflow-editor-content workflow-editor-content--lockable">
-          <WorkflowEditorContent
-            selectedWorkflow={selectedWorkflow}
-            editMode={editMode}
-            disableEditing={isReadOnly || showLockOverlay}
-            yamlEditorRef={yamlEditorRef}
-            regularGuiWorkflow={regularGuiWorkflow}
-            guiWorkflow={guiWorkflow}
-            handleWorkflowChange={handleWorkflowChange}
-            setRegularGuiWorkflow={setRegularGuiWorkflow}
-            setGuiWorkflow={setGuiWorkflow}
-            importedActions={importedActions}
-            actionGroups={actionGroups}
-          />
-          {showLockOverlay && (
-            <div className="workflow-lock-overlay" data-testid="workflow-lock-overlay">
-              <button
-                className="workflow-lock-btn"
-                onClick={() => setShowUnlockModal(true)}
-                title="This workflow has an open pull request. Click to unlock editing."
-                data-testid="unlock-workflow-button"
-              >
-                <span className="workflow-lock-icon">🔒</span>
-                <span className="workflow-lock-label">Unlock to Edit</span>
-              </button>
-            </div>
-          )}
-          {isReadOnly && !showLockOverlay && (
-            <div className="workflow-lock-overlay">
-              <div className="workflow-lock-btn workflow-lock-btn-static" role="status" aria-live="polite" tabIndex={0}>
-                <span className="workflow-lock-icon">🔒</span>
-                <span className="workflow-lock-label workflow-lock-label-strong">Read Only Mode</span>
-                <span className="workflow-lock-label">You can view workflows but cannot make changes.</span>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Mounted here OR in the expanded dialog, never both. Two live
+            copies duplicated every step-row DOM id, so StepDetailPanel's
+            document.getElementById(...).focus() on close hit the hidden
+            inline row instead of the visible one, and both copies claimed
+            the same yamlEditorRef. */}
+        {isExpanded ? (
+          <div
+            className="workflow-editor-content workflow-editor-content--lockable"
+            aria-hidden="true"
+          >
+            <p className="p-4 text-sm text-text-secondary dark:text-text-secondary-dark">
+              Editing in the expanded view.
+            </p>
+          </div>
+        ) : (
+          editorSurface
+        )}
       </div>
+
+      <ExpandedEditorDialog
+        open={isExpanded}
+        title={selectedWorkflow.name}
+        onRequestCollapse={requestCollapse}
+        showResourcePicker={showResourcePicker}
+        onInsertResource={handleInsertResource}
+      >
+        {isExpanded && editorSurface}
+      </ExpandedEditorDialog>
+
+      {pendingCollapse && (
+        <ConfirmDialog
+          open
+          title="Collapse the editor?"
+          description="This workflow has unsaved changes. Collapsing keeps them - they stay in the editor, still marked Unsaved, and nothing is discarded or committed."
+          confirmLabel="Collapse"
+          onConfirm={() => { setPendingCollapse(false); setIsExpanded(false); }}
+          onCancel={() => setPendingCollapse(false)}
+        />
+      )}
 
       {showVersionHistory && selectedWorkflow.name && (
         <VersionHistoryPanel

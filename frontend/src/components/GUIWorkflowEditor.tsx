@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import EventPicker from './EventPicker';
+import ReusableEventPicker from './ReusableEventPicker';
 import JobList from './JobList';
 import StepDetailPanel from './StepDetailPanel';
 import { StepSelection, StepSelectionProvider } from './StepSelectionContext';
@@ -16,7 +17,17 @@ import { ActionGroup } from '../api/actionGroups';
 // eslint-disable-next-line no-restricted-imports -- Legacy: TODO migrate CSS file to Tailwind CSS classes
 import '../styles/GUIWorkflowEditor.css';
 
+/**
+ * Reusable workflows differ from regular ones only in how they are triggered:
+ * always `workflow_call`, with inputs and secrets instead of push/PR/schedule.
+ * That is a real difference and lives in the two event pickers - everything
+ * else on this form (name, env, jobs, steps, the detail panel) is identical,
+ * which is why this is one component with a variant rather than two files.
+ */
+export type GUIWorkflowEditorVariant = 'regular' | 'reusable';
+
 interface GUIWorkflowEditorProps {
+  variant?: GUIWorkflowEditorVariant;
   workflow: WorkflowGUI;
   onChange: (workflow: WorkflowGUI) => void;
   onValidationChange?: (errors: ValidationError[]) => void;
@@ -25,12 +36,14 @@ interface GUIWorkflowEditorProps {
 }
 
 const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
+  variant = 'regular',
   workflow,
   onChange,
   onValidationChange,
   importedActions,
   actionGroups
 }) => {
+  const isReusable = variant === 'reusable';
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
   const [selected, setSelected] = useState<StepSelection | null>(null);
 
@@ -120,7 +133,7 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
       {/* Workflow Name */}
       <div className="form-section">
         <label className="form-label">
-          Workflow Name *
+          {isReusable ? 'Reusable Workflow Name *' : 'Workflow Name *'}
           {getFieldError('name') && (
             <span className="field-error">{getFieldError('name')!.message}</span>
           )}
@@ -129,23 +142,30 @@ const GUIWorkflowEditor: React.FC<GUIWorkflowEditorProps> = ({
           type="text"
           value={workflow.name}
           onChange={handleNameChange}
-          placeholder="Enter workflow name..."
+          placeholder={isReusable ? 'Enter reusable workflow name...' : 'Enter workflow name...'}
           className={`form-input ${getFieldError('name') ? 'error' : ''}`}
         />
       </div>
 
-      {/* Trigger Events */}
+      {/* Trigger Events - always workflow_call for reusable workflows */}
       <div className="form-section">
         <label className="form-label">
-          Trigger Events *
+          {isReusable ? 'Trigger Event' : 'Trigger Events *'}
           {getFieldError('events') && (
             <span className="field-error">{getFieldError('events')!.message}</span>
           )}
         </label>
-        <EventPicker
-          events={workflow.events}
-          onChange={handleEventsChange}
-        />
+        {isReusable ? (
+          <ReusableEventPicker
+            events={workflow.events}
+            onChange={handleEventsChange}
+          />
+        ) : (
+          <EventPicker
+            events={workflow.events}
+            onChange={handleEventsChange}
+          />
+        )}
       </div>
 
       {/* Environment Variables (Global) */}

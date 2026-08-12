@@ -114,6 +114,18 @@ ActionsManager includes a YAML editor for creating and modifying workflow conten
 
 ![Workflow page view showing the project file browser and YAML editor](../assets/screenshots/workflows/workflow-page-view.png)
 
+Use **YAML** or **GUI** in the editor toolbar to switch between the two views of the same workflow.
+
+### Expanding the editor
+
+**Expand**, next to the editor switch, opens the current workflow on a full-screen surface. It's available in both YAML and GUI mode, so it stays in the same place whichever view you're in — GUI mode gains the most, since the job list and step panel are no longer sharing an already-narrow pane.
+
+![The workflow editor expanded to full screen in GUI mode, showing the workflow name, trigger events, and the job list beside the step details panel](../assets/screenshots/workflows/workflow-editor-expanded.png)
+
+The expanded view will not close by accident. Clicking outside it does nothing, and there is no backdrop to dismiss — you leave it with the **✕** in its header, or by pressing <kbd>Esc</kbd>. If the workflow has unsaved changes you're asked to confirm first, and confirming only collapses the view: your changes stay in the editor, still marked **Unsaved**, and nothing is committed or discarded.
+
+Everything the toolbar offers for the current mode comes with you. In YAML mode that includes **Insert Resource**, so secrets, variables and deployment environments are still one click away.
+
 ### GUI mode
 
 Switching the editor to **GUI** mode gives you a form-based view of the same workflow, kept in sync with the YAML as you edit.

@@ -74,3 +74,12 @@ class TestMainEndpoints:
         assert data["version"] == "1.0.0"
         assert isinstance(data["allow_insecure_http"], bool)
 
+    def test_healthz_endpoint(self):
+        """Test the /healthz endpoint returns the same payload as /"""
+        response = self.client.get("/healthz")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "ActionsManager.xyz API is running"
+        assert data["version"] == "1.0.0"
+        assert isinstance(data["allow_insecure_http"], bool)
+

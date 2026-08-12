@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import UnifiedWorkflowEditor from './UnifiedWorkflowEditor';
 import { UnifiedWorkflowItem } from '../types/workflow';
@@ -52,21 +52,16 @@ vi.mock('../api/environments', () => ({
   getEnvironments: jest.fn().mockResolvedValue([]),
 }));
 
+// One editor for both kinds now - the testid still distinguishes them, driven
+// by the variant prop rather than by which component was imported.
 vi.mock('./GUIWorkflowEditor', () => ({
-  default: function GUIWorkflowEditor({ workflow, onChange }: any) {
+  default: function GUIWorkflowEditor({ workflow, onChange, variant }: any) {
+    const reusable = variant === 'reusable';
     return (
-      <div data-testid="gui-workflow-editor">
-        <button onClick={() => onChange(workflow)}>Update GUI</button>
-      </div>
-    );
-  },
-}));
-
-vi.mock('./ReusableGUIWorkflowEditor', () => ({
-  default: function ReusableGUIWorkflowEditor({ workflow, onChange }: any) {
-    return (
-      <div data-testid="reusable-gui-workflow-editor">
-        <button onClick={() => onChange(workflow)}>Update Reusable GUI</button>
+      <div data-testid={reusable ? 'reusable-gui-workflow-editor' : 'gui-workflow-editor'}>
+        <button onClick={() => onChange(workflow)}>
+          {reusable ? 'Update Reusable GUI' : 'Update GUI'}
+        </button>
       </div>
     );
   },
@@ -1040,5 +1035,233 @@ describe('UnifiedWorkflowEditor', () => {
       expect(document.body.innerHTML).not.toContain('hunter2');
       expect(document.body.innerHTML).not.toContain('ghcr.io/acme');
     });
+  });
+});
+
+describe('UnifiedWorkflowEditor expanded (pop-out) editor', () => {
+  const expandButton = () => screen.getByRole('button', { name: /Expand/i });
+
+  test('offers Expand in both editor modes', () => {
+    // Deliberately mode-independent: the control keeps its place in the
+    // toolbar when switching between YAML and GUI.
+    const { rerender } = render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+    expect(expandButton()).toBeInTheDocument();
+
+    rerender(<UnifiedWorkflowEditor {...defaultProps} editMode="yaml" />);
+    expect(expandButton()).toBeInTheDocument();
+  });
+
+  test('mounts the editor surface exactly once while expanded', async () => {
+    // Two live copies duplicated every step-row DOM id, so the step panel's
+    // close handler focused the hidden inline row rather than the visible one.
+    // getAllByTestId ignores aria-hidden, so a second mount shows up here.
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+    expect(screen.getAllByTestId('gui-workflow-editor')).toHaveLength(1);
+
+    await user.click(expandButton());
+
+    expect(screen.getAllByTestId('gui-workflow-editor')).toHaveLength(1);
+  });
+
+  test('mounts the YAML editor exactly once while expanded', async () => {
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="yaml" />);
+
+    await user.click(expandButton());
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getAllByTestId('yaml-editor')).toHaveLength(1);
+  });
+
+  test('keeps Insert Resource reachable in the expanded YAML view', async () => {
+    // The toolbar copy sits behind the overlay while expanded, and deployment
+    // environments are picker-only - no autocomplete fallback for them.
+    const user = userEvent.setup();
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        editMode="yaml"
+        selectedRepos={['acme/web']}
+        secrets={[{ secret_key: 'TOKEN', repo: 'acme/web' }]}
+      />
+    );
+
+    await user.click(expandButton());
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByTestId('resource-picker-trigger')).toBeInTheDocument();
+  });
+
+  test('Expand opens the editor in a dialog', async () => {
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+
+    await user.click(expandButton());
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  test('collapses via the explicit control when there are no unsaved changes', async () => {
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+    await user.click(expandButton());
+
+    await user.click(screen.getByRole('button', { name: 'Collapse editor' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('does NOT close on an outside click', async () => {
+    // The hard requirement. Radix dismisses on outside pointer-down by
+    // default, so this guards the explicit opt-out - people have lost work to
+    // editors that vanish on a stray click.
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+    await user.click(expandButton());
+
+    // fireEvent, not userEvent: a modal dialog puts pointer-events:none on the
+    // body, so userEvent refuses to click there. These are the events Radix's
+    // dismiss layer actually listens for, dispatched straight at it.
+    fireEvent.pointerDown(document.body);
+    fireEvent.mouseDown(document.body);
+    fireEvent.focusOut(screen.getByRole('dialog'));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  test('does NOT close on Escape - it routes through the same guarded path', async () => {
+    const user = userEvent.setup();
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        editMode="gui"
+        selectedWorkflow={{ ...mockRegularWorkflow, isModified: true }}
+      />
+    );
+    await user.click(expandButton());
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' });
+
+    // Unsaved work, so Escape asks rather than dismissing.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+  });
+
+  test('unsaved changes force a confirmation before collapsing', async () => {
+    const user = userEvent.setup();
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        editMode="gui"
+        selectedWorkflow={{ ...mockRegularWorkflow, isModified: true }}
+      />
+    );
+    await user.click(expandButton());
+    await user.click(screen.getByRole('button', { name: 'Collapse editor' }));
+
+    // Still open, now asking.
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Collapse' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('cancelling the confirmation leaves the editor expanded', async () => {
+    const user = userEvent.setup();
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        editMode="gui"
+        selectedWorkflow={{ ...mockRegularWorkflow, isModified: true }}
+      />
+    );
+    await user.click(expandButton());
+    await user.click(screen.getByRole('button', { name: 'Collapse editor' }));
+    await user.click(screen.getByRole('button', { name: /Cancel/i }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  test('renders above the fixed sidebar', async () => {
+    // .sidebar is position:fixed z-index:1000. Radix's default z-50 put every
+    // dialog underneath it: the backdrop never dimmed it, it stayed clickable,
+    // and a full-screen dialog was visibly clipped behind it.
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+    await user.click(expandButton());
+
+    // jsdom doesn't process Tailwind, so getComputedStyle would report 0 here.
+    // Read the value out of the emitted class instead - parsed, not string
+    // matched, so it still holds if the exact number changes.
+    const SIDEBAR_Z = 1000;
+    const zFromClass = (el: Element) =>
+      Number.parseInt(/z-\[(\d+)\]/.exec(el.className)?.[1] ?? '0', 10);
+
+    expect(zFromClass(screen.getByRole('dialog'))).toBeGreaterThan(SIDEBAR_Z);
+  });
+});
+
+describe('UnifiedWorkflowEditor editor-mode toggle', () => {
+  const yamlBtn = () => screen.getByRole('button', { name: 'YAML' });
+  const guiBtn = () => screen.getByRole('button', { name: 'GUI' });
+
+  test('exposes the selected mode to assistive tech, not just via colour', async () => {
+    // Previously the active mode was conveyed only by a CSS class, so screen
+    // readers heard two identical unlabelled buttons.
+    const setEditMode = jest.fn();
+    const { rerender } = render(
+      <UnifiedWorkflowEditor {...defaultProps} editMode="yaml" setEditMode={setEditMode} />
+    );
+
+    expect(yamlBtn()).toHaveAttribute('aria-pressed', 'true');
+    expect(guiBtn()).toHaveAttribute('aria-pressed', 'false');
+
+    rerender(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" setEditMode={setEditMode} />);
+
+    expect(yamlBtn()).toHaveAttribute('aria-pressed', 'false');
+    expect(guiBtn()).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('the toggle is a labelled group and drops the literal pipe separator', () => {
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+
+    const group = screen.getByRole('group', { name: /Editor/i });
+    expect(group).toContainElement(yamlBtn());
+    expect(group).toContainElement(guiBtn());
+    // The old "|" was a real text node and was announced.
+    expect(group).not.toHaveTextContent('|');
+  });
+
+  test('both mode buttons are type=button', () => {
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+    expect(yamlBtn()).toHaveAttribute('type', 'button');
+    expect(guiBtn()).toHaveAttribute('type', 'button');
+  });
+
+  test('groups the editor controls into a single right-aligned cluster', () => {
+    // Two competing margin-left:auto in one flex row split the free space,
+    // which is what stranded the toggle mid-row. One cluster, one auto margin.
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="gui" />);
+
+    const cluster = document.querySelector('.workflow-editor-controls');
+    expect(cluster).not.toBeNull();
+    expect(cluster).toContainElement(yamlBtn());
+    expect(cluster).toContainElement(screen.getByRole('button', { name: /Expand/i }));
+    expect(cluster).toContainElement(screen.getByRole('link', { name: 'Help' }));
+
+    // Nothing outside the cluster may claim the row's free space.
+    expect(document.querySelectorAll('.editor-mode-selector[style*="margin-left"]')).toHaveLength(0);
+  });
+
+  test('still switches mode when clicked', async () => {
+    const user = userEvent.setup();
+    const setEditMode = jest.fn();
+    render(<UnifiedWorkflowEditor {...defaultProps} editMode="yaml" setEditMode={setEditMode} />);
+
+    await user.click(guiBtn());
+
+    expect(setEditMode).toHaveBeenCalledWith('gui');
   });
 });

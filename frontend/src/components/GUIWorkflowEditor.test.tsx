@@ -265,6 +265,41 @@ describe('GUIWorkflowEditor step detail panel', () => {
     expect(screen.getByRole('heading', { name: 'Run tests' })).toHaveFocus();
   });
 
+  it('does not scroll the page when a step is clicked', async () => {
+    // focus() scrolls its target into view unless told not to, and the panel is
+    // its own scroll container - that combination made the clicked row slide
+    // out from under the cursor. The focus move must still happen (see the
+    // test above), so what's asserted here is the opt-out, not the absence of
+    // the focus call.
+    const focusSpy = vi.spyOn(HTMLHeadingElement.prototype, 'focus');
+    const user = userEvent.setup();
+    render(<Harness initial={makeWorkflow()} />);
+    focusSpy.mockClear();
+
+    await selectStep(user, 'Checkout');
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    expect(focusSpy).not.toHaveBeenCalledWith();
+    focusSpy.mockRestore();
+  });
+
+  it('never commits a scroll for an already-visible panel', async () => {
+    // `nearest` is what keeps the desktop (sticky, in-view) case a no-op while
+    // still revealing the panel below lg, where it stacks under the job list.
+    // A committed alignment like 'start'/'center' would scroll unconditionally.
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+    const user = userEvent.setup();
+    render(<Harness initial={makeWorkflow()} />);
+    scrollSpy.mockClear();
+
+    await selectStep(user, 'Checkout');
+
+    for (const [options] of scrollSpy.mock.calls) {
+      expect(options).toMatchObject({ block: 'nearest' });
+    }
+    scrollSpy.mockRestore();
+  });
+
   it('gives each job row a distinct DOM id for its steps', async () => {
     const user = userEvent.setup();
     render(<Harness initial={makeTwoJobWorkflow()} />);
@@ -342,5 +377,47 @@ describe('GUIWorkflowEditor step detail panel', () => {
     await selectStep(user, 'Checkout');
 
     expect(screen.getByRole('heading', { name: 'Checkout' })).toHaveFocus();
+  });
+});
+
+/**
+ * Coverage for the reusable variant, which had none: it used to live in a
+ * separate 277-line copy of this component with no test file of its own.
+ */
+describe('GUIWorkflowEditor variants', () => {
+  const renderVariant = (variant?: 'regular' | 'reusable') =>
+    render(
+      <GUIWorkflowEditor
+        variant={variant}
+        workflow={makeWorkflow()}
+        onChange={() => {}}
+        importedActions={[] as ActionsProject[]}
+        actionGroups={[] as ActionGroup[]}
+      />
+    );
+
+  it('defaults to the regular variant', () => {
+    renderVariant();
+    expect(screen.getByText('Workflow Name *')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter workflow name...')).toBeInTheDocument();
+    expect(screen.getByText('Trigger Events *')).toBeInTheDocument();
+  });
+
+  it('labels the reusable variant for reusable workflows', () => {
+    renderVariant('reusable');
+    expect(screen.getByText('Reusable Workflow Name *')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter reusable workflow name...')).toBeInTheDocument();
+    // Singular: a reusable workflow only ever triggers on workflow_call.
+    expect(screen.getByText('Trigger Event')).toBeInTheDocument();
+    expect(screen.queryByText('Trigger Events *')).not.toBeInTheDocument();
+  });
+
+  it('renders the same job and step editing surface for both variants', () => {
+    const { unmount } = renderVariant('regular');
+    expect(screen.getByRole('button', { name: /Checkout/ })).toBeInTheDocument();
+    unmount();
+
+    renderVariant('reusable');
+    expect(screen.getByRole('button', { name: /Checkout/ })).toBeInTheDocument();
   });
 });

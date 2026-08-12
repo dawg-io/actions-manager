@@ -934,12 +934,21 @@ body.pf-resizing {
   color: var(--text-primary);
 }
 
+/* Every interactive control in the status row, grouped and pushed right as
+   one unit. This is the only auto margin in the row on purpose: flex splits
+   free space across all of them, so a second one strands the first mid-row. */
+.workflow-editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
 /* Editor mode selector */
 .editor-mode-selector {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-left: auto;
 }
 
 .mode-label {
@@ -947,17 +956,45 @@ body.pf-resizing {
   color: var(--text-secondary);
 }
 
+/* Segmented control: one bordered track, the two options joined by a divider
+   rather than a literal "|" text node (which screen readers announced). */
+.mode-switch {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  overflow: hidden;
+  /* It's a <fieldset> (a real grouping element rather than role="group"), so
+     the UA's own margin/padding/min-width have to be cleared. */
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
 .mode-btn {
+  /* inline-flex, not the UA default inline-block: Tailwind preflight sets
+     svg { display: block }, which stacked icon above label in icon buttons. */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   background: none;
   border: none;
-  padding: 0;
-  font-size: 0.85rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: color 0.2s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.mode-switch .mode-btn + .mode-btn {
+  border-left: 1px solid var(--border-color);
 }
 
 .mode-btn:hover:not(:disabled) {
+  /* --hover-background-color, not --hover-bg: the latter is never defined
+     (its one other use in this file carries a fallback for that reason). */
+  background-color: var(--hover-background-color);
   color: var(--text-primary);
 }
 
@@ -966,19 +1003,17 @@ body.pf-resizing {
   cursor: not-allowed;
 }
 
-.mode-btn-active {
-  color: var(--primary-color);
+/* Filled, not just tinted text - the active option has to be unmistakable at
+   a glance in both themes. */
+.mode-btn-active,
+.mode-btn-active:hover:not(:disabled) {
+  background-color: var(--primary-color);
+  color: #fff;
   font-weight: 600;
-}
-
-.mode-separator {
-  color: var(--border-color);
-  user-select: none;
 }
 
 /* Inline help / docs link in the workflow editor status bar */
 .docs-help-link {
-  margin-left: auto;
   font-size: 0.78rem;
   color: var(--text-secondary);
   text-decoration: none;
@@ -1147,8 +1182,13 @@ body.pf-resizing {
     gap: 0.75rem;
   }
 
-  .editor-mode-selector {
+  .workflow-editor-controls {
     margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .editor-mode-selector {
     justify-content: flex-start;
   }
 }
