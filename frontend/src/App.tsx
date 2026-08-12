@@ -57,7 +57,7 @@ function App(): React.ReactElement {
       return;
     }
 
-    fetch(`${BACKEND_URL}/`)
+    fetch(`${BACKEND_URL}/healthz`)
       .then((res) => res.json())
       .then((data) => setShowHttpsWarning(!data?.allow_insecure_http))
       .catch(() => setShowHttpsWarning(true));

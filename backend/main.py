@@ -333,6 +333,7 @@ async def shutdown_event():
 
 
 @app.get("/")
+@app.get("/healthz")
 async def root():
     """Health check endpoint"""
     return {

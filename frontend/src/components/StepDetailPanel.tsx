@@ -47,7 +47,13 @@ const StepDetailPanel: React.FC<StepDetailPanelProps> = ({
 
   useEffect(() => {
     if (!resolvedKey) return;
-    headingRef.current?.focus();
+    // preventScroll matters: focus() scrolls its target into view by default,
+    // and the panel is its own scroll container (lg:overflow-y-auto), so
+    // focusing the heading yanked both the panel and the page on every step
+    // click - the row you just clicked slid out from under the cursor. The
+    // focus move itself still has to happen so the panel is announced and
+    // Escape reaches its handler; only the scrolling side effect is unwanted.
+    headingRef.current?.focus({ preventScroll: true });
     // Below lg the panel sits under the whole job list, so selecting a step
     // would otherwise leave its fields off-screen. `nearest` is a no-op once
     // the sticky desktop column is already in view, so this needs no viewport
@@ -86,11 +92,21 @@ const StepDetailPanel: React.FC<StepDetailPanelProps> = ({
       )
     : [];
 
+  // The height cap is a variable, not a constant: calc(100vh-8rem) is the
+  // page's chrome, but expanded into a full-screen dialog the chrome is the
+  // dialog's own header and padding instead. The container overrides
+  // --step-panel-max-h; everywhere else falls back to the page value.
   return (
     <aside
       ref={panelRef}
       aria-labelledby={HEADING_ID}
-      className="mt-4 rounded-lg border border-border bg-container p-3 dark:border-border-dark dark:bg-container-dark lg:mt-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto"
+      // Read by the expanded editor's dialog: Radix listens for Escape at the
+      // document in the CAPTURE phase, so it always runs before this panel's
+      // own bubble-phase listener and stopPropagation here would be too late.
+      // The dialog checks this flag instead and lets the panel take Escape
+      // first; a second press, with nothing selected, collapses the editor.
+      data-step-selected={resolved ? 'true' : undefined}
+      className="mt-4 rounded-lg border border-border bg-container p-3 dark:border-border-dark dark:bg-container-dark lg:mt-0 lg:sticky lg:top-4 lg:max-h-[var(--step-panel-max-h,calc(100vh-8rem))] lg:overflow-y-auto"
     >
       <div className="mb-3 flex items-start justify-between gap-2">
         <h3

@@ -201,6 +201,15 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(500);
 
     await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-page-view.png" });
+
+    // Expanded editor, in GUI mode: that's where the extra room actually
+    // shows - the job list and step panel stop being a column of a column.
+    await page.getByRole("button", { name: "GUI", exact: true }).click();
+    await page.waitForTimeout(300);
+    await page.getByRole("button", { name: /Expand/ }).click();
+    await page.getByRole("dialog").waitFor({ timeout: 5000 });
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-editor-expanded.png" });
   });
 
   test("PR campaign dashboard", async ({ page }) => {
