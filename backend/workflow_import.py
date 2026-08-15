@@ -43,6 +43,23 @@ from authorization import check_project_access
 
 router = APIRouter()
 
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERROR_RESPONSES = {
+    400: {"description": "Invalid request"},
+    401: {"description": "Not authenticated"},
+    403: {"description": "Access denied"},
+    404: {"description": "Not found"},
+    502: {"description": "Upstream GitHub request failed"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -267,7 +284,7 @@ def _get_discovered_workflow_match_names(file_name: str, project) -> set[str]:
 # Discover endpoint
 # ---------------------------------------------------------------------------
 
-@router.get("/api/projects/{project_id}/workflow-import/discover")
+@router.get("/api/projects/{project_id}/workflow-import/discover", responses=_responses(400, 401, 403, 404))
 def discover_workflows(
     project_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -400,7 +417,7 @@ def discover_workflows(
 # Preview endpoint
 # ---------------------------------------------------------------------------
 
-@router.get("/api/projects/{project_id}/workflow-import/preview")
+@router.get("/api/projects/{project_id}/workflow-import/preview", responses=_responses(400, 401, 403, 404, 502))
 def preview_workflow(
     project_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -473,7 +490,7 @@ def preview_workflow(
 # Import endpoint
 # ---------------------------------------------------------------------------
 
-@router.post("/api/projects/{project_id}/workflow-import")
+@router.post("/api/projects/{project_id}/workflow-import", responses=_responses(400, 401, 403, 404))
 def import_workflows(
     project_id: int,
     payload: ImportRequest,

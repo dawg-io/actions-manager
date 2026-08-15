@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import auth as auth_module
 from auth import github_auth, github_callback, oauth_states, OAuthStateStore
 from database import Base
 from models import Account
@@ -239,7 +240,45 @@ class TestGitHubCallbackEndpoint:
         
         # State should be consumed
         assert state not in oauth_states._states
-    
+
+    @patch('auth._exchange_code_for_token')
+    @patch('auth._fetch_user_info')
+    @patch('auth._fetch_marketplace_data')
+    @patch('auth._resolve_connected_github_account')
+    def test_github_callback_persists_token_for_background_use(
+        self,
+        mock_resolve_account,
+        mock_fetch_marketplace,
+        mock_fetch_user,
+        mock_exchange_code,
+        monkeypatch,
+    ):
+        """A normal OAuth/App login must save a durable token, not just an
+        in-memory one, or the drift-check background sweep can never find a
+        credential for the project owner once this process's memory is gone."""
+        monkeypatch.setattr(auth_module, "SECRET_KEY", "test-secret-key")
+        oauth_states._states.clear()
+        state = oauth_states.create()
+
+        mock_exchange_code.return_value = "gho_test_token_12345"
+        mock_fetch_user.return_value = ("testuser", "test@example.com", "https://avatar.url", "User")
+        mock_fetch_marketplace.return_value = []
+        mock_resolve_account.return_value = (None, None)
+
+        result = github_callback(
+            code="test_code",
+            state=state,
+            request=self.mock_request,
+            db=self.db,
+        )
+
+        assert isinstance(result, RedirectResponse)
+
+        saved_user = self.db.query(Account).filter(Account.github_user == "testuser").first()
+        assert saved_user is not None
+        assert saved_user.github_pat_token_encrypted is not None
+        assert saved_user.github_pat_updated_at is not None
+
     @patch('auth._exchange_code_for_token')
     def test_github_callback_consumes_state_even_on_oauth_failure(
         self,

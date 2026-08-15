@@ -7,6 +7,7 @@ import {
   mockBuildMetricsResponse,
   mockDriftResponse,
   seedAuthenticatedSession,
+  NO_CREDENTIAL_REASON,
 } from "../e2e/fixtures/mocks";
 import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
 
@@ -173,6 +174,29 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({ path: "../docs/assets/screenshots/backup-restore/workspace-backup.png" });
+  });
+
+  test("workspace drift settings page", async ({ page }) => {
+    await installApiMocks(page, createMockState());
+    await seedDocsUserProfile(page);
+    await page.route("**/api/drift/settings", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sweep_enabled: true,
+          recheck_interval_minutes: 30,
+          batch_size: 5,
+          poll_interval_seconds: 60,
+        }),
+      })
+    );
+
+    await page.goto("/workspace/drift");
+    await page.getByTestId("drift-settings-form").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-settings.png" });
   });
 
   test("workflow editor page view", async ({ page }) => {
@@ -395,6 +419,39 @@ test.describe("docs screenshots", () => {
     });
   });
 
+  test("drift detection — per-project schedule", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_DRIFT_PROJECT,
+      workflows: [makeWorkflow({ name: "build-and-test.yml", lastModifiedBy: DOCS_USER })],
+    });
+    await mockDriftResponse(page, { lastChecked: DOCS_LAST_CHECKED, driftedWorkflows: [] });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+    await page.route("**/api/drift/settings", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sweep_enabled: true,
+          recheck_interval_minutes: 30,
+          batch_size: 5,
+          poll_interval_seconds: 60,
+        }),
+      })
+    );
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    // The Project Configs group is collapsed until opened.
+    await page.getByRole("button", { name: "Project Configs" }).click();
+    await page.getByRole("button", { name: /Drift Detection/i }).click();
+    await page.getByTestId("project-drift-interval").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/drift-detection/project-drift-schedule.png",
+    });
+  });
+
   test("drift detection — automatic checks paused", async ({ page }) => {
     const project = makeProject({
       ...DOCS_DRIFT_PROJECT,
@@ -403,9 +460,7 @@ test.describe("docs screenshots", () => {
     await mockDriftResponse(page, {
       lastChecked: DOCS_LAST_CHECKED,
       driftedWorkflows: [],
-      staleReason:
-        "Automatic drift checks are paused: this project's owner has no saved " +
-        "GitHub token. Save a personal access token, or use Check Now.",
+      staleReason: NO_CREDENTIAL_REASON,
     });
     await installApiMocks(page, createMockState({ projects: [project] }));
     await seedDocsUserProfile(page);

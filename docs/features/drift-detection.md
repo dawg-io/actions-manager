@@ -69,10 +69,32 @@ deliberately different copy stops reporting drift.
 **Automatically, in the background.** ActionsManager re-checks projects on its own, so a project
 cannot sit showing "in sync" while GitHub has moved on. By default a project becomes due for a
 re-check 15 minutes after its last one, and only a few projects are picked up per tick so the load
-stays spread out. Self-hosted operators can tune or switch this off with `DRIFT_SWEEP_ENABLED`,
-`DRIFT_RECHECK_INTERVAL_MINUTES`, `DRIFT_SWEEP_BATCH_SIZE` and `DRIFT_SWEEP_POLL_SECONDS` (see
-`docs/ENVIRONMENT_VARIABLES.md` in the repository). With the sweep disabled, drift only updates when
-someone presses **Check Now**.
+stays spread out.
+
+**Workspace admins set the defaults.** Under **Drift Settings**, an admin can switch automatic
+checking off entirely, change how long a project stays fresh before it is due again, and tune both
+how many projects are picked up per tick and how often those ticks happen. Changes apply from the
+next tick — no restart. With automatic checking off, drift only updates when someone presses
+**Check Now**.
+
+![Drift Settings page showing the automatic-check toggle, a default check schedule of every 30 minutes, projects checked per tick, and seconds between ticks](../assets/screenshots/drift-detection/drift-settings.png)
+
+**Each project can set its own schedule.** Open a project, then **Project Configs → Drift
+Detection**, and pick a schedule for that project alone — so you can configure checking on an
+as-needed basis:
+
+| Setting | What it does |
+|---|---|
+| Use workspace default | Follows whatever the admin configured. This is how every project starts. |
+| Off | This project is never checked automatically. **Check Now** still works. |
+| Every 15 / 30 minutes | For projects edited often, or where drift matters quickly. |
+| Every hour / 6 hours | A middle ground for steadier projects. |
+| Daily | For projects that rarely change, or to keep API usage down. |
+
+![The Drift Detection section under a project's Project Configs, showing the drift check schedule set to "Use workspace default (every 30 minutes)"](../assets/screenshots/drift-detection/project-drift-schedule.png)
+
+Turning a project off does not slow down the projects behind it, and it never
+affects any other project's schedule.
 
 **On demand, with Check Now.** A project with no known drift shows a status row with a **Check Now**
 button; when something is drifted, **Review Drift** opens the list, which carries **Check Now** next
@@ -99,15 +121,22 @@ Two things the background sweep deliberately does **not** do:
 
 ### When automatic checks pause
 
-The background sweep runs with nobody logged in, so it needs a stored credential. It checks a
-project only when the project's **owner** has a saved GitHub personal access token. An OAuth login
-alone is not enough after a server restart, because that token only lives in memory.
+The background sweep runs with nobody logged in, so it needs a credential stored on the server. It
+checks a project only when the project's **owner** has one.
+
+Signing in stores that credential, so a normal GitHub login is enough — it survives restarts and is
+shared across replicas. A saved personal access token works too, and takes precedence.
+
+The one case that still pauses: an account that was already signed in before this behaviour shipped.
+Its credential exists only in the server's memory, and gets written to storage on that account's
+next request — but only while that same process is still running. If the server restarts first,
+there is nothing left to recover, and the owner has to sign in again once (or save a PAT).
 
 A project the sweep can't check is skipped, keeps its previous result and timestamp, and the drift
 panel explains why:
 
-> Automatic drift checks are paused: this project's owner has no saved GitHub token. Save a personal
-> access token, or use Check Now.
+> Automatic drift checks are paused: this project's owner has no saved GitHub token. Sign out and
+> sign back in to store one, or save a personal access token. Check Now still works.
 
 ![Drift status row showing the last check time alongside the paused-checks explanation and a Check Now button](../assets/screenshots/drift-detection/drift-checks-paused.png)
 
@@ -115,7 +144,8 @@ panel explains why:
 
 A project whose checks keep failing — an expired token, a rate limit, a repository that can no
 longer be read — is retried progressively less often: the wait doubles with each consecutive
-failure, up to 32× the normal interval. The first successful check restores the normal cadence.
+failure, up to 32× that project's own schedule. The first successful check restores the normal
+cadence.
 
 ## What Counts as Drift
 

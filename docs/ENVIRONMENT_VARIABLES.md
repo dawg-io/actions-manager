@@ -172,39 +172,16 @@ ALLOW_INSECURE_HTTP=true
 
 ### Drift Detection Sweep
 
-ActionsManager re-checks projects for drift on a background schedule, so a
-project cannot sit showing "in sync" while the workflow has been edited on
-GitHub. Nothing needs configuring for this to work — the defaults are sensible.
+**No environment variables.** Drift checking is configured in the app, not the
+environment: a workspace admin sets the defaults under **Drift Settings**, and
+each project can override the interval or switch its own checks off. See
+[Drift Detection](features/drift-detection.md).
 
-| Variable | Required | Default | Description | Mode | Example |
-|----------|----------|---------|-------------|------|---------|
-| `DRIFT_SWEEP_ENABLED` | ❌ No | `true` | Master switch for automatic drift re-checking | Both | `false` |
-| `DRIFT_RECHECK_INTERVAL_MINUTES` | ❌ No | `15` | How stale a project's last check must be before it is re-checked | Both | `30` |
-| `DRIFT_SWEEP_BATCH_SIZE` | ❌ No | `5` | Projects checked per tick, capping burst API usage | Both | `10` |
-| `DRIFT_SWEEP_POLL_SECONDS` | ❌ No | `60` | How often the worker wakes to look for due projects | Both | `120` |
-
-**Details:**
-- **Cost is low by design.** An unchanged branch answers GitHub's conditional
-  request with a `304`, which does **not** count against the rate limit, so
-  re-checking a quiet project costs roughly one call per repository. Raise
-  `DRIFT_RECHECK_INTERVAL_MINUTES` if you run many projects against a tight
-  rate limit.
-- The worker wakes often but only picks up projects older than the recheck
-  interval, which staggers load instead of checking everything at once.
-- **A project is only checked if its owner has a usable GitHub credential.** A
-  saved PAT works with no one logged in; an OAuth session token only lasts
-  until the server restarts. Projects without one are skipped and keep their
-  previous "last checked" time rather than being falsely marked as checked.
-- **Repeated failures back off.** A project whose check keeps failing (expired
-  token, rate limit, repository no longer readable) waits twice as long after
-  each consecutive failure, up to 32× `DRIFT_RECHECK_INTERVAL_MINUTES`. The
-  first successful check resets it. Projects behind a failing or skipped one
-  are not held up.
-- **The sweep only reads.** It never pushes to GitHub; every write still comes
-  from a resolution someone chose.
-- Setting `DRIFT_SWEEP_ENABLED=false` stops all automatic checking; drift then
-  only updates when someone clicks **Check Now** (or when a resolution clears
-  it).
+The `DRIFT_SWEEP_ENABLED`, `DRIFT_RECHECK_INTERVAL_MINUTES`,
+`DRIFT_SWEEP_BATCH_SIZE` and `DRIFT_SWEEP_POLL_SECONDS` variables were removed.
+If you set them, delete them — the defaults they used to carry are now the
+defaults stored in the database, so an install that never changed them behaves
+exactly as before.
 
 ---
 

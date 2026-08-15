@@ -134,18 +134,18 @@ const VersionHistoryPanel: React.FC<VersionHistoryPanelProps> = ({
     return 'PR merged';
   };
 
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) {
-      onClose();
-    }
-  };
+  // See CreatePRModal: dismissal lives on a real button, not a div onClick.
+  const handleOverlayClick = () => { onClose(); };
 
   return (
-    <div
-      className="version-history-overlay"
-      onClick={handleOverlayClick}
-    >
-      <div className="version-history-panel">
+    <div className="version-history-overlay">
+      <button
+        type="button"
+        aria-label="Dismiss version history"
+        onClick={handleOverlayClick}
+        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
+      />
+      <div className="version-history-panel relative">
         <div className="version-history-header">
           <h2>Version History: {workflowName}</h2>
           <button className="close-button" onClick={onClose}>✕</button>

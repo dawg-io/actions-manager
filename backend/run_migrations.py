@@ -56,6 +56,7 @@ MIGRATION_SCRIPTS = [
     "migrate_add_drift_state_display_fields.py",   # Lets the drift panel render from stored state without calling GitHub
     "migrate_add_drift_check_failure_count.py",    # Adds a consecutive-failure counter to projects, for sweep backoff
     "migrate_add_workflow_runs.py",                # Stores GitHub Actions runs for build metrics (issue #689)
+    "migrate_add_drift_configuration.py",          # Moves drift sweep config out of env vars: global settings + per-project interval
     # After the seed account exists, so it repairs the same boot that creates it.
     "migrate_revoke_seed_workspace_membership.py", # Takes workspace admin off the seed account and restores it to the installer
     # Must stay last: purges rows orphaned while SQLite foreign keys were

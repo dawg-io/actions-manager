@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.exc import OperationalError
-import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups, notifications_smtp, notification_subscriptions, build_metrics, workspace_backup, setup_restore
+import auth, projects, workflows, repos, github_secrets, github_env_vars, project_deletion, rulesets, marketplace_webhooks, workspace_members, project_memberships, codeowners, workflow_import, custom_files, actions_projects, action_groups, notifications_smtp, notification_subscriptions, build_metrics, workspace_backup, setup_restore, drift_settings
 from database import engine, Base, SessionLocal
 from models import Account, WorkspaceMember
 import config
@@ -241,6 +241,7 @@ app.include_router(action_groups.router)
 app.include_router(notifications_smtp.router)
 app.include_router(notification_subscriptions.router)
 app.include_router(build_metrics.router)
+app.include_router(drift_settings.router)
 app.include_router(workspace_backup.router)
 app.include_router(setup_restore.router)
 

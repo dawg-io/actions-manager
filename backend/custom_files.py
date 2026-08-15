@@ -63,6 +63,23 @@ def validate_file_path(path: str) -> Optional[str]:
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
 
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERROR_RESPONSES = {
+    400: {"description": "Invalid request"},
+    401: {"description": "Not authenticated"},
+    403: {"description": "Access denied"},
+    404: {"description": "Not found"},
+    409: {"description": "Conflicts with an existing custom file"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 def _resolve_user(
     x_github_user: Optional[str],
     github_user_query: Optional[str],
@@ -152,7 +169,7 @@ class UpdateCustomFileRequest(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@router.get("/api/projects/{project_id}/custom-files")
+@router.get("/api/projects/{project_id}/custom-files", responses=_responses(401, 403, 404))
 def list_custom_files(
     project_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -165,7 +182,7 @@ def list_custom_files(
     return {"custom_files": [_serialize(f) for f in files]}
 
 
-@router.post("/api/projects/{project_id}/custom-files")
+@router.post("/api/projects/{project_id}/custom-files", responses=_responses(400, 401, 403, 404, 409))
 def create_custom_file(
     project_id: int,
     payload: CreateCustomFileRequest,
@@ -204,7 +221,7 @@ def create_custom_file(
     return {"custom_file": _serialize(cf)}
 
 
-@router.put("/api/projects/{project_id}/custom-files/{file_id}")
+@router.put("/api/projects/{project_id}/custom-files/{file_id}", responses=_responses(400, 401, 403, 404, 409))
 def update_custom_file(
     project_id: int,
     file_id: int,
@@ -255,7 +272,7 @@ def update_custom_file(
     return {"custom_file": _serialize(cf)}
 
 
-@router.delete("/api/projects/{project_id}/custom-files/{file_id}")
+@router.delete("/api/projects/{project_id}/custom-files/{file_id}", responses=_responses(401, 403, 404))
 def delete_custom_file(
     project_id: int,
     file_id: int,
@@ -285,7 +302,7 @@ def delete_custom_file(
     return {"deleted": False, "pending_delete": True, "custom_file": _serialize(cf)}
 
 
-@router.post("/api/projects/{project_id}/custom-files/{file_id}/restore")
+@router.post("/api/projects/{project_id}/custom-files/{file_id}/restore", responses=_responses(401, 403, 404))
 def restore_custom_file(
     project_id: int,
     file_id: int,

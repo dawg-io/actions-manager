@@ -69,6 +69,8 @@ export interface Project {
   drift_count?: number;
   last_drift_check_at?: string | null;
   drift_error_summary?: string | null;
+  /** null inherits the workspace default; 0 means never check automatically. */
+  drift_check_interval_minutes?: number | null;
   last_modified_by?: string;
 }
 
@@ -103,6 +105,12 @@ export interface UpdateProjectColorResponse {
   message?: string;
   project_id: number;
   project_color: ProjectColorKey | null;
+}
+
+export interface UpdateProjectDriftConfigResponse {
+  message?: string;
+  project_id: number;
+  drift_check_interval_minutes: number | null;
 }
 
 export interface UpdateProjectNameResponse {
@@ -289,6 +297,24 @@ export const updateProjectColor = async (
   } catch (error) {
     const axiosError = error as AxiosError;
     console.error("❌ Error updating project color:", axiosError.response?.data || axiosError);
+    throw error;
+  }
+};
+
+export const updateProjectDriftConfig = async (
+  githubUser: string,
+  projectId: string | number,
+  driftCheckIntervalMinutes: number | null,
+): Promise<UpdateProjectDriftConfigResponse> => {
+  try {
+    const response: AxiosResponse<UpdateProjectDriftConfigResponse> = await apiClient.patch(
+      `${BACKEND_URL}/api/projects/${projectId}/drift-config`,
+      { github_user: githubUser, drift_check_interval_minutes: driftCheckIntervalMinutes },
+    );
+    return response.data;
+  } catch (error) {
+    const axiosError = error as AxiosError;
+    console.error("❌ Error updating project drift config:", axiosError.response?.data || axiosError);
     throw error;
   }
 };

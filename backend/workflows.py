@@ -438,6 +438,27 @@ class TemplateResponse(BaseModel):
 
 router = APIRouter()
 
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERR_DRIFT_STALE = "The file on GitHub changed since drift was checked"
+
+_ERROR_RESPONSES = {
+    400: {"description": "Invalid request"},
+    401: {"description": "Not authenticated"},
+    403: {"description": "Access denied"},
+    404: {"description": "Not found"},
+    409: {"description": "Conflicts with the current state"},
+    500: {"description": "Unexpected server error"},
+    502: {"description": "Upstream GitHub request failed"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 GITHUB_API_URL = "https://api.github.com"
 ACCEPT_HEADER = "application/vnd.github+json"
 X_API_VERSION = "2022-11-28"
@@ -2573,7 +2594,7 @@ def _sync_linked_reusable_workflows_after_merge(db: Session, standard_project_id
         db.rollback()
 
 
-@router.post("/api/save-workflows")
+@router.post("/api/save-workflows", responses=_responses(400, 401, 404, 500))
 def save_workflows(
     payload: SaveProjectWorkflowsRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -2623,7 +2644,7 @@ def save_workflows(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error saving workflows: {str(e)}")
 
-@router.post("/api/detect-drift")
+@router.post("/api/detect-drift", responses=_responses(401, 404, 500))
 def detect_drift(
     payload: DriftDetectionRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -2651,7 +2672,7 @@ def detect_drift(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/resolve-drift")
+@router.post("/api/resolve-drift", responses=_responses(400, 401, 404, 500))
 def resolve_drift(
     payload: DriftResolutionRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -3137,7 +3158,12 @@ def run_project_drift_check(db: Session, user: str, project: Project):
 @router.get(
     "/api/projects/{project_id}/drift",
     response_model=ProjectDriftSummary,
-    responses={403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL}},
+    responses={
+        401: {"description": NOT_AUTHENTICATED_DETAIL},
+        403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL},
+        404: {"description": "Project not found"},
+        500: {"description": "Unexpected error while computing drift"},
+    },
 )
 def get_project_drift(
     project_id: int,
@@ -3200,7 +3226,7 @@ def get_project_drift(
     )
 
 
-@router.get("/api/workflows/{workflow_id}/drift", response_model=WorkflowDriftResponse)
+@router.get("/api/workflows/{workflow_id}/drift", response_model=WorkflowDriftResponse, responses=_responses(401, 403, 404, 500))
 def get_workflow_drift(
     workflow_id: int,
     github_user: str,
@@ -3581,10 +3607,12 @@ def _resolve_restore_actionsmanager_drift(db: Session, github_user: str, wf, pro
     "/api/workflows/{workflow_id}/resolve-drift",
     responses={
         400: {"description": "resolution or delivery_mode is invalid"},
+        401: {"description": NOT_AUTHENTICATED_DETAIL},
         403: {"description": "Not authorized for this workflow, or caller lacks project_editor rights"},
         404: {"description": "Workflow, project, or GitHub file not found"},
-        409: {"description": "The file on GitHub changed since drift was checked"},
+        409: {"description": _ERR_DRIFT_STALE},
         500: {"description": "Unexpected error during drift restoration"},
+        502: {"description": "Upstream GitHub request failed"},
     },
 )
 def resolve_workflow_drift(
@@ -3891,6 +3919,8 @@ def _bulk_resolve_restore_pr(
         401: {"description": NOT_AUTHENTICATED_DETAIL},
         403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL},
         404: {"description": "Project or workflow not found"},
+        409: {"description": _ERR_DRIFT_STALE},
+        500: {"description": "Unexpected error during drift resolution"},
     },
 )
 def bulk_resolve_project_drift(
@@ -4420,7 +4450,11 @@ def _handle_adopt_project_and_sync(
     "/api/drift/adopt-github-version",
     responses={
         400: {"description": "Invalid resolution_mode, delivery_mode, or repo format"},
+        401: {"description": NOT_AUTHENTICATED_DETAIL},
         403: {"description": NOT_AUTHORIZED_PROJECT_DETAIL},
+        404: {"description": "Project or workflow not found"},
+        409: {"description": _ERR_DRIFT_STALE},
+        500: {"description": "Unexpected error during drift adoption"},
     },
 )
 def adopt_github_version(
@@ -5140,7 +5174,7 @@ def _run_create_pull_requests_async(task_id: str, payload: CreatePullRequestsReq
         pr_campaign_tasks[task_id]["error"] = str(e)
 
 
-@router.post("/api/create-pull-requests")
+@router.post("/api/create-pull-requests", responses=_responses(400, 401, 404, 409, 500))
 def create_pull_requests(
     payload: CreatePullRequestsRequest,
     background_tasks: BackgroundTasks,
@@ -5220,13 +5254,13 @@ def create_pull_requests(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/create-pull-requests/{task_id}")
+@router.get("/api/create-pull-requests/{task_id}", responses=_responses(404))
 def get_create_pull_requests_status(task_id: str):
     if task_id not in pr_campaign_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     return pr_campaign_tasks[task_id]
 
-@router.post("/api/run-preflight-validation")
+@router.post("/api/run-preflight-validation", responses=_responses(400, 401, 403, 404, 500))
 def run_preflight_validation(
     payload: RunPreflightRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -5564,7 +5598,7 @@ def _refresh_preflight_status_from_github(
     return project.last_preflight_status or derived_status, project.last_preflight_error, pr_state
 
 
-@router.get("/api/preflight-validation-status")
+@router.get("/api/preflight-validation-status", responses=_responses(401, 404, 500))
 def get_preflight_validation_status(
     github_user: str,
     project_name: str,
@@ -5859,7 +5893,7 @@ def _execute_validation_pr_merge_and_respond(
     }
 
 
-@router.patch("/api/close-preflight-validation-pr")
+@router.patch("/api/close-preflight-validation-pr", responses=_responses(400, 401, 403, 404, 500))
 def close_preflight_validation_pr(
     payload: ClosePreflightValidationRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -5928,7 +5962,7 @@ def close_preflight_validation_pr(
         raise HTTPException(status_code=500, detail="Failed to close validation PR.")
 
 
-@router.put("/api/merge-preflight-validation-pr")
+@router.put("/api/merge-preflight-validation-pr", responses=_responses(400, 401, 403, 404, 500))
 def merge_preflight_validation_pr(
     payload: MergePreflightValidationRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -6281,7 +6315,7 @@ def _campaign_pr_response(
     )
 
 
-@router.get("/api/project-pr-status")
+@router.get("/api/project-pr-status", responses=_responses(401, 404, 500))
 def get_project_pr_status(
     github_user: str,
     project_name: str,
@@ -6734,7 +6768,7 @@ def _handle_merged_pull_request(*, response, project, repo_name, pr_number, owne
     }
 
 
-@router.put("/api/merge-pull-request")
+@router.put("/api/merge-pull-request", responses=_responses(400, 401, 404, 500))
 def merge_pull_request(
     payload: MergePullRequestRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -6826,7 +6860,7 @@ def merge_pull_request(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/close-pull-request")
+@router.patch("/api/close-pull-request", responses=_responses(400, 401, 404, 500))
 def close_pull_request(
     payload: ClosePullRequestRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -6932,7 +6966,7 @@ def close_pull_request(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/project-pr-history")
+@router.get("/api/project-pr-history", responses=_responses(401, 404, 500))
 def get_project_pr_history(
     github_user: str,
     project_name: str,
@@ -7091,7 +7125,7 @@ def get_project_pr_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/project-pr-campaigns")
+@router.get("/api/project-pr-campaigns", responses=_responses(401, 404, 500))
 def get_project_pr_campaigns(
     github_user: str,
     project_name: str,
@@ -7515,7 +7549,7 @@ def webhook_readiness():
     return get_webhook_readiness()
 
 
-@router.post("/webhooks/github")
+@router.post("/webhooks/github", responses=_responses(400, 401))
 async def github_pr_webhook(request: Request, db: Annotated[Session, Depends(get_db)]):
     """
     Handle GitHub pull_request webhook events.
@@ -9329,7 +9363,7 @@ def _handle_reusable_workflows_section(
     return None
 
 
-@router.post("/api/update-workflow")
+@router.post("/api/update-workflow", responses=_responses(401))
 async def update_workflow(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
@@ -9403,7 +9437,7 @@ async def update_workflow(
 
 
 
-@router.delete("/api/delete-workflow")
+@router.delete("/api/delete-workflow", responses=_responses(400, 401, 404, 500))
 async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_db)]):
     """Deletes a GitHub workflow file from all branches where it exists."""
     try:
@@ -9532,7 +9566,7 @@ async def _delete_workflow_from_repo(client, repo_name: str, formatted_workflow_
     }
 
 
-@router.delete("/api/delete-reusable-workflow")
+@router.delete("/api/delete-reusable-workflow", responses=_responses(400, 401, 404, 500))
 async def delete_reusable_workflow(request: Request, db: Annotated[Session, Depends(get_db)]):
     """Deletes a reusable workflow from the am-reuseable-workflow repository."""
     try:
@@ -9642,7 +9676,7 @@ async def delete_reusable_workflow(request: Request, db: Annotated[Session, Depe
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/delete-db-workflow")
+@router.delete("/api/delete-db-workflow", responses=_responses(400, 401, 404, 500))
 async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(get_db)]):
     """
     Deletes a workflow from the specified project and removes it completely 
@@ -9754,7 +9788,7 @@ async def _fetch_single_workflow_status(client, owner: str, repo: str, formatted
         return {"status": "error", "message": str(e), "html_url": None}
 
 
-@router.get("/api/workflow-status")
+@router.get("/api/workflow-status", responses=_responses(400, 401, 500))
 async def get_workflow_status(request: Request, db: Annotated[Session, Depends(get_db)]):
     """Get the latest workflow run status for workflows in selected repositories."""
     try:
@@ -9811,7 +9845,7 @@ async def get_workflow_status(request: Request, db: Annotated[Session, Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/workflow-templates/types")
+@router.get("/api/workflow-templates/types", responses=_responses(500))
 def get_template_types(request: Request, db: Annotated[Session, Depends(get_db)]):
     """Get available workflow template types."""
     auth_module.resolve_authenticated_user(request, db)
@@ -9826,7 +9860,7 @@ def get_template_types(request: Request, db: Annotated[Session, Depends(get_db)]
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/workflow-templates/generate")
+@router.post("/api/workflow-templates/generate", responses=_responses(500))
 def generate_workflow_templates(request: Request, body: WorkflowTemplateRequest, db: Annotated[Session, Depends(get_db)]):
     """Generate a complete set of reusable workflow templates."""
     auth_module.resolve_authenticated_user(request, db)
@@ -9877,7 +9911,7 @@ def generate_workflow_templates(request: Request, body: WorkflowTemplateRequest,
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/workflow-templates/standard")
+@router.post("/api/workflow-templates/standard", responses=_responses(500))
 def generate_standard_template(request: Request, body: WorkflowTemplateRequest, db: Annotated[Session, Depends(get_db)]):
     """Generate just the standard workflow template."""
     auth_module.resolve_authenticated_user(request, db)
@@ -9902,7 +9936,7 @@ def generate_standard_template(request: Request, body: WorkflowTemplateRequest, 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/workflow-templates/reusable")
+@router.post("/api/workflow-templates/reusable", responses=_responses(500))
 def generate_reusable_template(request: Request, body: WorkflowTemplateRequest, db: Annotated[Session, Depends(get_db)]):
     """Generate just the reusable workflow template."""
     auth_module.resolve_authenticated_user(request, db)
@@ -10093,7 +10127,7 @@ class RestoreVersionRequest(BaseModel):
     workflow_name: str
     version_id: int
 
-@router.get("/api/workflows/{workflow_name}/versions")
+@router.get("/api/workflows/{workflow_name}/versions", responses=_responses(401, 404, 500))
 async def get_workflow_versions(
     workflow_name: str,
     user: str,
@@ -10153,7 +10187,7 @@ async def get_workflow_versions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/workflows/{workflow_name}/versions/{version_id}")
+@router.get("/api/workflows/{workflow_name}/versions/{version_id}", responses=_responses(401, 404, 500))
 async def get_workflow_version(
     workflow_name: str,
     version_id: int,
@@ -10208,7 +10242,7 @@ async def get_workflow_version(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/workflows/restore-version")
+@router.post("/api/workflows/restore-version", responses=_responses(401, 404, 500))
 async def restore_workflow_version(
     payload: RestoreVersionRequest,
     db: Annotated[Session, Depends(get_db)]

@@ -4,7 +4,8 @@ import PlanUsagePill from "./components/PlanUsagePill";
 import BrandLogo from "./components/BrandLogo";
 import { useParams, useNavigate, useLocation, Link } from "react-router";
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectName, updateProjectOrder, exportProjectBackup } from "./api/projects";
+import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectDriftConfig, updateProjectName, updateProjectOrder, exportProjectBackup } from "./api/projects";
+import { fetchDriftSettings, formatDriftInterval, DriftSettings, DEFAULT_DRIFT_SETTINGS, DRIFT_INTERVAL_OPTIONS } from "./api/driftSettings";
 import { deleteProjectEnhanced } from "./api/projectDeletion";
 import { handleSaveProjectWithModal } from "./api/handlers";
 import { getSecrets } from "./api/secrets";
@@ -74,6 +75,24 @@ const normalizeProjectPRState = (state?: string | null): ProjectPRState => {
   return state && VALID_PROJECT_PR_STATES.has(state as ProjectPRState)
     ? (state as ProjectPRState)
     : "new";
+};
+
+/** The route param is a string, the loaded project's id is a number, and either
+ *  may be absent. Returns null when there is no usable id to send. */
+const toNumericProjectId = (projectId: string | number | null | undefined): number | null => {
+  if (typeof projectId === "number") return projectId;
+  if (!projectId) return null;
+  const parsed = Number(projectId);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+type InlineSaveState = "idle" | "saving" | "saved" | "error";
+
+/** Message for an inline auto-saving control's aria-live region. */
+const inlineSaveMessage = (state: InlineSaveState, error: string | null, fallback: string): string => {
+  if (state === "saving") return "Saving…";
+  if (state === "saved") return "✅ Saved";
+  return `❌ ${error || fallback}`;
 };
 
 // TypeScript interfaces for data structures
@@ -277,6 +296,13 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   const [projectColorSaveError, setProjectColorSaveError] = useState<string | null>(null);
   const projectColorSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectColorSaveRequestIdRef = useRef<number>(0);
+  // null = inherit the workspace default, 0 = automatic checks off for this project.
+  const [driftInterval, setDriftInterval] = useState<number | null>(null);
+  const [driftIntervalSaveState, setDriftIntervalSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [driftIntervalSaveError, setDriftIntervalSaveError] = useState<string | null>(null);
+  const [workspaceDriftSettings, setWorkspaceDriftSettings] = useState<DriftSettings>(DEFAULT_DRIFT_SETTINGS);
+  const driftIntervalSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const driftIntervalSaveRequestIdRef = useRef<number>(0);
 
   // Projects-grid manual ordering (issue #1804)
   const [projectOrderError, setProjectOrderError] = useState<string | null>(null);
@@ -373,7 +399,26 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         clearTimeout(projectColorSaveTimerRef.current);
         projectColorSaveTimerRef.current = null;
       }
+      if (driftIntervalSaveTimerRef.current) {
+        clearTimeout(driftIntervalSaveTimerRef.current);
+        driftIntervalSaveTimerRef.current = null;
+      }
     };
+  }, []);
+
+  // The workspace default names what "Use workspace default" actually means,
+  // so the option can say "(every 30 minutes)" instead of leaving the user to
+  // guess what they are inheriting.
+  useEffect(() => {
+    let cancelled = false;
+    // Only used to label the "inherit" option, so a failure falls back to the
+    // documented defaults rather than blocking the panel.
+    void fetchDriftSettings()
+      .catch(() => DEFAULT_DRIFT_SETTINGS)
+      .then((settings) => {
+        if (!cancelled) setWorkspaceDriftSettings(settings);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const handleProjectColorChange = useCallback(async (nextColor: ProjectColorKey): Promise<void> => {
@@ -416,6 +461,39 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       setProjectColorSaveError(error?.response?.data?.detail || error?.message || "Failed to save project color.");
     }
   }, [isProjectReadOnly, user, projectId, projectColor]);
+
+  const handleDriftIntervalChange = useCallback(async (nextInterval: number | null): Promise<void> => {
+    if (isProjectReadOnly || !user) return;
+    const numericProjectId = toNumericProjectId(projectId);
+    if (!numericProjectId) return;
+    if (nextInterval === driftInterval) return;
+
+    const previousInterval = driftInterval;
+    setDriftInterval(nextInterval);
+    setDriftIntervalSaveState("saving");
+    setDriftIntervalSaveError(null);
+
+    const requestId = ++driftIntervalSaveRequestIdRef.current;
+    try {
+      const response = await updateProjectDriftConfig(user, numericProjectId, nextInterval);
+      if (requestId !== driftIntervalSaveRequestIdRef.current) return;
+
+      setDriftInterval(response.drift_check_interval_minutes ?? null);
+      setDriftIntervalSaveState("saved");
+      if (driftIntervalSaveTimerRef.current) {
+        clearTimeout(driftIntervalSaveTimerRef.current);
+      }
+      driftIntervalSaveTimerRef.current = setTimeout(() => {
+        setDriftIntervalSaveState("idle");
+        setDriftIntervalSaveError(null);
+      }, 1500);
+    } catch (error: any) {
+      if (requestId !== driftIntervalSaveRequestIdRef.current) return;
+      setDriftInterval(previousInterval);
+      setDriftIntervalSaveState("error");
+      setDriftIntervalSaveError(error?.response?.data?.detail || error?.message || "Failed to save drift schedule.");
+    }
+  }, [isProjectReadOnly, user, projectId, driftInterval]);
 
   /**
    * Persist a manual Projects-grid reorder (issue #1804).
@@ -751,6 +829,9 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         setProjectColor(normalizeProjectColorKey(response.project_color));
         setProjectColorSaveState("idle");
         setProjectColorSaveError(null);
+        setDriftInterval(response.drift_check_interval_minutes ?? null);
+        setDriftIntervalSaveState("idle");
+        setDriftIntervalSaveError(null);
 
         // Load linked reusable workflows for standard projects
         setLinkedWorkflows(response.linked_reusable_workflows ?? []);
@@ -1798,6 +1879,58 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                   : `❌ ${projectColorSaveError || "Failed to save project color."}`}
             </output>
           )}
+
+        </div>
+      </div>
+    );
+  };
+
+  const renderDriftConfig = (): React.ReactElement => {
+    return (
+      <div className="section-content">
+        <div className="section-card-content">
+          <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 600 }}>🔍 Drift Detection</h3>
+          <p style={{ margin: "0 0 1.25rem", color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: 1.6 }}>
+            ActionsManager checks this project against GitHub in the background, so it cannot sit
+            showing &quot;in sync&quot; after someone edits a workflow directly. Set how often that
+            happens here — or switch it off for a project that rarely changes.
+          </p>
+
+          <label
+            htmlFor="project-drift-interval"
+            className="block text-sm font-medium text-text-primary dark:text-text-primary-dark mb-1"
+          >
+            Drift check schedule
+          </label>
+          <select
+            id="project-drift-interval"
+            data-testid="project-drift-interval"
+            className="flex h-9 w-full max-w-sm rounded-md border px-3 py-1 text-sm shadow-sm transition-colors border-input-border bg-input-background-color text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-input-focus dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+            value={driftInterval === null ? "inherit" : String(driftInterval)}
+            disabled={isProjectReadOnly}
+            onChange={(e) =>
+              handleDriftIntervalChange(e.target.value === "inherit" ? null : Number(e.target.value))
+            }
+          >
+            <option value="inherit">
+              {`Use workspace default (${formatDriftInterval(workspaceDriftSettings.recheck_interval_minutes).toLowerCase()})`}
+            </option>
+            <option value="0">Off — never check automatically</option>
+            {DRIFT_INTERVAL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-text-muted dark:text-text-muted-dark">
+            <strong>Check Now</strong> always works, whatever this is set to. Turning this project
+            off does not affect any other project&apos;s schedule.
+          </p>
+          {!isProjectReadOnly && driftIntervalSaveState !== "idle" && (
+            <output className="mt-2 block text-xs text-text-muted dark:text-text-muted-dark" aria-live="polite">
+              {inlineSaveMessage(driftIntervalSaveState, driftIntervalSaveError, "Failed to save drift schedule.")}
+            </output>
+          )}
         </div>
       </div>
     );
@@ -1947,6 +2080,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           />
         );
       }
+      case 'drift-config':
+        return renderDriftConfig();
       default:
         return renderDefaultRepositoriesAndBranches();
     }

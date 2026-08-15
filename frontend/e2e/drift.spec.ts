@@ -11,6 +11,7 @@ import {
   mockDriftResponse,
   mockResolveDrift,
   seedAuthenticatedSession,
+  NO_CREDENTIAL_REASON,
 } from "./fixtures/mocks";
 
 /**
@@ -131,8 +132,7 @@ test.describe("Drift detection – UI display", () => {
           has_drift: true,
         },
       ],
-      staleReason:
-        "Automatic drift checks are paused: this project's owner has no saved GitHub token.",
+      staleReason: NO_CREDENTIAL_REASON,
     });
     await installApiMocks(page, createMockState({ projects: [project] }));
 

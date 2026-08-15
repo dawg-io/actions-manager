@@ -33,6 +33,24 @@ from authorization import lock_first_member_decision, workspace_is_uninitialized
 
 router = APIRouter()
 
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERROR_RESPONSES = {
+    400: {"description": "Invalid request"},
+    401: {"description": "Not authenticated"},
+    403: {"description": "Access denied"},
+    404: {"description": "User not found"},
+    429: {"description": "Too many requests"},
+    503: {"description": "Token encryption is not configured"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 # ✅ GitHub OAuth credentials
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
@@ -303,6 +321,15 @@ class GitHubCredentialStore:
     def invalidate_pat(self, username: str) -> None:
         """Evict a username's PAT cache entry (call after save or remove)."""
         self._pat_cache.pop(username, None)
+
+    def oauth_token(self, username: str) -> Optional[str]:
+        """The in-memory OAuth/App login token, if this process holds one.
+
+        Deliberately skips the saved-PAT preference and the per-request identity
+        guard: the only caller is the durable-persistence path, which needs the
+        raw login token rather than "whatever credential we'd use right now".
+        """
+        return self._oauth_tokens.get(username)
 
     def _allowed_for_request(self, username: str) -> bool:
         current_user = get_request_user()
@@ -633,6 +660,40 @@ def resolve_optional_session_user(request: Request, db: Session) -> Optional[Acc
     return db.query(Account).filter(Account.github_user == session.github_user).first()
 
 
+def _persist_login_token_if_missing(user: Account, db: Session) -> None:
+    """Durably save the login token of an account that only has one in memory.
+
+    ``github_callback`` persists the token at login, but that only helps logins
+    that happen after it. A session created before that behaviour existed — or
+    simply before this process started — leaves the account authenticated with
+    an in-memory-only credential and nothing in the database.
+
+    That matters because the drift sweep runs with no request context and can
+    only read the stored token. Such an owner's projects report "no saved GitHub
+    token" after every restart, even while they are logged in and Check Now
+    works. Persisting on the first authenticated request closes that window once
+    per account, instead of waiting for them to log out and back in.
+
+    A no-op once a token is stored, so it costs one attribute check per request.
+    """
+    if getattr(user, "github_pat_token_encrypted", None):
+        return
+    token = user_tokens.oauth_token(user.github_user)
+    if not token:
+        return  # nothing recoverable — this account really must sign in again
+    try:
+        user.github_pat_token_encrypted = _encrypt_saved_token(token)
+        user.github_pat_updated_at = datetime.now(timezone.utc)
+        db.commit()
+        user_tokens.invalidate_pat(user.github_user)
+    except Exception:  # noqa: BLE001 - a best-effort persist must never fail a request
+        # HTTPException means SECRET_KEY isn't configured; anything else is a
+        # database problem (locked, connection dropped). Either way this runs on
+        # the authentication path of every request, so it stays in-memory-only
+        # rather than turning an ordinary GET into a 500.
+        db.rollback()
+
+
 def resolve_authenticated_user(request: Request, db: Session) -> Account:
     """
     Resolve the authenticated user from the server-issued session token.
@@ -669,6 +730,7 @@ def resolve_authenticated_user(request: Request, db: Session) -> Account:
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=USER_NOT_FOUND_ERROR)
 
+    _persist_login_token_if_missing(user, db)
     request.state.github_user = user.github_user
     return user
 
@@ -1086,7 +1148,10 @@ def github_auth():
         f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&redirect_uri={redirect_uri}&scope=repo,workflow,read:org,user:email&state={state}"
     )
 
-@router.get("/auth/callback", responses={429: {"description": "Too many requests"}})
+@router.get("/auth/callback", responses={
+    429: {"description": "Too many requests"},
+    503: {"description": "Token encryption is not configured"},
+})
 def github_callback(code: str, state: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Handles GitHub OAuth callback with CSRF protection via state validation."""
     _enforce_auth_rate_limit("auth_callback", request)
@@ -1121,7 +1186,7 @@ def github_callback(code: str, state: str, request: Request, db: Annotated[Sessi
         user_tokens[username] = access_token
         
         # Step 6: Manage user in database with login tracking
-        _manage_user_in_database(
+        user = _manage_user_in_database(
             username,
             email,
             github_account_type,
@@ -1132,6 +1197,21 @@ def github_callback(code: str, state: str, request: Request, db: Annotated[Sessi
             connected_github_account,
             connected_github_account_type
         )
+
+        # Step 7: Persist the token like github_token_login does, so login
+        # survives restarts and multi-replica deployments instead of only
+        # living in this process's in-memory _oauth_tokens (drift_worker's
+        # background sweep needs a durable credential for the project owner).
+        try:
+            user.github_pat_token_encrypted = _encrypt_saved_token(access_token)
+            user.github_pat_updated_at = datetime.now(timezone.utc)
+            db.commit()
+            user_tokens.invalidate_pat(username)
+        except HTTPException:
+            # SECRET_KEY not configured: fall back to today's in-memory-only
+            # behavior rather than failing the login.
+            db.rollback()
+            debug_log(f"⚠️ Could not persist GitHub token for {username}: SECRET_KEY not configured")
 
         session_token = create_auth_session(username, db)
         response = RedirectResponse(f"{FRONTEND_URL}?user={username}")
@@ -1149,7 +1229,7 @@ def github_callback(code: str, state: str, request: Request, db: Annotated[Sessi
         return {"error": "Authentication failed"}
 
 
-@router.post("/auth/token", responses={429: {"description": "Too many requests"}})
+@router.post("/auth/token", responses=_responses(400, 401, 429, 503))
 def github_token_login(payload: GitHubTokenRequest, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]):
     """Authenticate directly with a GitHub token and persist it as the preferred credential."""
     _enforce_auth_rate_limit("auth_token", request)
@@ -1205,7 +1285,7 @@ def logout(request: Request, response: Response, db: Annotated[Session, Depends(
     clear_session_cookie(response, request)
     return {"logged_out": True}
 
-@router.get("/api/user/{username}")
+@router.get("/api/user/{username}", responses=_responses(401, 403, 404))
 def get_user_details(username: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Fetch user details including avatar URL and rate limit status from the database."""
     user = _ensure_request_user(request, username, db)
@@ -1245,14 +1325,14 @@ def get_user_details(username: str, request: Request, db: Annotated[Session, Dep
     }
 
 
-@router.get("/api/user/{username}/github-token")
+@router.get("/api/user/{username}/github-token", responses=_responses(401, 403))
 def get_saved_github_token_status(username: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Return masked PAT/OAuth-token configuration state for the user."""
     user = _ensure_request_user(request, username, db)
     return _user_pat_status_payload(user)
 
 
-@router.post("/api/user/{username}/github-token/test", responses={429: {"description": "Too many requests"}})
+@router.post("/api/user/{username}/github-token/test", responses=_responses(400, 401, 403, 404, 429))
 def test_github_token(username: str, payload: GitHubTokenRequest, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Validate a one-time GitHub token without persisting it."""
     _enforce_auth_rate_limit("pat_test", request)
@@ -1268,7 +1348,7 @@ def test_github_token(username: str, payload: GitHubTokenRequest, request: Reque
     return _public_validation_result(validation_result)
 
 
-@router.put("/api/user/{username}/github-token", responses={429: {"description": "Too many requests"}})
+@router.put("/api/user/{username}/github-token", responses=_responses(400, 401, 403, 404, 429, 503))
 def save_github_token(username: str, payload: GitHubTokenRequest, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Validate and persist a GitHub PAT/OAuth token for server-side resolution."""
     _enforce_auth_rate_limit("pat_save", request)
@@ -1295,7 +1375,7 @@ def save_github_token(username: str, payload: GitHubTokenRequest, request: Reque
     return {"saved": True}
 
 
-@router.delete("/api/user/{username}/github-token")
+@router.delete("/api/user/{username}/github-token", responses=_responses(401, 403, 404))
 def remove_github_token(username: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Remove a stored GitHub PAT/OAuth token."""
     _ensure_request_user(request, username, db)
@@ -1311,13 +1391,17 @@ def remove_github_token(username: str, request: Request, db: Annotated[Session, 
     user.github_pat_updated_at = None
     db.commit()
     user_tokens.invalidate_pat(username)
+    # Drop the in-memory login token too. Without this the next authenticated
+    # request sees an account with no stored token, finds this one still in
+    # memory, and durably re-saves the credential the user just deleted.
+    user_tokens.pop(username, None)
 
     return {
         "removed": True,
         "token": _user_pat_status_payload(user),
     }
 
-@router.get("/api/user/{username}/permissions")
+@router.get("/api/user/{username}/permissions", responses=_responses(401, 403))
 def check_github_permissions(username: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """
     Check GitHub OAuth permissions for a user.

@@ -14,6 +14,22 @@ from github_api_tracker import github_get
 
 router = APIRouter()
 
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERROR_RESPONSES = {
+    401: {"description": "Not authenticated"},
+    403: {"description": "Access denied"},
+    404: {"description": "Not found"},
+    500: {"description": "Internal server error"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 NOT_AUTHENTICATED_DETAIL = "User not authenticated"
 GITHUB_JSON_ACCEPT = "application/vnd.github+json"
 
@@ -153,7 +169,7 @@ def _should_restrict_to_public_repos(user: str, db: Session) -> bool:
         return True
 
 
-@router.get("/api/repos", responses={403: {"description": "Access denied"}})
+@router.get("/api/repos", responses=_responses(401, 403))
 def get_repos(user: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Returns the authenticated user's repositories, filtered by account type.
 
@@ -214,7 +230,7 @@ def get_repos(user: str, request: Request, db: Annotated[Session, Depends(get_db
     
     return filtered_repos
 
-@router.get("/api/branches/{owner}/{repo}", responses={403: {"description": "Access denied"}})
+@router.get("/api/branches/{owner}/{repo}", responses=_responses(401, 403, 404))
 def get_branches(user: str, owner: str, repo: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Fetch all branches of a GitHub repository."""
     _assert_session_owns_user(user, request, db)
@@ -380,7 +396,7 @@ async def create_rwx_repo(request: Request, db: Annotated[Session, Depends(get_d
         return {"error": str(e)}
 
 
-@router.get("/api/rwx-repos", responses={403: {"description": "Access denied"}})
+@router.get("/api/rwx-repos", responses=_responses(401, 403))
 async def get_rwx_repos(
     user: str,
     request: Request,
@@ -519,7 +535,7 @@ def _serialize_rwx_repo(repo: dict, default_owner: str | None = None, default_ow
     }
 
 
-@router.get("/api/repos/status/{user}/{repo_name}", responses={403: {"description": "Access denied"}})
+@router.get("/api/repos/status/{user}/{repo_name}", responses=_responses(401, 403))
 def check_repo_status(user: str, repo_name: str, request: Request, db: Annotated[Session, Depends(get_db)], owner: Annotated[Optional[str], Query()] = None):
     """Checks if the specified repository exists on GitHub.
 
@@ -552,7 +568,7 @@ def check_repo_status(user: str, repo_name: str, request: Request, db: Annotated
         return {"error": f"GitHub API error: {response.status_code}"}
 
 
-@router.get("/api/repos/detect-build-type/{owner}/{repo}", responses={403: {"description": "Access denied"}})
+@router.get("/api/repos/detect-build-type/{owner}/{repo}", responses=_responses(401, 403, 500))
 def detect_build_type(user: str, owner: str, repo: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     """Detect build types in a GitHub repository."""
     _assert_session_owns_user(user, request, db)
@@ -586,7 +602,7 @@ def detect_build_type(user: str, owner: str, repo: str, request: Request, db: An
         raise HTTPException(status_code=500, detail=f"Error detecting build types: {str(e)}")
 
 
-@router.get("/api/repos/suggest-workflow/{owner}/{repo}", responses={403: {"description": "Access denied"}})
+@router.get("/api/repos/suggest-workflow/{owner}/{repo}", responses=_responses(401, 403, 404, 500))
 def suggest_workflow(user: str, owner: str, repo: str, request: Request, db: Annotated[Session, Depends(get_db)], build_type: str = None):
     """Suggest a workflow based on detected build types or a specific build type."""
     _assert_session_owns_user(user, request, db)

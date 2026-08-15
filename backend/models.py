@@ -227,6 +227,10 @@ class Project(Base):
     last_drift_check_at = Column(DateTime, nullable=True)
     drift_error_summary = Column(String(500), nullable=True)
     drift_check_failure_count = Column(Integer, nullable=False, default=0)  # Consecutive check_failed results, for sweep backoff; reset on clean/drifted
+    # NULL = inherit the workspace default, 0 = never sweep this project, N = every N minutes.
+    # ponytail: one column rather than an enabled flag plus an interval, so there is no
+    # contradictory "disabled but every 30 minutes" state to validate against.
+    drift_check_interval_minutes = Column(Integer, nullable=True)
     # Build-metrics sync cursor. Kept here rather than derived from workflow_runs
     # because a project with no runs yet has no row to read a timestamp from, and
     # would re-hit GitHub on every panel open.
@@ -700,6 +704,23 @@ class NotificationSettings(Base):
 
     settings_id = Column(Integer, primary_key=True, index=True)
     notifications_enabled = Column(Boolean, nullable=False, default=True)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class DriftSettings(Base):
+    """Single-row global drift sweep settings, tuned by workspace admins in the GUI.
+
+    Replaces the DRIFT_* environment variables. Absence of the row means
+    "defaults", so an install that has never opened the settings page behaves
+    exactly as it did when the defaults lived in code.
+    """
+    __tablename__ = "drift_settings"
+
+    settings_id = Column(Integer, primary_key=True, index=True)
+    sweep_enabled = Column(Boolean, nullable=False, default=True)
+    recheck_interval_minutes = Column(Integer, nullable=False, default=15)
+    batch_size = Column(Integer, nullable=False, default=5)
+    poll_interval_seconds = Column(Integer, nullable=False, default=60)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
 
