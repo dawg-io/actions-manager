@@ -983,16 +983,21 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
   const modalTitle = campaignBlockedByPreflight ? "Campaign Readiness" : "Create PR Campaign";
   const isCreatingInProgress = creating || (taskStatus && taskStatus.status !== "completed" && taskStatus.status !== "error");
 
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) { onClose(); }
-  };
+  // Dismissing happens on a dedicated backdrop button rather than a click
+  // handler on the overlay div: a div with onClick is a non-native interactive
+  // element with no keyboard path. The button is a real one, and the content
+  // is its sibling rather than nested inside it.
+  const handleOverlayClick = () => { onClose(); };
 
   return (
-    <div
-      className="modal-overlay"
-      onClick={handleOverlayClick}
-    >
-      <div className="modal-content create-pr-modal">
+    <div className="modal-overlay">
+      <button
+        type="button"
+        aria-label="Dismiss create pull request dialog"
+        onClick={handleOverlayClick}
+        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
+      />
+      <div className="modal-content create-pr-modal relative">
         <div className="modal-header">
           <div className="modal-header-text">
             <h2>{modalTitle}</h2>

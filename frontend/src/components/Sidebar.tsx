@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  Radar,
   LucideIcon,
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
@@ -65,6 +66,7 @@ const repoConfigSections: NavSection[] = [
 const standardProjectConfigSections: NavSection[] = [
   { key: 'project-info', label: 'Project Info', Icon: Info },
   { key: 'project-members', label: 'Project Members', Icon: Users },
+  { key: 'drift-config', label: 'Drift Detection', Icon: Radar },
   { key: 'backup-export', label: 'Export Config', Icon: Download },
   { key: 'danger-zone', label: 'Danger Zone', Icon: AlertTriangle },
 ];
@@ -72,6 +74,7 @@ const rwxProjectConfigSections: NavSection[] = [
   { key: 'project-info', label: 'Project Info', Icon: Info },
   { key: 'project-members', label: 'Project Members', Icon: Users },
   { key: 'linked-projects', label: 'Linked Projects', Icon: Link2 },
+  { key: 'drift-config', label: 'Drift Detection', Icon: Radar },
   { key: 'backup-export', label: 'Export Config', Icon: Download },
   { key: 'danger-zone', label: 'Danger Zone', Icon: AlertTriangle },
 ];

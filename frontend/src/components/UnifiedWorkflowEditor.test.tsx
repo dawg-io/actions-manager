@@ -509,7 +509,10 @@ describe('UnifiedWorkflowEditor', () => {
     // Read-only overlay is focusable and announced
     const overlayStatus = screen.getByRole('status');
     expect(overlayStatus).toHaveAttribute('aria-live', 'polite');
-    expect(overlayStatus).toHaveAttribute('tabIndex', '0');
+    // Deliberately NOT focusable: role=status + aria-live already announces it,
+    // and a tab stop that does nothing when focused is an anti-pattern (and
+    // what SonarQube typescript:S6845 flags).
+    expect(overlayStatus).not.toHaveAttribute('tabIndex');
   });
 
   test('applies correct CSS class for regular workflow', () => {

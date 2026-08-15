@@ -17,6 +17,19 @@ import { Page, Route } from "@playwright/test";
 
 export const TEST_USER = "octocat";
 
+/**
+ * Mirrors NO_CREDENTIAL_REASON in backend/drift_worker.py.
+ *
+ * Lives here rather than inline in each spec because it has now drifted from
+ * the backend twice, and the second time it silently published a docs
+ * screenshot contradicting the message the app actually shows. One copy means
+ * one place to update when the backend wording changes.
+ */
+export const NO_CREDENTIAL_REASON =
+  "Automatic drift checks are paused: this project's owner has no saved " +
+  "GitHub token. Sign out and sign back in to store one, or save a personal " +
+  "access token. Check Now still works.";
+
 // Keep mock project codes short and readable for E2E fixtures while still
 // being long enough to stay unique across the small number of projects each
 // test uses.

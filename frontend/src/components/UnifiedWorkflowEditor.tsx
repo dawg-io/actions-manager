@@ -863,7 +863,7 @@ const EditorSurface: React.FC<EditorSurfaceProps> = ({
       )}
       {isReadOnly && !showLockOverlay && (
         <div className="workflow-lock-overlay">
-          <div className="workflow-lock-btn workflow-lock-btn-static" role="status" aria-live="polite" tabIndex={0}>
+          <div className="workflow-lock-btn workflow-lock-btn-static" role="status" aria-live="polite">
             <span className="workflow-lock-icon">🔒</span>
             <span className="workflow-lock-label workflow-lock-label-strong">Read Only Mode</span>
             <span className="workflow-lock-label">You can view workflows but cannot make changes.</span>
@@ -1218,11 +1218,14 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
       )}
 
       {showUnlockModal && (
-        <div
-          className="workflow-lock-modal-backdrop"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowUnlockModal(false); }}
-        >
-          <div className="workflow-lock-modal">
+        <div className="workflow-lock-modal-backdrop">
+          <button
+            type="button"
+            aria-label="Dismiss unlock dialog"
+            onClick={() => setShowUnlockModal(false)}
+            className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
+          />
+          <div className="workflow-lock-modal relative">
             <div className="workflow-lock-modal-header">
               <span className="workflow-lock-modal-icon">🔒</span>
               <h3 className="workflow-lock-modal-title">Open Pull Request Detected</h3>

@@ -206,11 +206,9 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
     [selectedWorkflows, projectId, githubUser, projectName, selectedRepos, onImportComplete]
   );
 
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && !isImporting) {
-      onClose();
-    }
-  };
+  // See CreatePRModal: dismissal lives on a real button, not a div onClick.
+  // The in-flight guard stays - an import must not be dismissed mid-run.
+  const handleOverlayClick = () => { if (!isImporting) { onClose(); } };
 
   const selectedCount = selectedWorkflows.filter((wf) => wf.selected).length;
   const showAlreadyManagedEmptyState =
@@ -218,12 +216,14 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
     discovery.results.some((repoResult) => repoResult.warning === ALREADY_MANAGED_EMPTY_STATE);
 
   return (
-    <div
-      className="modal-overlay"
-      onClick={handleOverlayClick}
-      data-testid="workflow-import-modal"
-    >
-      <div className="modal-content workflow-import-modal">
+    <div className="modal-overlay" data-testid="workflow-import-modal">
+      <button
+        type="button"
+        aria-label="Dismiss workflow import"
+        onClick={handleOverlayClick}
+        className="absolute inset-0 cursor-default border-0 bg-transparent p-0"
+      />
+      <div className="modal-content workflow-import-modal relative">
         {/* Modal Header */}
         <div className="modal-header">
           <h2>Import Existing Workflows</h2>

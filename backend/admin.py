@@ -29,6 +29,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERROR_RESPONSES = {
+    401: {"description": "Invalid admin credentials"},
+    404: {"description": "Not found"},
+    503: {"description": "Admin panel is not configured"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 security = HTTPBasic()
 
 # Admin credentials from environment variables
@@ -1079,7 +1095,7 @@ def verify_admin_credentials(credentials: Annotated[HTTPBasicCredentials, Depend
     return credentials.username
 
 
-@router.get("/admin/users", response_class=HTMLResponse)
+@router.get("/admin/users", response_class=HTMLResponse, responses=_responses(401, 503))
 async def admin_users_list(
     request: Request,
     admin_user: Annotated[str, Depends(verify_admin_credentials)],
@@ -1132,7 +1148,7 @@ async def admin_users_list(
     return create_secure_response(html_content)
 
 
-@router.patch("/admin/users/{user_id}/account-type")
+@router.patch("/admin/users/{user_id}/account-type", responses=_responses(401, 404, 503))
 async def update_user_account_type(
     user_id: int,
     account_update: AccountTypeUpdate,
@@ -1785,7 +1801,7 @@ def generate_webhook_admin_page_html(
     return html_content
 
 
-@router.get("/admin/webhooks", response_class=HTMLResponse)
+@router.get("/admin/webhooks", response_class=HTMLResponse, responses=_responses(401, 503))
 async def admin_webhooks(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
@@ -2054,7 +2070,7 @@ def generate_subscription_event_rows_html(events: list[MarketplaceWebhookEvent])
     return rows_html
 
 
-@router.get("/admin/users/{user_id}/subscription", response_class=HTMLResponse)
+@router.get("/admin/users/{user_id}/subscription", response_class=HTMLResponse, responses=_responses(401, 404, 503))
 async def admin_user_subscription(
     user_id: int,
     request: Request,

@@ -26,7 +26,7 @@ from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from models import Base, Account, Project  # noqa: E402
+from models import Base, Account, DriftSettings, Project  # noqa: E402
 import drift_worker  # noqa: E402
 from drift_worker import sweep_projects_for_drift  # noqa: E402
 
@@ -58,13 +58,25 @@ def _owner(db, name="alice"):
     return user
 
 
-def _project(db, owner, code, last_checked=STALE, failure_count=0):
+def _project(db, owner, code, last_checked=STALE, failure_count=0, interval=None):
     project = Project(project_name=f"proj-{code}", project_code=code, user_id=owner.user_id,
                       use_prefix=False, branch_option="default",
                       last_drift_check_at=last_checked,
-                      drift_check_failure_count=failure_count)
+                      drift_check_failure_count=failure_count,
+                      drift_check_interval_minutes=interval)
     db.add(project); db.commit(); db.refresh(project)
     return project
+
+
+def _settings(db, **overrides):
+    """Save the single global settings row. Config lives in the DB, not the
+    environment, so tests set it the same way the GUI does."""
+    values = {"sweep_enabled": True, "recheck_interval_minutes": 15,
+              "batch_size": 5, "poll_interval_seconds": 60}
+    values.update(overrides)
+    settings = DriftSettings(**values)
+    db.add(settings); db.commit()
+    return settings
 
 
 def _tokens(mapping):
@@ -95,12 +107,12 @@ class TestOnlyStaleProjectsAreChecked:
         owner = _owner(db)
         _project(db, owner, "OLD", last_checked=STALE)
         _project(db, owner, "NEW", last_checked=None)
+        _settings(db, batch_size=1)
 
         seen = []
         with _tokens({"alice": "tok"}), \
              patch("workflows.run_project_drift_check",
-                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])), \
-             patch.dict(os.environ, {"DRIFT_SWEEP_BATCH_SIZE": "1"}):
+                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])):
             sweep_projects_for_drift(db)
 
         assert seen == ["NEW"]
@@ -111,10 +123,10 @@ class TestBatching:
         owner = _owner(db)
         for i in range(5):
             _project(db, owner, f"P{i}")
+        _settings(db, batch_size=2)
 
         with _tokens({"alice": "tok"}), \
-             patch("workflows.run_project_drift_check", return_value=([], [])) as check, \
-             patch.dict(os.environ, {"DRIFT_SWEEP_BATCH_SIZE": "2"}):
+             patch("workflows.run_project_drift_check", return_value=([], [])) as check:
             assert sweep_projects_for_drift(db) == 2
 
         assert check.call_count == 2
@@ -193,12 +205,12 @@ class TestAMissingTokenDoesNotBreakTheSweep:
         # The tokenless project sorts first (oldest cursor).
         _project(db, broke, "STARVER", last_checked=STALE - timedelta(days=1))
         _project(db, fine, "WANTED", last_checked=STALE)
+        _settings(db, batch_size=1)
 
         seen = []
         with _tokens({"fine": "tok"}), \
              patch("workflows.run_project_drift_check",
-                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])), \
-             patch.dict(os.environ, {"DRIFT_SWEEP_BATCH_SIZE": "1"}):
+                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])):
             assert sweep_projects_for_drift(db) == 1
 
         assert seen == ["WANTED"]
@@ -284,12 +296,12 @@ class TestBackoffInTheSweep:
         owner = _owner(db)
         _project(db, owner, "STARVER", last_checked=STALE - timedelta(hours=1), failure_count=10)
         _project(db, owner, "WANTED", last_checked=STALE)
+        _settings(db, batch_size=1)
 
         seen = []
         with _tokens({"alice": "tok"}), \
              patch("workflows.run_project_drift_check",
-                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])), \
-             patch.dict(os.environ, {"DRIFT_SWEEP_BATCH_SIZE": "1"}):
+                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])):
             assert sweep_projects_for_drift(db) == 1
 
         assert seen == ["WANTED"]
@@ -332,14 +344,132 @@ class TestDriftCheckFailureCountBookkeeping:
 class TestTheKillSwitch:
     def test_disabled_means_nothing_is_checked(self, db):
         _project(db, _owner(db), "P1")
+        _settings(db, sweep_enabled=False)
 
         with _tokens({"alice": "tok"}), \
-             patch("workflows.run_project_drift_check") as check, \
-             patch.dict(os.environ, {"DRIFT_SWEEP_ENABLED": "false"}):
+             patch("workflows.run_project_drift_check") as check:
             assert sweep_projects_for_drift(db) == 0
 
         assert check.call_count == 0
 
-    def test_enabled_by_default(self):
-        with patch.dict(os.environ, {}, clear=True):
-            assert drift_worker.sweep_enabled() is True
+    def test_enabled_when_nothing_has_been_saved(self, db):
+        """No settings row is the state of every install that has never opened
+        the settings page — it must behave exactly as the old defaults did."""
+        settings = drift_worker.get_settings(db)
+
+        assert settings.sweep_enabled is True
+        assert settings.recheck_interval_minutes == 15
+        assert settings.batch_size == 5
+        assert settings.poll_interval_seconds == 60
+
+
+class TestPerProjectInterval:
+    """One project off, one on a long interval, one on a short one — the point
+    of moving this config into the GUI."""
+
+    def test_a_project_set_to_off_is_never_checked(self, db):
+        _project(db, _owner(db), "OFF", interval=drift_worker.INTERVAL_OFF,
+                 last_checked=STALE - timedelta(days=7))
+
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check") as check:
+            assert sweep_projects_for_drift(db) == 0
+
+        assert check.call_count == 0
+
+    def test_off_does_not_starve_the_projects_behind_it(self, db):
+        """An off project sorts to the head of the queue (oldest check first),
+        so excluding it must not cost the next project its slot."""
+        owner = _owner(db)
+        _project(db, owner, "OFF", interval=drift_worker.INTERVAL_OFF,
+                 last_checked=STALE - timedelta(days=7))
+        _project(db, owner, "WANTED", last_checked=STALE)
+        _settings(db, batch_size=1)
+
+        seen = []
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check",
+                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])):
+            assert sweep_projects_for_drift(db) == 1
+
+        assert seen == ["WANTED"]
+
+    def test_a_longer_project_interval_defers_a_check_the_global_would_allow(self, db):
+        """Checked 2h ago: due at the 15-minute global default, not due on the
+        project's own daily cadence."""
+        _project(db, _owner(db), "DAILY", interval=1440, last_checked=STALE)
+
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check") as check:
+            assert sweep_projects_for_drift(db) == 0
+
+        assert check.call_count == 0
+
+    def test_a_project_past_its_own_longer_interval_is_checked(self, db):
+        _project(db, _owner(db), "DAILY", interval=1440,
+                 last_checked=datetime.now(timezone.utc) - timedelta(days=2))
+
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check", return_value=([], [])) as check:
+            assert sweep_projects_for_drift(db) == 1
+
+        assert check.call_count == 1
+
+    def test_a_shorter_project_interval_beats_a_long_global_default(self, db):
+        """The SQL pre-filter is bounded by the shortest interval in play, so a
+        project checking more often than the global default is still reached."""
+        _project(db, _owner(db), "FAST", interval=15,
+                 last_checked=datetime.now(timezone.utc) - timedelta(minutes=30))
+        _settings(db, recheck_interval_minutes=1440)
+
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check", return_value=([], [])) as check:
+            assert sweep_projects_for_drift(db) == 1
+
+        assert check.call_count == 1
+
+    def test_no_override_inherits_the_global_default(self, db):
+        _project(db, _owner(db), "P1", interval=None, last_checked=STALE)
+        _settings(db, recheck_interval_minutes=1440)
+
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check") as check:
+            assert sweep_projects_for_drift(db) == 0
+
+        assert check.call_count == 0
+
+    def test_many_not_due_projects_do_not_starve_a_due_one(self, db):
+        """The candidate window is capped, so "due" has to be decided in SQL.
+
+        Sixty daily projects checked 2h ago are not due, but they sort ahead of
+        a 15-minute project checked 30m ago that is. If they can occupy
+        candidate slots, the due project is never reached and the tick does no
+        work at all — the same starvation an "off" project would cause.
+        """
+        owner = _owner(db)
+        for i in range(60):
+            _project(db, owner, f"D{i}", interval=1440,
+                     last_checked=datetime.now(timezone.utc) - timedelta(hours=2))
+        _project(db, owner, "DUE", interval=15,
+                 last_checked=datetime.now(timezone.utc) - timedelta(minutes=30))
+        _settings(db, batch_size=5)
+
+        seen = []
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check",
+                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])):
+            assert sweep_projects_for_drift(db) == 1
+
+        assert seen == ["DUE"]
+
+    def test_backoff_still_applies_on_top_of_a_project_interval(self, db):
+        """Two consecutive failures double the wait — on the project's own
+        30-minute cadence, not the global default."""
+        _project(db, _owner(db), "P1", interval=30, failure_count=2,
+                 last_checked=datetime.now(timezone.utc) - timedelta(minutes=45))
+
+        with _tokens({"alice": "tok"}), \
+             patch("workflows.run_project_drift_check") as check:
+            assert sweep_projects_for_drift(db) == 0
+
+        assert check.call_count == 0

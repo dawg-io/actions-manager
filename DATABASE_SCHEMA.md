@@ -95,6 +95,14 @@ Projects table for organizing repositories and workflows.
 | `last_preflight_run_at` | TIMESTAMP | Yes | Timestamp of the most recent validation preflight attempt |
 | `last_preflight_error` | VARCHAR(500) | Yes | Sanitized summary of the most recent validation preflight failure |
 | `last_preflight_pr_url` | VARCHAR(500) | Yes | Pull request URL created in the validation repository by the most recent preflight run |
+| `last_preflight_content_hash` | VARCHAR(64) | Yes | Content hash the most recent preflight ran against |
+| `drift_status` | VARCHAR(20) | No | Cached project-level drift result: `unknown`, `clean`, `drifted`, `check_failed` (default: `unknown`) |
+| `drift_count` | INTEGER | No | Number of drifted (workflow, repo, branch) combinations at the last check (default: 0) |
+| `last_drift_check_at` | TIMESTAMP | Yes | When the last drift check completed. Never advanced by a skipped check |
+| `drift_error_summary` | VARCHAR(500) | Yes | Why the last check failed, or why the project is being skipped by the sweep |
+| `drift_check_failure_count` | INTEGER | No | Consecutive `check_failed` results, driving the sweep's exponential backoff; reset on `clean`/`drifted` (default: 0) |
+| `drift_check_interval_minutes` | INTEGER | Yes | Per-project sweep schedule. `NULL` inherits the workspace default, `0` disables automatic checks, otherwise minutes between checks |
+| `last_run_sync_at` | TIMESTAMP | Yes | Build-metrics sync cursor, kept here so a project with no runs yet doesn't re-hit GitHub on every panel open |
 | `last_modified_by` | VARCHAR(255) | Yes | GitHub username of the last user to modify this project |
 | `created_at` | TIMESTAMP | No | Project creation timestamp |
 | `updated_at` | TIMESTAMP | No | Last update timestamp |
@@ -322,6 +330,27 @@ Tracks environment variable *names* (not values) for projects that disable the r
 ---
 
 ### Drift & Override Tables
+
+#### drift_settings
+Single-row table holding the workspace-wide defaults for the background drift sweep, edited by workspace admins under **Drift Settings**. Replaces the former `DRIFT_*` environment variables. Absence of the row means "use the built-in defaults", so an installation that has never opened the settings page behaves exactly as it did when the defaults lived in code.
+
+| Column | Type | Nullable | Description |
+|--------|------|----------|-------------|
+| `settings_id` | INTEGER | No | Primary key, auto-increment |
+| `sweep_enabled` | BOOLEAN | No | Master switch for automatic drift checking (default: true) |
+| `recheck_interval_minutes` | INTEGER | No | Default minutes before a project is due again, for projects that don't override it (default: 15) |
+| `batch_size` | INTEGER | No | Projects checked per tick, capping burst API usage (default: 5) |
+| `poll_interval_seconds` | INTEGER | No | How often the worker wakes to look for due projects (default: 60) |
+| `updated_at` | TIMESTAMP | Yes | Last update timestamp |
+
+**Indexes**:
+- Primary key on `settings_id`
+
+**Notes**:
+- Read fresh on every sweep tick, so changes take effect without a restart.
+- Per-project overrides live on `projects.drift_check_interval_minutes`; this table only supplies the default they inherit.
+
+---
 
 #### codeowners
 Locally-managed CODEOWNERS file content for a repository within a project. Tracks sync state using a GitHub blob SHA, mirroring the workflow drift model.

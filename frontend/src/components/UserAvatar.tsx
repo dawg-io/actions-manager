@@ -489,6 +489,15 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
           <span>Notifications</span>
         </DropdownMenuItem>
 
+        {/* Drift Settings Link */}
+        <DropdownMenuItem
+          onClick={() => { navigate('/workspace/drift'); }}
+          className="cursor-pointer"
+        >
+          <span className="mr-2">🔍</span>
+          <span>Drift Settings</span>
+        </DropdownMenuItem>
+
         {/* Backup Link */}
         <DropdownMenuItem
           onClick={() => { navigate('/workspace/backup'); }}

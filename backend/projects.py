@@ -52,6 +52,26 @@ from reusable_workflow_visibility import (
 
 router = APIRouter()
 
+_ERR_AUTH_REQUIRED = "Authentication required"
+
+# Error responses these endpoints can return, declared on each route so they
+# appear in the OpenAPI schema (and so generated clients know about them).
+# Codes raised inside shared helpers count too - the rule tracks the call.
+_ERROR_RESPONSES = {
+    400: {"description": "Invalid request"},
+    401: {"description": _ERR_AUTH_REQUIRED},
+    403: {"description": "Access denied"},
+    404: {"description": "Not found"},
+    422: {"description": "Request failed validation"},
+    500: {"description": "Internal server error"},
+}
+
+
+def _responses(*codes: int) -> dict:
+    """Subset of _ERROR_RESPONSES for a route's `responses=` parameter."""
+    return {code: _ERROR_RESPONSES[code] for code in codes}
+
+
 GITHUB_USER_NOT_FOUND = "GitHub user not found"
 _ERR_PROJECT_NOT_FOUND = "Project not found or access denied"
 _ERR_PROJECT_NOT_FOUND_PLAIN = "Project not found"
@@ -99,6 +119,10 @@ ALLOWED_PROJECT_COLORS = (
 STANDARD_PROJECT_COLORS = tuple(
     color for color in ALLOWED_PROJECT_COLORS if color not in RWX_ONLY_PROJECT_COLORS
 )
+
+# Per-project drift cadence presets, in minutes. 0 means "never check this
+# project"; omitting the value entirely (None) inherits the workspace default.
+ALLOWED_DRIFT_INTERVAL_MINUTES = (0, 15, 30, 60, 360, 1440)
 
 
 def _enforce_project_color_type_restriction(
@@ -351,6 +375,29 @@ class ProjectColorUpdateSchema(BaseModel):
                 f"project_color must be one of: {', '.join(ALLOWED_PROJECT_COLORS)}"
             )
         return normalized
+
+
+class ProjectDriftConfigUpdateSchema(BaseModel):
+    """Patch-style payload for how often this project is swept for drift.
+
+    ``None`` inherits the workspace default, ``0`` turns automatic checks off,
+    and anything else is minutes between checks. The value is restricted to the
+    presets the UI offers so a hand-crafted request cannot set a 1-minute sweep
+    and burn the install's GitHub rate limit.
+    """
+
+    github_user: Optional[str] = None
+    drift_check_interval_minutes: Optional[int] = None
+
+    @field_validator("drift_check_interval_minutes")
+    @classmethod
+    def _validate_interval(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return None
+        if v not in ALLOWED_DRIFT_INTERVAL_MINUTES:
+            allowed = ", ".join(str(i) for i in sorted(ALLOWED_DRIFT_INTERVAL_MINUTES))
+            raise ValueError(f"drift_check_interval_minutes must be one of: {allowed}")
+        return v
 
 
 class ProjectNameUpdateSchema(BaseModel):
@@ -787,7 +834,10 @@ def _process_project_workflows(db: Session, project: ProjectSchema, project_id: 
 
 @router.post(
     "/projects/",
-    responses={422: {"description": "Invalid project_color for this project type"}},
+    responses={
+        **_responses(400, 401, 403, 404, 500),
+        422: {"description": "Invalid project_color for this project type"},
+    },
 )
 def create_project(
     project: ProjectSchema,
@@ -796,7 +846,7 @@ def create_project(
 ):
     github_user = x_github_user or (project.github_user or "")
     if not github_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(status_code=401, detail=_ERR_AUTH_REQUIRED)
     try:
         user = _validate_create_request(db, project, github_user)
         print(f"✅ POST /api/projects/ - Creating project '{project.project_name}' for user '{github_user}'")
@@ -856,7 +906,7 @@ def _require_project_editor(db: Session, caller_member, project_id: int) -> None
     "/projects/order",
     responses={
         400: {"description": "Order does not match the caller's accessible projects"},
-        401: {"description": "Authentication required"},
+        401: {"description": _ERR_AUTH_REQUIRED},
         500: {"description": "Internal server error"},
     },
 )
@@ -930,6 +980,7 @@ def update_project_order(
 @router.put(
     "/projects/{project_id}/",
     responses={
+        **_responses(400, 500),
         403: {"description": "Access denied"},
         404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         422: {"description": "Invalid project_color for this project type"},
@@ -1068,6 +1119,7 @@ def update_project(
 @router.patch(
     "/projects/{project_id}/project-color",
     responses={
+        **_responses(500),
         403: {"description": "Access denied"},
         404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         422: {"description": "Invalid project_color for this project type"},
@@ -1124,6 +1176,63 @@ def update_project_color(
         traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error during project color update")
+
+
+@router.patch(
+    "/projects/{project_id}/drift-config",
+    responses={
+        403: {"description": "Access denied"},
+        404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
+        422: {"description": "Invalid drift_check_interval_minutes"},
+        # Spelled out rather than via _responses(500): the analyzer reads this
+        # dict statically and cannot see through the helper call.
+        500: {"description": "Internal server error"},
+    },
+)
+def update_project_drift_config(
+    project_id: int,
+    payload: ProjectDriftConfigUpdateSchema,
+    db: Annotated[Session, Depends(get_db)],
+    x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
+):
+    """Set how often the background sweep checks this project for drift.
+
+    Local ActionsManager metadata only — never triggers a GitHub call, and
+    never runs a check itself. The next sweep tick picks up the new cadence.
+    """
+    try:
+        _caller, caller_member = _resolve_caller(db, x_github_user)
+
+        existing_project = _find_project_by_id(db, project_id, caller_member, payload.github_user)
+        if not existing_project:
+            print(
+                f"❌ PATCH /projects/{project_id}/drift-config - Project not found "
+                f"(caller='{x_github_user}', github_user='{payload.github_user}')"
+            )
+            raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
+
+        _require_project_editor(db, caller_member, existing_project.project_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ PATCH /projects/{project_id}/drift-config - Unexpected error during validation: {e}")
+        raise HTTPException(status_code=500, detail=_ERR_INTERNAL_VALIDATION)
+
+    try:
+        existing_project.drift_check_interval_minutes = payload.drift_check_interval_minutes
+        existing_project.updated_at = func.now()
+        existing_project.last_modified_by = (x_github_user or payload.github_user or "").strip() or None
+        db.commit()
+        return {
+            "message": "✅ Drift check schedule updated successfully!",
+            "project_id": existing_project.project_id,
+            "drift_check_interval_minutes": existing_project.drift_check_interval_minutes,
+        }
+    except Exception as e:
+        print(f"❌ PATCH /projects/{project_id}/drift-config - Error updating drift config: {e}")
+        traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Internal server error during drift config update")
 
 
 @router.patch(
@@ -1465,6 +1574,7 @@ def get_projects(
             "drift_count": int(project.drift_count or 0),
             "last_drift_check_at": project.last_drift_check_at,
             "drift_error_summary": project.drift_error_summary,
+            "drift_check_interval_minutes": project.drift_check_interval_minutes,
             "last_modified_by": project.last_modified_by,
             "workflow_count": int(workflow_count or 0),
         }
@@ -2096,7 +2206,7 @@ def _build_project_backup_payload(db: Session, project: Project, exported_by: st
     return payload
 
 
-@router.get("/projects/{project_name}")
+@router.get("/projects/{project_name}", responses=_responses(403, 404))
 def get_project(
     project_name: str,
     github_user: str,
@@ -2243,12 +2353,13 @@ def get_project(
         "last_preflight_pr_url": project.last_preflight_pr_url,
         "drift_detected": check_drift and len(repo_names) > 0,
         "drifted_workflow_names": drifted_workflow_names,
+        "drift_check_interval_minutes": project.drift_check_interval_minutes,
         "caller_project_role": caller_project_role,
         "custom_files": _serialize_custom_files(db, project.project_id),
     }
 
 
-@router.get("/projects/{project_id}/backup-export")
+@router.get("/projects/{project_id}/backup-export", responses=_responses(401, 403, 404))
 def export_project_backup(
     project_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -2257,7 +2368,7 @@ def export_project_backup(
     """Export a deterministic project-scoped JSON backup without sensitive secrets/tokens."""
     caller, caller_member = _resolve_caller(db, x_github_user)
     if not caller:
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(status_code=401, detail=_ERR_AUTH_REQUIRED)
 
     project = _find_project_by_id(db, project_id, caller_member, caller.github_user)
     if not project:
@@ -2278,7 +2389,7 @@ def export_project_backup(
     )
 
 
-@router.delete("/projects/{project_name}")
+@router.delete("/projects/{project_name}", responses=_responses(404, 500))
 def delete_project(
     project_name: str,
     github_user: str,
@@ -2313,7 +2424,7 @@ def delete_project(
         db.close()
 
 
-@router.post("/projects/{project_name}/toggle-reusable-workflows")
+@router.post("/projects/{project_name}/toggle-reusable-workflows", responses=_responses(404, 500))
 def toggle_reusable_workflows(
     project_name: str,
     db: Annotated[Session, Depends(get_db)],
@@ -2353,7 +2464,7 @@ def toggle_reusable_workflows(
     finally:
         db.close()
 
-@router.get("/rwx-workflows")
+@router.get("/rwx-workflows", responses=_responses(404))
 def get_rwx_workflows(
     github_user: str,
     db: Annotated[Session, Depends(get_db)],
@@ -2431,7 +2542,7 @@ def get_rwx_workflows(
     return result
 
 
-@router.post("/projects/{project_name}/linked-reusable-workflows")
+@router.post("/projects/{project_name}/linked-reusable-workflows", responses=_responses(404, 422, 500))
 def link_reusable_workflow(
     project_name: str,
     payload: LinkWorkflowSchema,
@@ -2499,7 +2610,7 @@ def link_reusable_workflow(
         raise HTTPException(status_code=500, detail=f"Error linking workflow: {str(e)}")
 
 
-@router.delete("/projects/{project_name}/linked-reusable-workflows/{workflow_id}")
+@router.delete("/projects/{project_name}/linked-reusable-workflows/{workflow_id}", responses=_responses(404, 500))
 def unlink_reusable_workflow(
     project_name: str,
     workflow_id: int,
@@ -2534,7 +2645,7 @@ def unlink_reusable_workflow(
         raise HTTPException(status_code=500, detail=f"Error unlinking workflow: {str(e)}")
 
 
-@router.put("/projects/{project_name}/linked-reusable-workflows/{workflow_id}")
+@router.put("/projects/{project_name}/linked-reusable-workflows/{workflow_id}", responses=_responses(403, 404, 500))
 def update_linked_reusable_workflow(
     project_name: str,
     workflow_id: int,
@@ -2836,7 +2947,7 @@ def _validate_repo_branch_config(payload: RepoBranchConfigSchema) -> None:
             )
 
 
-@router.get("/projects/{project_id}/repo-branch-configs")
+@router.get("/projects/{project_id}/repo-branch-configs", responses=_responses(400, 403, 404))
 def list_project_repo_branch_configs(
     project_id: int,
     github_user: str,
@@ -2863,7 +2974,7 @@ def list_project_repo_branch_configs(
     }
 
 
-@router.patch("/projects/{project_id}/repos/{repo_id}/branch-config")
+@router.patch("/projects/{project_id}/repos/{repo_id}/branch-config", responses=_responses(400, 403, 404))
 def update_project_repo_branch_config(
     project_id: int,
     repo_id: int,
@@ -2922,7 +3033,7 @@ def update_project_repo_branch_config(
     return _serialize_repo_branch_config(db, project, repo, assoc)
 
 
-@router.delete("/projects/{project_id}/repos/{repo_id}/branch-config")
+@router.delete("/projects/{project_id}/repos/{repo_id}/branch-config", responses=_responses(400, 403, 404))
 def reset_project_repo_branch_config(
     project_id: int,
     repo_id: int,

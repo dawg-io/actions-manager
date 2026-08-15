@@ -17,19 +17,25 @@ answers 304, which does not count against the rate limit, and branch recency is
 cached by head SHA. Sweeping a quiet project costs roughly one conditional call
 per repo, which is why polling every project on a timer is now reasonable when
 it would not have been before.
+
+Cadence comes from the database, not the environment: global defaults live in
+``drift_settings`` (edited by workspace admins in the GUI) and a project can
+override the interval, or opt out entirely, via
+``Project.drift_check_interval_minutes``. Everything is re-read per tick, so
+changes apply without a restart.
 """
 
 import asyncio
 import contextlib
-import os
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Callable, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from models import Account, Project
+from models import Account, DriftSettings, Project
 
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 DEFAULT_RECHECK_INTERVAL_MINUTES = 15
@@ -44,8 +50,11 @@ SCAN_MULTIPLIER = 10
 # A project stuck returning check_failed is retried less and less often as
 # failures accumulate, instead of at the full recheck interval forever. The
 # cap is a multiplier rather than an absolute number so it scales with
-# whatever DRIFT_RECHECK_INTERVAL_MINUTES an operator configures.
+# whatever recheck interval an admin configures.
 BACKOFF_MAX_MULTIPLIER = 32
+
+# Per-project override meaning "never sweep this project".
+INTERVAL_OFF = 0
 
 
 def _backoff_multiplier(failure_count: int) -> int:
@@ -55,34 +64,88 @@ def _backoff_multiplier(failure_count: int) -> int:
     return min(2 ** max(failure_count - 1, 0), BACKOFF_MAX_MULTIPLIER)
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        value = int(os.getenv(name, "").strip())
-    except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
+_DEFAULTS = SimpleNamespace(
+    sweep_enabled=True,
+    recheck_interval_minutes=DEFAULT_RECHECK_INTERVAL_MINUTES,
+    batch_size=DEFAULT_BATCH_SIZE,
+    poll_interval_seconds=DEFAULT_POLL_INTERVAL_SECONDS,
+)
 
 
-def sweep_enabled() -> bool:
-    return os.getenv("DRIFT_SWEEP_ENABLED", "true").strip().lower() not in ("false", "0", "no")
+def get_settings(db: Session):
+    """Global drift settings, or the built-in defaults when nobody has saved any.
+
+    Read fresh on every tick rather than cached, so a change made in the GUI
+    takes effect on the next sweep instead of at the next restart.
+    """
+    return db.query(DriftSettings).first() or _DEFAULTS
 
 
-def _stale_projects(db: Session, now: datetime, limit: int):
+def _effective_interval(project: Project, default_minutes: int) -> int:
+    """Minutes between checks for this project: its own override, else the global default."""
+    configured = project.drift_check_interval_minutes
+    return default_minutes if configured is None else configured
+
+
+def _due_in_sql(db: Session, now: datetime, default_minutes: int):
+    """Filter matching exactly the projects whose own interval says they are due.
+
+    A single cutoff cannot express this once intervals vary per project. Using
+    the shortest one in play looks like a safe superset, but the candidate set
+    is capped: enough not-yet-due projects on a long interval sort ahead of a
+    due one (oldest checked first) and fill the whole window, so the due project
+    is never reached and the tick does no work at all — the same starvation
+    INTERVAL_OFF projects are filtered out to avoid.
+
+    So the cutoff is built per interval instead. Every timestamp is computed in
+    Python and bound as a parameter, which keeps this identical on SQLite and
+    PostgreSQL rather than relying on either one's date arithmetic. Only the
+    intervals actually stored are considered, so this is a handful of terms.
+    """
+    def checked_before(minutes: int):
+        return Project.last_drift_check_at <= now - timedelta(minutes=minutes)
+
+    not_switched_off = or_(Project.drift_check_interval_minutes.is_(None),
+                           Project.drift_check_interval_minutes != INTERVAL_OFF)
+
+    clauses = [
+        # Never checked: due whatever the interval, as long as it isn't "off".
+        and_(Project.last_drift_check_at.is_(None), not_switched_off),
+        # Inheriting the workspace default.
+        and_(Project.drift_check_interval_minutes.is_(None), checked_before(default_minutes)),
+    ]
+
+    configured = (
+        db.query(Project.drift_check_interval_minutes)
+        .filter(Project.drift_check_interval_minutes.isnot(None))
+        .filter(Project.drift_check_interval_minutes != INTERVAL_OFF)
+        .distinct()
+        .all()
+    )
+    for (minutes,) in configured:
+        clauses.append(and_(Project.drift_check_interval_minutes == minutes,
+                            checked_before(minutes)))
+
+    return or_(*clauses)
+
+
+def _stale_projects(db: Session, now: datetime, limit: int, default_minutes: int):
     """Projects due a re-check, never-checked first, then least-recently.
 
-    The SQL filter uses the un-backed-off cutoff, which is always a superset
-    of what backoff would allow — a project failing that cutoff can never pass
-    a longer, backed-off one either. The stricter, per-project backoff check
-    runs after, in Python, over this already-bounded candidate set (bounded by
-    SCAN_MULTIPLIER for the same reason a token-less project doesn't starve
-    the queue: a project in backoff must not block the ones behind it).
+    Interval due-ness is decided in SQL (see _due_in_sql), so every candidate is
+    genuinely due and a project on a long interval can never occupy a slot that
+    belongs to one on a short interval. Projects set to INTERVAL_OFF are
+    excluded there too.
+
+    Only failure backoff is left to Python, because its multiplier is
+    exponential in a column. That keeps the SCAN_MULTIPLIER window doing what it
+    always did — absorbing candidates that turn out not to be actionable, so a
+    project in backoff, like one with no usable token, cannot block the projects
+    behind it.
     """
-    interval_minutes = _env_int("DRIFT_RECHECK_INTERVAL_MINUTES", DEFAULT_RECHECK_INTERVAL_MINUTES)
-    cutoff = now - timedelta(minutes=interval_minutes)
     candidates = (
         db.query(Project)
-        .filter(or_(Project.last_drift_check_at.is_(None),
-                    Project.last_drift_check_at <= cutoff))
+        .filter(_due_in_sql(db, now, default_minutes))
         .order_by(Project.last_drift_check_at.is_(None).desc(),
                   Project.last_drift_check_at.asc())
         .limit(limit)
@@ -92,15 +155,14 @@ def _stale_projects(db: Session, now: datetime, limit: int):
     def _due(project: Project) -> bool:
         if project.last_drift_check_at is None:
             return True
+        interval_minutes = _effective_interval(project, default_minutes)
         multiplier = _backoff_multiplier(project.drift_check_failure_count or 0)
-        if multiplier <= 1:
-            return True  # already satisfied by the SQL cutoff above
         # SQLite drops tzinfo on round-trip, so last_drift_check_at may come
         # back naive even though `now` is timezone-aware — normalize both to
         # naive before comparing.
-        backoff_cutoff = (now - timedelta(minutes=interval_minutes * multiplier)).replace(tzinfo=None)
+        due_cutoff = (now - timedelta(minutes=interval_minutes * multiplier)).replace(tzinfo=None)
         checked_at = project.last_drift_check_at.replace(tzinfo=None) if project.last_drift_check_at.tzinfo else project.last_drift_check_at
-        return checked_at <= backoff_cutoff
+        return checked_at <= due_cutoff
 
     return [project for project in candidates if _due(project)]
 
@@ -110,7 +172,8 @@ def _stale_projects(db: Session, now: datetime, limit: int):
 # and nothing says why.
 NO_CREDENTIAL_REASON = (
     "Automatic drift checks are paused: this project's owner has no saved "
-    "GitHub token. Save a personal access token, or use Check Now."
+    "GitHub token. Sign out and sign back in to store one, or save a personal "
+    "access token. Check Now still works."
 )
 
 
@@ -147,16 +210,18 @@ def _record_skip(db: Session, project: Project) -> None:
 
 def sweep_projects_for_drift(db: Session, now: Optional[datetime] = None) -> int:
     """Re-check up to one batch of stale projects. Returns how many were checked."""
-    if not sweep_enabled():
+    settings = get_settings(db)
+    if not settings.sweep_enabled:
         return 0
 
     from workflows import run_project_drift_check
 
     now = now or datetime.now(timezone.utc)
-    batch_size = _env_int("DRIFT_SWEEP_BATCH_SIZE", DEFAULT_BATCH_SIZE)
+    batch_size = settings.batch_size
 
     checked = 0
-    for project in _stale_projects(db, now, batch_size * SCAN_MULTIPLIER):
+    for project in _stale_projects(db, now, batch_size * SCAN_MULTIPLIER,
+                                   settings.recheck_interval_minutes):
         if checked >= batch_size:
             break
 
@@ -186,9 +251,8 @@ async def drift_worker_loop(
 ) -> None:
     """Sleep-then-poll loop. Sleeps first so a task cancelled shortly after
     startup (e.g. a short-lived test lifespan) never touches the database."""
-    interval = poll_interval_seconds or _env_int("DRIFT_SWEEP_POLL_SECONDS",
-                                                 DEFAULT_POLL_INTERVAL_SECONDS)
     loop = asyncio.get_event_loop()
+    interval = poll_interval_seconds or DEFAULT_POLL_INTERVAL_SECONDS
     while True:
         await asyncio.sleep(interval)
         try:
@@ -198,6 +262,13 @@ async def drift_worker_loop(
                 # directly here would stall every other request sharing this
                 # process's event loop.
                 await loop.run_in_executor(None, sweep_projects_for_drift, db)
+                # Re-read each tick so an admin changing the cadence in the GUI
+                # doesn't have to wait for a restart. An explicit argument
+                # (tests) still wins over whatever is stored. The first sleep
+                # uses the default, because reading it earlier would touch the
+                # database before the loop is known to be staying alive.
+                if poll_interval_seconds is None:
+                    interval = get_settings(db).poll_interval_seconds
             finally:
                 db.close()
         except Exception as exc:  # noqa: BLE001 - a bad iteration must never kill the worker
