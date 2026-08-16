@@ -3,8 +3,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 vi.mock(
   "react-router",
@@ -17,38 +17,36 @@ vi.mock(
         {children}
       </a>
     ),
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
-  updateProjectColor: jest.fn(),
-  exportProjectBackup: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
+  updateProjectColor: vi.fn(),
+  exportProjectBackup: vi.fn(),
 }));
 
 vi.mock("./api/projectDeletion", () => ({
-  deleteProjectEnhanced: jest.fn(),
+  deleteProjectEnhanced: vi.fn(),
 }));
 
 vi.mock("./api/handlers", () => ({
-  handleSaveProjectWithModal: jest.fn(),
+  handleSaveProjectWithModal: vi.fn(),
 }));
 
 vi.mock("./api/secrets", () => ({
-  getSecrets: jest.fn(),
+  getSecrets: vi.fn(),
 }));
 
 vi.mock("./api/envVars", () => ({
-  getEnvVars: jest.fn(),
+  getEnvVars: vi.fn(),
 }));
 
 vi.mock("./api/pullRequests", () => ({
-  getProjectPRStatus: jest.fn(),
+  getProjectPRStatus: vi.fn(),
 }));
 
 vi.mock("./components/Sidebar", () => ({
@@ -211,11 +209,12 @@ import { getProjectPRStatus } from "./api/pullRequests";
 
 describe("ProjectMgmt deploy environments header", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockUseParams.mockReturnValue({ user: "testuser", projectName: "MyProject" });
-    fetchProjects.mockResolvedValue([]);
-    loadProject.mockResolvedValue({
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    vi.mocked(loadProject).mockResolvedValue({
       project_name: "MyProject",
+      updated_at: "2024-06-01T00:00:00Z",
       selected_repos: ["owner/repo"],
       workflows: [],
       rxworkflows: [],
@@ -224,12 +223,14 @@ describe("ProjectMgmt deploy environments header", () => {
       project_id: 123,
       project_type: "standard",
       use_prefix: true,
-      visibility_scope: "public",
+      repository_visibility_scope: "public",
     });
-    getSecrets.mockResolvedValue([]);
-    getEnvVars.mockResolvedValue([]);
-    getProjectPRStatus.mockResolvedValue({
+    vi.mocked(getSecrets).mockResolvedValue([]);
+    vi.mocked(getEnvVars).mockResolvedValue([]);
+    vi.mocked(getProjectPRStatus).mockResolvedValue({
       project_state: "draft",
+      pull_requests: [],
+      closed_prs: 0,
       open_prs: 0,
       merged_prs: 0,
       total_prs: 0,
@@ -246,7 +247,7 @@ describe("ProjectMgmt deploy environments header", () => {
           account_type: "free",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -271,7 +272,7 @@ describe("ProjectMgmt deploy environments header", () => {
           account_type: "free",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 

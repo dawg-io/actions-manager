@@ -4,10 +4,10 @@ import '@testing-library/jest-dom';
 import ReusableEventPicker from './ReusableEventPicker';
 
 describe('ReusableEventPicker Form Label Accessibility', () => {
-  const mockOnChange = jest.fn();
+  const mockOnChange = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('form labels have htmlFor attributes matching control IDs', () => {

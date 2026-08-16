@@ -38,13 +38,13 @@ describe("DeployEnvironments Redesign", () => {
     selectedRepos: ["test-repo"],
     accountType: "premium",
     deploymentEnvironments: [],
-    setDeploymentEnvironments: jest.fn(),
+    setDeploymentEnvironments: vi.fn(),
     manualEnvironments: [{ name: "" }],
-    setManualEnvironments: jest.fn(),
+    setManualEnvironments: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test("should render header with icon and title", () => {
@@ -91,7 +91,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should display environment cards with badges", async () => {
-    getEnvironments.mockResolvedValueOnce([
+    vi.mocked(getEnvironments).mockResolvedValueOnce([
       { name: "development" },
       { name: "staging" },
     ]);
@@ -105,7 +105,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should show synced badge for synced environments", async () => {
-    getEnvironments.mockResolvedValue([{ name: "production" }]);
+    vi.mocked(getEnvironments).mockResolvedValue([{ name: "production" }]);
 
     render(<DeployEnvironments {...defaultProps} />);
 
@@ -118,7 +118,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should show warning badge for not synced environments", async () => {
-    getEnvironments
+    vi.mocked(getEnvironments)
       .mockResolvedValueOnce([{ name: "development" }])
       .mockResolvedValueOnce([]);
 
@@ -137,7 +137,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should render overflow menu with actions", async () => {
-    getEnvironments.mockResolvedValue([{ name: "staging" }]);
+    vi.mocked(getEnvironments).mockResolvedValue([{ name: "staging" }]);
 
     render(<DeployEnvironments {...defaultProps} />);
 
@@ -161,7 +161,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should show search input when environments exist", async () => {
-    getEnvironments.mockResolvedValue([{ name: "production" }]);
+    vi.mocked(getEnvironments).mockResolvedValue([{ name: "production" }]);
 
     render(<DeployEnvironments {...defaultProps} />);
 
@@ -172,7 +172,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should filter environments based on search term", async () => {
-    getEnvironments.mockResolvedValue([
+    vi.mocked(getEnvironments).mockResolvedValue([
       { name: "development" },
       { name: "staging" },
       { name: "production" },
@@ -259,7 +259,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("should update parent state with environment names", () => {
-    const setDeploymentEnvironments = jest.fn();
+    const setDeploymentEnvironments = vi.fn();
 
     render(
       <DeployEnvironments
@@ -328,7 +328,7 @@ describe("DeployEnvironments Redesign", () => {
   });
 
   test("shows error and keeps entered value when environment creation fails", async () => {
-    createEnvironment.mockRejectedValueOnce({
+    vi.mocked(createEnvironment).mockRejectedValueOnce({
       response: { data: { error: "Boom" } },
     });
 
@@ -365,18 +365,18 @@ describe("DeployEnvironments Sorting", () => {
     selectedRepos: ["repo1", "repo2"],
     accountType: "premium",
     deploymentEnvironments: [],
-    setDeploymentEnvironments: jest.fn(),
+    setDeploymentEnvironments: vi.fn(),
     manualEnvironments: [{ name: "" }],
-    setManualEnvironments: jest.fn(),
+    setManualEnvironments: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test("should use localeCompare for reliable alphabetical sorting", async () => {
 
-    getEnvironments
+    vi.mocked(getEnvironments)
       .mockResolvedValueOnce([
         { name: "staging" },
         { name: "production" },

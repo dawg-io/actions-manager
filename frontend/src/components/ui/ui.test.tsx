@@ -32,7 +32,7 @@ describe('shadcn/ui Components', () => {
     });
 
     it('handles click events', () => {
-      const handleClick = jest.fn();
+      const handleClick = vi.fn();
       render(<Button onClick={handleClick}>Click</Button>);
       const button = screen.getByRole('button');
       button.click();

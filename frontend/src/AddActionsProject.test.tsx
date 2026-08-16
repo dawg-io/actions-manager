@@ -5,23 +5,24 @@ import '@testing-library/jest-dom';
 import AddActionsProject from './AddActionsProject';
 import { previewActionsProject, createActionsProject } from './api/actionsProjects';
 
-const mockNavigate = jest.fn();
+import type { Mock } from 'vitest';
+const mockNavigate = vi.fn();
 
 vi.mock('react-router', () => ({
   useNavigate: () => mockNavigate,
-}), { virtual: true });
+}));
 
 vi.mock('./api/actionsProjects', () => ({
-  previewActionsProject: jest.fn(),
-  createActionsProject: jest.fn(),
+  previewActionsProject: vi.fn(),
+  createActionsProject: vi.fn(),
 }));
 
 vi.mock('./utils/toast', () => ({
   toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    info: jest.fn(),
-    warning: jest.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -40,11 +41,11 @@ describe('AddActionsProject', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('fetches a preview and shows the review step with prefilled fields', async () => {
-    (previewActionsProject as jest.Mock).mockResolvedValue(previewResponse);
+    (previewActionsProject as Mock).mockResolvedValue(previewResponse);
 
     render(<AddActionsProject user="testuser" />);
 
@@ -57,8 +58,8 @@ describe('AddActionsProject', () => {
   });
 
   it('saves the reviewed project and navigates back to the list', async () => {
-    (previewActionsProject as jest.Mock).mockResolvedValue(previewResponse);
-    (createActionsProject as jest.Mock).mockResolvedValue({ ...previewResponse, actions_project_id: 1 });
+    (previewActionsProject as Mock).mockResolvedValue(previewResponse);
+    (createActionsProject as Mock).mockResolvedValue({ ...previewResponse, actions_project_id: 1 });
 
     render(<AddActionsProject user="testuser" />);
 

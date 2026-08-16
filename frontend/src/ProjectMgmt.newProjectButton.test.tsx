@@ -3,8 +3,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 vi.mock(
   "react-router",
@@ -12,37 +12,35 @@ vi.mock(
     useNavigate: () => mockNavigate,
     useParams: () => mockUseParams(),
     useLocation: () => ({ pathname: "/", search: "", hash: "", state: null, key: "test" }),
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
-  updateProjectColor: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
+  updateProjectColor: vi.fn(),
 }));
 
 vi.mock("./api/projectDeletion", () => ({
-  deleteProjectEnhanced: jest.fn(),
+  deleteProjectEnhanced: vi.fn(),
 }));
 
 vi.mock("./api/handlers", () => ({
-  handleSaveProjectWithModal: jest.fn(),
+  handleSaveProjectWithModal: vi.fn(),
 }));
 
 vi.mock("./api/secrets", () => ({
-  getSecrets: jest.fn(),
+  getSecrets: vi.fn(),
 }));
 
 vi.mock("./api/envVars", () => ({
-  getEnvVars: jest.fn(),
+  getEnvVars: vi.fn(),
 }));
 
 vi.mock("./api/pullRequests", () => ({
-  getProjectPRStatus: jest.fn(),
+  getProjectPRStatus: vi.fn(),
 }));
 
 vi.mock("./components/Sidebar", () => ({
@@ -188,7 +186,7 @@ vi.mock("./components/ProjectColorSelector", () => ({
 }));
 
 import ProjectMgmt from "./ProjectMgmt";
-import { fetchProjects } from "./api/projects";
+import { fetchProjects, type Project } from "./api/projects";
 import { getSecrets } from "./api/secrets";
 import { getEnvVars } from "./api/envVars";
 import { getProjectPRStatus } from "./api/pullRequests";
@@ -198,7 +196,11 @@ import { getProjectPRStatus } from "./api/pullRequests";
 
 
 /** Build a minimal project stub with an optional account_type and project_type override. */
-function makeProject(id: number, accountType?: string, projectType?: "standard" | "rwx") {
+function makeProject(
+  id: number,
+  accountType?: string,
+  projectType?: "standard" | "rwx",
+): Project {
   return {
     id,
     project_name: `Project${id}`,
@@ -213,13 +215,15 @@ function makeProject(id: number, accountType?: string, projectType?: "standard" 
 
 describe("ProjectMgmt – New Project header button", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     // Show the project-list view (no project selected)
     mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
-    getSecrets.mockResolvedValue([]);
-    getEnvVars.mockResolvedValue([]);
-    getProjectPRStatus.mockResolvedValue({
+    vi.mocked(getSecrets).mockResolvedValue([]);
+    vi.mocked(getEnvVars).mockResolvedValue([]);
+    vi.mocked(getProjectPRStatus).mockResolvedValue({
       project_state: "draft",
+      pull_requests: [],
+      closed_prs: 0,
       open_prs: 0,
       merged_prs: 0,
       total_prs: 0,
@@ -229,7 +233,7 @@ describe("ProjectMgmt – New Project header button", () => {
   test("clicking New Project navigates to /project/:user/new", async () => {
     const user = userEvent.setup();
     // One project – well under the free limit of 3
-    fetchProjects.mockResolvedValue([makeProject(1, "free")]);
+    vi.mocked(fetchProjects).mockResolvedValue([makeProject(1, "free")]);
 
     render(
       <ProjectMgmt
@@ -239,7 +243,7 @@ describe("ProjectMgmt – New Project header button", () => {
           account_type: "free",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -251,7 +255,7 @@ describe("ProjectMgmt – New Project header button", () => {
 
   test("button is disabled when free-plan project limit (3) is reached via userDetails", async () => {
     // 3 projects – exactly at the free limit
-    fetchProjects.mockResolvedValue([
+    vi.mocked(fetchProjects).mockResolvedValue([
       makeProject(1, "free"),
       makeProject(2),
       makeProject(3),
@@ -265,7 +269,7 @@ describe("ProjectMgmt – New Project header button", () => {
           account_type: "free",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -278,14 +282,14 @@ describe("ProjectMgmt – New Project header button", () => {
 
   test("button is disabled when limit is reached using accountType state fallback (userDetails absent)", async () => {
     // 3 projects; first carries account_type so the component can set accountType state
-    fetchProjects.mockResolvedValue([
+    vi.mocked(fetchProjects).mockResolvedValue([
       makeProject(1, "free"),
       makeProject(2),
       makeProject(3),
     ]);
 
     // No userDetails prop – simulates still-loading auth
-    render(<ProjectMgmt onLogout={jest.fn()} />);
+    render(<ProjectMgmt onLogout={vi.fn()} />);
 
     await waitFor(() => {
       const btn = screen.getByTestId("new-project-button");
@@ -295,9 +299,9 @@ describe("ProjectMgmt – New Project header button", () => {
 
   test("button is disabled when projects are loaded but account type is not yet known", async () => {
     // Projects present but no account_type on any of them, and no userDetails
-    fetchProjects.mockResolvedValue([makeProject(1), makeProject(2)]);
+    vi.mocked(fetchProjects).mockResolvedValue([makeProject(1), makeProject(2)]);
 
-    render(<ProjectMgmt onLogout={jest.fn()} />);
+    render(<ProjectMgmt onLogout={vi.fn()} />);
 
     await waitFor(() => {
       const btn = screen.getByTestId("new-project-button");
@@ -308,12 +312,14 @@ describe("ProjectMgmt – New Project header button", () => {
 
 describe("ProjectMgmt – New Project button self-hosted beta limits", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
-    getSecrets.mockResolvedValue([]);
-    getEnvVars.mockResolvedValue([]);
-    getProjectPRStatus.mockResolvedValue({
+    vi.mocked(getSecrets).mockResolvedValue([]);
+    vi.mocked(getEnvVars).mockResolvedValue([]);
+    vi.mocked(getProjectPRStatus).mockResolvedValue({
       project_state: "draft",
+      pull_requests: [],
+      closed_prs: 0,
       open_prs: 0,
       merged_prs: 0,
       total_prs: 0,
@@ -329,13 +335,13 @@ describe("ProjectMgmt – New Project button self-hosted beta limits", () => {
   };
 
   test("beta: button is enabled with 3 caller and 0 reusable projects", async () => {
-    fetchProjects.mockResolvedValue([
+    vi.mocked(fetchProjects).mockResolvedValue([
       makeProject(1, "free", "standard"),
       makeProject(2, "free", "standard"),
       makeProject(3, "free", "standard"),
     ]);
 
-    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={vi.fn()} />);
 
     await waitFor(() => {
       const btn = screen.getByTestId("new-project-button");
@@ -344,14 +350,14 @@ describe("ProjectMgmt – New Project button self-hosted beta limits", () => {
   });
 
   test("beta: button is enabled with 4 caller and 0 reusable projects (can still create rwx)", async () => {
-    fetchProjects.mockResolvedValue([
+    vi.mocked(fetchProjects).mockResolvedValue([
       makeProject(1, "free", "standard"),
       makeProject(2, "free", "standard"),
       makeProject(3, "free", "standard"),
       makeProject(4, "free", "standard"),
     ]);
 
-    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={vi.fn()} />);
 
     await waitFor(() => {
       const btn = screen.getByTestId("new-project-button");
@@ -360,7 +366,7 @@ describe("ProjectMgmt – New Project button self-hosted beta limits", () => {
   });
 
   test("beta: button is disabled with 4 caller and 2 reusable projects (both limits reached)", async () => {
-    fetchProjects.mockResolvedValue([
+    vi.mocked(fetchProjects).mockResolvedValue([
       makeProject(1, "free", "standard"),
       makeProject(2, "free", "standard"),
       makeProject(3, "free", "standard"),
@@ -369,7 +375,7 @@ describe("ProjectMgmt – New Project button self-hosted beta limits", () => {
       makeProject(6, "free", "rwx"),
     ]);
 
-    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={vi.fn()} />);
 
     await waitFor(() => {
       const btn = screen.getByTestId("new-project-button");
@@ -378,12 +384,12 @@ describe("ProjectMgmt – New Project button self-hosted beta limits", () => {
   });
 
   test("beta: button is enabled with 0 caller and 2 reusable projects (caller limit not reached)", async () => {
-    fetchProjects.mockResolvedValue([
+    vi.mocked(fetchProjects).mockResolvedValue([
       makeProject(1, "free", "rwx"),
       makeProject(2, "free", "rwx"),
     ]);
 
-    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={betaUserDetails} onLogout={vi.fn()} />);
 
     await waitFor(() => {
       const btn = screen.getByTestId("new-project-button");

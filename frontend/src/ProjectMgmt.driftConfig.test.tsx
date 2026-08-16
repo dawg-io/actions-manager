@@ -11,8 +11,8 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 // Capture Sidebar's onSectionChange so tests can open the Project Info panel
 let capturedOnSectionChange: ((section: string) => void) | null = null;
@@ -29,49 +29,47 @@ vi.mock(
       state: null,
       key: "test",
     }),
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  updateProjectName: jest.fn(),
-  updateProjectColor: jest.fn(),
-  updateProjectDriftConfig: jest.fn(),
-  exportProjectBackup: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  updateProjectName: vi.fn(),
+  updateProjectColor: vi.fn(),
+  updateProjectDriftConfig: vi.fn(),
+  exportProjectBackup: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
 }));
 
 vi.mock("./api/driftSettings", async () => {
   const actual = await vi.importActual<typeof import("./api/driftSettings")>("./api/driftSettings");
-  return { ...actual, fetchDriftSettings: jest.fn(), saveDriftSettings: jest.fn() };
+  return { ...actual, fetchDriftSettings: vi.fn(), saveDriftSettings: vi.fn() };
 });
 
 vi.mock("./api/projectDeletion", () => ({
-  deleteProjectEnhanced: jest.fn(),
+  deleteProjectEnhanced: vi.fn(),
 }));
 
 vi.mock("./api/handlers", () => ({
-  handleSaveProjectWithModal: jest.fn(),
+  handleSaveProjectWithModal: vi.fn(),
 }));
 
 vi.mock("./api/secrets", () => ({
-  getSecrets: jest.fn(),
+  getSecrets: vi.fn(),
 }));
 
 vi.mock("./api/envVars", () => ({
-  getEnvVars: jest.fn(),
+  getEnvVars: vi.fn(),
 }));
 
 vi.mock("./api/pullRequests", () => ({
-  getProjectPRStatus: jest.fn(),
+  getProjectPRStatus: vi.fn(),
 }));
 
 vi.mock("./api/codeowners", () => ({
-  getProjectCodeownersStatuses: jest.fn().mockResolvedValue({ statuses: [] }),
+  getProjectCodeownersStatuses: vi.fn().mockResolvedValue({ statuses: [] }),
 }));
 
 vi.mock("./components/Sidebar", () => ({
@@ -238,6 +236,7 @@ import { getSecrets } from "./api/secrets";
 import { getEnvVars } from "./api/envVars";
 import { getProjectPRStatus } from "./api/pullRequests";
 
+import type { Mock } from 'vitest';
 const userDetails = {
   avatar_url: "https://example.com/avatar.png",
   github_user: "alice",
@@ -262,7 +261,7 @@ const PROJECT = {
 };
 
 async function renderDriftSection() {
-  render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+  render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
   await waitFor(() => expect(capturedOnSectionChange).not.toBeNull());
   await act(async () => {
     capturedOnSectionChange!("drift-config");
@@ -272,12 +271,12 @@ async function renderDriftSection() {
 
 describe("ProjectMgmt - per-project drift schedule", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     capturedOnSectionChange = null;
 
     mockUseParams.mockReturnValue({ user: "alice", projectName: "old-name" });
 
-    (fetchProjects as jest.Mock).mockResolvedValue([
+    (fetchProjects as Mock).mockResolvedValue([
       {
         project_id: 42,
         project_name: "old-name",
@@ -287,16 +286,16 @@ describe("ProjectMgmt - per-project drift schedule", () => {
         project_type: "standard",
       },
     ]);
-    (loadProject as jest.Mock).mockResolvedValue({ ...PROJECT });
-    (fetchDriftSettings as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({ ...PROJECT });
+    (fetchDriftSettings as Mock).mockResolvedValue({
       sweep_enabled: true,
       recheck_interval_minutes: 30,
       batch_size: 5,
       poll_interval_seconds: 60,
     });
-    (getSecrets as jest.Mock).mockResolvedValue([]);
-    (getEnvVars as jest.Mock).mockResolvedValue([]);
-    (getProjectPRStatus as jest.Mock).mockResolvedValue({
+    (getSecrets as Mock).mockResolvedValue([]);
+    (getEnvVars as Mock).mockResolvedValue([]);
+    (getProjectPRStatus as Mock).mockResolvedValue({
       project_state: "new",
       open_prs: 0,
       merged_prs: 0,
@@ -312,7 +311,7 @@ describe("ProjectMgmt - per-project drift schedule", () => {
   });
 
   test("a project with its own interval shows that interval", async () => {
-    (loadProject as jest.Mock).mockResolvedValue({ ...PROJECT, drift_check_interval_minutes: 1440 });
+    (loadProject as Mock).mockResolvedValue({ ...PROJECT, drift_check_interval_minutes: 1440 });
 
     const select = await renderDriftSection();
 
@@ -322,7 +321,7 @@ describe("ProjectMgmt - per-project drift schedule", () => {
   test("a project switched off shows Off, not the inherited default", async () => {
     // 0 and null mean opposite things; rendering 0 as "inherit" would tell the
     // user their project is being checked when it is not.
-    (loadProject as jest.Mock).mockResolvedValue({ ...PROJECT, drift_check_interval_minutes: 0 });
+    (loadProject as Mock).mockResolvedValue({ ...PROJECT, drift_check_interval_minutes: 0 });
 
     const select = await renderDriftSection();
 
@@ -331,7 +330,7 @@ describe("ProjectMgmt - per-project drift schedule", () => {
 
   test("choosing an interval saves it and renders it without a refresh", async () => {
     const user = userEvent.setup();
-    (updateProjectDriftConfig as jest.Mock).mockResolvedValue({
+    (updateProjectDriftConfig as Mock).mockResolvedValue({
       project_id: 42,
       drift_check_interval_minutes: 1440,
     });
@@ -348,7 +347,7 @@ describe("ProjectMgmt - per-project drift schedule", () => {
 
   test("choosing Off sends 0 rather than null", async () => {
     const user = userEvent.setup();
-    (updateProjectDriftConfig as jest.Mock).mockResolvedValue({
+    (updateProjectDriftConfig as Mock).mockResolvedValue({
       project_id: 42,
       drift_check_interval_minutes: 0,
     });
@@ -361,8 +360,8 @@ describe("ProjectMgmt - per-project drift schedule", () => {
 
   test("returning to the workspace default sends null", async () => {
     const user = userEvent.setup();
-    (loadProject as jest.Mock).mockResolvedValue({ ...PROJECT, drift_check_interval_minutes: 1440 });
-    (updateProjectDriftConfig as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({ ...PROJECT, drift_check_interval_minutes: 1440 });
+    (updateProjectDriftConfig as Mock).mockResolvedValue({
       project_id: 42,
       drift_check_interval_minutes: null,
     });
@@ -376,7 +375,7 @@ describe("ProjectMgmt - per-project drift schedule", () => {
 
   test("a failed save rolls back to the previous value and says why", async () => {
     const user = userEvent.setup();
-    (updateProjectDriftConfig as jest.Mock).mockRejectedValue({
+    (updateProjectDriftConfig as Mock).mockRejectedValue({
       response: { data: { detail: "Insufficient project permissions" } },
     });
 

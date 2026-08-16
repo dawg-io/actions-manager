@@ -10,6 +10,7 @@ import { toast } from "./utils/toast";
 
 
 
+import type { Mock, MockInstance } from 'vitest';
 // Helper: select a repository via the new horizontal selector. The legacy
 // dropdown (<select>/combobox) was replaced by a checkbox list whose rows
 // expose the repo's full name as a stable data-testid.
@@ -38,37 +39,35 @@ async function continueFromStep2(u: ReturnType<typeof userEvent.setup>) {
 }
 
 // --- Mocks ---
-const mockNavigate = jest.fn();
+const mockNavigate = vi.fn();
 
 vi.mock(
   'react-router',
   () => ({
     useNavigate: () => mockNavigate,
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock('./api/repos', () => ({
-  fetchRepos: jest.fn(),
-  fetchRwxRepos: jest.fn(),
+  fetchRepos: vi.fn(),
+  fetchRwxRepos: vi.fn(),
 }));
 
 vi.mock('./api/projects', () => ({
-  fetchProjects: jest.fn(),
-  saveProject: jest.fn(),
+  fetchProjects: vi.fn(),
+  saveProject: vi.fn(),
 }));
 
 vi.mock('./api/user', () => ({
-  getUserDetails: jest.fn(),
+  getUserDetails: vi.fn(),
 }));
 
 // Mock toast to capture notifications instead of browser alert()
 vi.mock('./utils/toast', () => ({
   toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    info: jest.fn(),
-    warning: jest.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -76,23 +75,23 @@ vi.mock('./utils/toast', () => ({
 describe('NewProject', () => {
   const user = userEvent.setup();
 
-  let logSpy: jest.SpyInstance;
-  let errorSpy: jest.SpyInstance;
+  let logSpy: MockInstance;
+  let errorSpy: MockInstance;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockNavigate.mockResolvedValue(undefined);
 
     // Silence console.log/error during tests
-    logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     // Mock fetchRepos to return empty array by default
-    (fetchRepos as jest.Mock).mockResolvedValue([]);
-    (fetchProjects as jest.Mock).mockResolvedValue([]);
+    (fetchRepos as Mock).mockResolvedValue([]);
+    (fetchProjects as Mock).mockResolvedValue([]);
     // Default to a Professional account so the "private" visibility option
     // is not disabled in tests that don't explicitly assert tier behavior.
-    (getUserDetails as jest.Mock).mockResolvedValue({
+    (getUserDetails as Mock).mockResolvedValue({
       github_user: 'testuser',
       avatar_url: '',
       account_type: 'professional',
@@ -132,7 +131,7 @@ describe('NewProject', () => {
     });
 
     it('does not render duplicate "Use custom key" checkbox once advanced options are open', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ]);
       render(<NewProject user="testuser" />);
@@ -157,7 +156,7 @@ describe('NewProject', () => {
     });
 
     it('shows custom project key input when checkbox is checked', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ]);
       render(<NewProject user="testuser" />);
@@ -179,10 +178,10 @@ describe('NewProject', () => {
     });
 
     it('includes the selected project_color in the create payload', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ]);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
 
@@ -195,7 +194,7 @@ describe('NewProject', () => {
       await user.click(screen.getByText('🚀 Create Project'));
 
       await waitFor(() => expect(saveProject).toHaveBeenCalled());
-      const payload = (saveProject as jest.Mock).mock.calls[0][0];
+      const payload = (saveProject as Mock).mock.calls[0][0];
       expect(payload.project_color).toBe('rose');
     });
   });
@@ -236,7 +235,7 @@ describe('NewProject', () => {
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
         { id: 2, name: 'repo2', full_name: 'user/repo2', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
 
       render(<NewProject user="testuser" />);
 
@@ -259,7 +258,7 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
 
       render(<NewProject user="testuser" />);
 
@@ -304,8 +303,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
 
@@ -340,8 +339,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
 
@@ -377,8 +376,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
 
@@ -415,8 +414,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
 
@@ -459,7 +458,7 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
 
       render(<NewProject user="testuser" />);
 
@@ -485,8 +484,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'priv1', full_name: 'user/priv1', private: true, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (fetchRwxRepos as jest.Mock).mockResolvedValue([]);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (fetchRwxRepos as Mock).mockResolvedValue([]);
 
       render(<NewProject user="testuser" />);
 
@@ -509,7 +508,7 @@ describe('NewProject', () => {
   describe('RWX Project Type Auto-Discovery', () => {
     beforeEach(() => {
       // Mock fetchRwxRepos to return empty array by default
-      (fetchRwxRepos as jest.Mock).mockResolvedValue([]);
+      (fetchRwxRepos as Mock).mockResolvedValue([]);
     });
 
     it('does NOT show a manual owner/org input field (auto-discovery only)', async () => {
@@ -535,7 +534,7 @@ describe('NewProject', () => {
         { id: 1, name: 'my-rwx-workflow', full_name: 'testuser/my-rwx-workflow', private: false, html_url: 'https://github.com/testuser/my-rwx-workflow' },
         { id: 2, name: 'my-rwx', full_name: 'whatsupdawg/my-rwx', private: false, html_url: 'https://github.com/whatsupdawg/my-rwx' },
       ];
-      (fetchRwxRepos as jest.Mock).mockResolvedValue(mockRwxRepos);
+      (fetchRwxRepos as Mock).mockResolvedValue(mockRwxRepos);
 
       render(<NewProject user="testuser" />);
 
@@ -560,7 +559,7 @@ describe('NewProject', () => {
     });
 
     it('shows a generic empty state when no accessible RWX repos are found', async () => {
-      (fetchRwxRepos as jest.Mock).mockResolvedValue([]);
+      (fetchRwxRepos as Mock).mockResolvedValue([]);
 
       render(<NewProject user="testuser" />);
 
@@ -577,7 +576,7 @@ describe('NewProject', () => {
 
     it('shows an error message when the RWX repos fetch returns an error payload', async () => {
       const errorResponse = { error: 'GitHub API error fetching RWX repos', status: 500 };
-      (fetchRwxRepos as jest.Mock).mockResolvedValue(errorResponse);
+      (fetchRwxRepos as Mock).mockResolvedValue(errorResponse);
 
       render(<NewProject user="testuser" />);
 
@@ -600,8 +599,8 @@ describe('NewProject', () => {
         { id: 2, name: 'my-rwx', full_name: 'testuser/my-rwx', private: false, html_url: 'https://github.com/testuser/my-rwx' },
       ];
 
-      (fetchRepos as jest.Mock).mockResolvedValue(mockStandardRepos);
-      (fetchRwxRepos as jest.Mock).mockResolvedValue(mockRwxRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockStandardRepos);
+      (fetchRwxRepos as Mock).mockResolvedValue(mockRwxRepos);
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -643,7 +642,7 @@ describe('NewProject', () => {
         { id: 1, name: 'rwx-a', full_name: 'testuser/rwx-a', private: false, html_url: 'https://github.com/testuser/rwx-a' },
         { id: 2, name: 'rwx-b', full_name: 'testuser/rwx-b', private: false, html_url: 'https://github.com/testuser/rwx-b' },
       ];
-      (fetchRwxRepos as jest.Mock).mockResolvedValue(mockRwxRepos);
+      (fetchRwxRepos as Mock).mockResolvedValue(mockRwxRepos);
 
       render(<NewProject user="testuser" />);
 
@@ -684,8 +683,8 @@ describe('NewProject', () => {
       const mockRwxRepos = [
         { id: 2, name: 'rwx-only', full_name: 'testuser/rwx-only', private: false, html_url: 'https://github.com/testuser/rwx-only' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockStandardRepos);
-      (fetchRwxRepos as jest.Mock).mockResolvedValue(mockRwxRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockStandardRepos);
+      (fetchRwxRepos as Mock).mockResolvedValue(mockRwxRepos);
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -719,7 +718,7 @@ describe('NewProject', () => {
       // The shared `fetchRepos` helper now returns `{error, status}` on
       // request failures (instead of swallowing them and returning []),
       // so the picker should show the error rather than an empty state.
-      (fetchRepos as jest.Mock).mockResolvedValue({
+      (fetchRepos as Mock).mockResolvedValue({
         error: 'Network error fetching repositories',
         status: 502,
       });
@@ -768,7 +767,7 @@ describe('NewProject', () => {
         { id: 1, name: 'pub1', full_name: 'u/pub1', private: false, default_branch: 'main' },
         { id: 2, name: 'priv1', full_name: 'u/priv1', private: true, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
 
@@ -784,7 +783,7 @@ describe('NewProject', () => {
         { id: 1, name: 'pub1', full_name: 'u/pub1', private: false, default_branch: 'main' },
         { id: 2, name: 'priv1', full_name: 'u/priv1', private: true, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
       render(<NewProject user="testuser" />);
       await waitFor(() => expect(fetchRepos).toHaveBeenCalled());
       await waitFor(() => expect(getUserDetails).toHaveBeenCalled());
@@ -807,7 +806,7 @@ describe('NewProject', () => {
         { id: 1, name: 'pub1', full_name: 'u/pub1', private: false, default_branch: 'main' },
         { id: 2, name: 'priv1', full_name: 'u/priv1', private: true, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
       render(<NewProject user="testuser" />);
       await waitFor(() => expect(fetchRepos).toHaveBeenCalled());
       await waitFor(() => expect(getUserDetails).toHaveBeenCalled());
@@ -829,7 +828,7 @@ describe('NewProject', () => {
     });
 
     it('Free tier users see private option disabled with an upgrade message', async () => {
-      (getUserDetails as jest.Mock).mockResolvedValue({
+      (getUserDetails as Mock).mockResolvedValue({
         github_user: 'testuser',
         avatar_url: '',
         account_type: 'free',
@@ -846,7 +845,7 @@ describe('NewProject', () => {
     });
 
     it('shows empty state when no repositories match the selected visibility', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'pub1', full_name: 'u/pub1', private: false, default_branch: 'main' },
       ]);
       render(<NewProject user="testuser" />);
@@ -868,8 +867,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'priv1', full_name: 'u/priv1', private: true, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
       await waitFor(() => expect(fetchRepos).toHaveBeenCalled());
@@ -887,7 +886,7 @@ describe('NewProject', () => {
       await user.click(screen.getByText('🚀 Create Project'));
 
       await waitFor(() => expect(saveProject).toHaveBeenCalled());
-      const payload = (saveProject as jest.Mock).mock.calls[0][0];
+      const payload = (saveProject as Mock).mock.calls[0][0];
       expect(payload.repository_visibility_scope).toBe('private');
       expect(payload.selected_repos).toEqual(['u/priv1']);
     });
@@ -895,13 +894,13 @@ describe('NewProject', () => {
 
   describe('Self-hosted beta project type limits', () => {
     it('keeps both type options enabled when under quota', async () => {
-      (getUserDetails as jest.Mock).mockResolvedValue({
+      (getUserDetails as Mock).mockResolvedValue({
         github_user: 'testuser',
         avatar_url: '',
         account_type: 'free',
         installation_mode: 'self-hosted',
       });
-      (fetchProjects as jest.Mock).mockResolvedValue([
+      (fetchProjects as Mock).mockResolvedValue([
         { project_type: 'standard' },
         { project_type: 'standard' },
         { project_type: 'standard' },
@@ -917,13 +916,13 @@ describe('NewProject', () => {
     });
 
     it('disables caller workflow type and shows helper text when caller quota is reached', async () => {
-      (getUserDetails as jest.Mock).mockResolvedValue({
+      (getUserDetails as Mock).mockResolvedValue({
         github_user: 'testuser',
         avatar_url: '',
         account_type: 'free',
         installation_mode: 'self-hosted',
       });
-      (fetchProjects as jest.Mock).mockResolvedValue([
+      (fetchProjects as Mock).mockResolvedValue([
         { project_type: 'standard' },
         { project_type: 'standard' },
         { project_type: 'standard' },
@@ -941,13 +940,13 @@ describe('NewProject', () => {
     });
 
     it('disables reusable workflow type and shows helper text when reusable quota is reached', async () => {
-      (getUserDetails as jest.Mock).mockResolvedValue({
+      (getUserDetails as Mock).mockResolvedValue({
         github_user: 'testuser',
         avatar_url: '',
         account_type: 'free',
         installation_mode: 'self-hosted',
       });
-      (fetchProjects as jest.Mock).mockResolvedValue([
+      (fetchProjects as Mock).mockResolvedValue([
         { project_type: 'rwx' },
         { project_type: 'rwx' },
       ]);
@@ -968,7 +967,7 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -986,7 +985,7 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
 
       render(<NewProject user="testuser" />);
 
@@ -1011,7 +1010,7 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -1033,8 +1032,8 @@ describe('NewProject', () => {
       const mockRepos = [
         { id: 1, name: 'repo1', full_name: 'user/repo1', private: false, default_branch: 'main' },
       ];
-      (fetchRepos as jest.Mock).mockResolvedValue(mockRepos);
-      (saveProject as jest.Mock).mockResolvedValue({ success: true });
+      (fetchRepos as Mock).mockResolvedValue(mockRepos);
+      (saveProject as Mock).mockResolvedValue({ success: true });
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -1046,7 +1045,7 @@ describe('NewProject', () => {
       await user.click(screen.getByText('🚀 Create Project'));
 
       await waitFor(() => expect(saveProject).toHaveBeenCalled());
-      const payload = (saveProject as jest.Mock).mock.calls[0][0];
+      const payload = (saveProject as Mock).mock.calls[0][0];
       expect(payload.use_prefix).toBe(false);
     });
   });
@@ -1066,7 +1065,7 @@ describe('NewProject', () => {
   describe('Repository Step Auth State', () => {
     it('shows loading spinner while repositories are being fetched', async () => {
       // Never resolves during this test — keeps the component in loading state
-      (fetchRepos as jest.Mock).mockReturnValue(new Promise(() => {}));
+      (fetchRepos as Mock).mockReturnValue(new Promise(() => {}));
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -1076,7 +1075,7 @@ describe('NewProject', () => {
     });
 
     it('does not show "Authentication required" while repos are still loading', async () => {
-      (fetchRepos as jest.Mock).mockReturnValue(new Promise(() => {}));
+      (fetchRepos as Mock).mockReturnValue(new Promise(() => {}));
 
       render(<NewProject user="testuser" />);
       await continueFromStep1(user);
@@ -1087,7 +1086,7 @@ describe('NewProject', () => {
     });
 
     it('loads and displays repositories for an authenticated user', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'my-repo', full_name: 'testuser/my-repo', private: false, default_branch: 'main' },
         { id: 2, name: 'another-repo', full_name: 'testuser/another-repo', private: false, default_branch: 'main' },
       ]);
@@ -1101,7 +1100,7 @@ describe('NewProject', () => {
     });
 
     it('shows "Authentication required" only after fetch resolves with a 401', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue({
+      (fetchRepos as Mock).mockResolvedValue({
         error: 'Authentication required',
         status: 401,
       });
@@ -1115,7 +1114,7 @@ describe('NewProject', () => {
     });
 
     it('does not show error when fetch returns repos successfully', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'repo1', full_name: 'testuser/repo1', private: false, default_branch: 'main' },
       ]);
 
@@ -1127,7 +1126,7 @@ describe('NewProject', () => {
     });
 
     it('switching between Public and Private visibility does not clear loaded repos', async () => {
-      (fetchRepos as jest.Mock).mockResolvedValue([
+      (fetchRepos as Mock).mockResolvedValue([
         { id: 1, name: 'pub-repo', full_name: 'testuser/pub-repo', private: false, default_branch: 'main' },
         { id: 2, name: 'priv-repo', full_name: 'testuser/priv-repo', private: true, default_branch: 'main' },
       ]);

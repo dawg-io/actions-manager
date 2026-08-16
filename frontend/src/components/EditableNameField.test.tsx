@@ -26,7 +26,7 @@ describe('EditableNameField', () => {
   const user = userEvent.setup();
 
   test('renders read-only display by default with prefix/suffix concatenated', () => {
-    const onSave = jest.fn();
+    const onSave = vi.fn();
     render(
       <EditableNameField
         value="my-workflow"
@@ -51,7 +51,7 @@ describe('EditableNameField', () => {
     render(
       <EditableNameField
         value="my-name"
-        onSave={jest.fn()}
+        onSave={vi.fn()}
         ariaLabel="project name"
       />,
     );
@@ -67,7 +67,7 @@ describe('EditableNameField', () => {
     render(
       <EditableNameField
         value="my-name"
-        onSave={jest.fn()}
+        onSave={vi.fn()}
         ariaLabel="project name"
       />,
     );
@@ -77,7 +77,7 @@ describe('EditableNameField', () => {
   });
 
   test('Cancel restores the original value and exits edit mode', async () => {
-    const onSave = jest.fn();
+    const onSave = vi.fn();
     render(
       <EditableNameField
         value="original-name"
@@ -101,7 +101,7 @@ describe('EditableNameField', () => {
   });
 
   test('Save persists the new value via onSave and exits edit mode', async () => {
-    const onSave = jest.fn();
+    const onSave = vi.fn();
     render(
       <EditableNameField
         value="old"
@@ -121,7 +121,7 @@ describe('EditableNameField', () => {
   });
 
   test('blocks Save and surfaces validation error for invalid input', async () => {
-    const onSave = jest.fn();
+    const onSave = vi.fn();
     render(
       <EditableNameField
         value="ok"
@@ -146,7 +146,7 @@ describe('EditableNameField', () => {
     render(
       <EditableNameField
         value="locked"
-        onSave={jest.fn()}
+        onSave={vi.fn()}
         ariaLabel="project name"
         disabled
       />,
@@ -156,7 +156,7 @@ describe('EditableNameField', () => {
   });
 
   test('Escape key cancels editing', async () => {
-    const onSave = jest.fn();
+    const onSave = vi.fn();
     render(
       <EditableNameField value="orig" onSave={onSave} ariaLabel="project name" />,
     );

@@ -1,17 +1,18 @@
 vi.mock("./apiClient", () => ({
   __esModule: true,
-  default: { get: jest.fn(), put: jest.fn() },
+  default: { get: vi.fn(), put: vi.fn() },
 }));
 
 import apiClient from "./apiClient";
 import { fetchDriftSettings, saveDriftSettings, DEFAULT_DRIFT_SETTINGS } from "./driftSettings";
 
-const mockGet = apiClient.get as jest.MockedFunction<typeof apiClient.get>;
-const mockPut = apiClient.put as jest.MockedFunction<typeof apiClient.put>;
+import type { MockedFunction } from 'vitest';
+const mockGet = apiClient.get as MockedFunction<typeof apiClient.get>;
+const mockPut = apiClient.put as MockedFunction<typeof apiClient.put>;
 
 describe("driftSettings api", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test("fetch propagates failure rather than returning defaults", async () => {

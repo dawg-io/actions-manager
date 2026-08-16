@@ -4,13 +4,14 @@ import "@testing-library/jest-dom";
 import CreatePRModal from "./CreatePRModal";
 import * as pullRequestApi from "../api/pullRequests";
 
+import type { Mock } from 'vitest';
 vi.mock("../api/pullRequests", () => ({
-  createPullRequests: jest.fn(),
-  getCreatePullRequestsStatus: jest.fn(),
-  runPreflightValidation: jest.fn(),
-  getPreflightValidationStatus: jest.fn(),
-  closePreflightValidationPR: jest.fn(),
-  mergePreflightValidationPR: jest.fn(),
+  createPullRequests: vi.fn(),
+  getCreatePullRequestsStatus: vi.fn(),
+  runPreflightValidation: vi.fn(),
+  getPreflightValidationStatus: vi.fn(),
+  closePreflightValidationPR: vi.fn(),
+  mergePreflightValidationPR: vi.fn(),
 }));
 
 describe("CreatePRModal", () => {
@@ -20,13 +21,13 @@ describe("CreatePRModal", () => {
     repositories: [{ name: "owner/repo-a" }, { name: "owner/repo-b" }],
     workflows: [{ name: "build" }],
     reusableWorkflows: [],
-    onPreflightStatusChange: jest.fn(),
-    onClose: jest.fn(),
-    onSuccess: jest.fn(),
+    onPreflightStatusChange: vi.fn(),
+    onClose: vi.fn(),
+    onSuccess: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it("defaults workflow selection to only changed workflows", () => {
@@ -428,7 +429,7 @@ describe("CreatePRModal", () => {
   });
 
   it("shows and runs validation PR management actions", async () => {
-    (pullRequestApi.getPreflightValidationStatus as jest.Mock).mockResolvedValue({
+    (pullRequestApi.getPreflightValidationStatus as Mock).mockResolvedValue({
       status: "validation_pr_open",
       validation_repo: "owner/validation",
       last_preflight_run_at: "2026-05-27T02:00:00Z",
@@ -438,7 +439,7 @@ describe("CreatePRModal", () => {
       can_merge: true,
       can_close: true,
     });
-    (pullRequestApi.mergePreflightValidationPR as jest.Mock).mockResolvedValue({
+    (pullRequestApi.mergePreflightValidationPR as Mock).mockResolvedValue({
       message: "Validation PR merged",
       status: "passed",
       last_preflight_pr_url: "https://github.com/owner/validation/pull/1",
@@ -510,7 +511,7 @@ describe("CreatePRModal", () => {
     };
 
     it("shows Creating PRs... button text and progress during creation", async () => {
-      (pullRequestApi.createPullRequests as jest.Mock).mockReturnValue(
+      (pullRequestApi.createPullRequests as Mock).mockReturnValue(
         new Promise(() => {}) // never resolves - stays in creating state
       );
 
@@ -527,11 +528,11 @@ describe("CreatePRModal", () => {
     });
 
     it("shows per-repository progress rows during async creation", async () => {
-      (pullRequestApi.createPullRequests as jest.Mock).mockResolvedValue({
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
         task_id: "test-task-123",
         status: "running",
       });
-      (pullRequestApi.getCreatePullRequestsStatus as jest.Mock).mockResolvedValue({
+      (pullRequestApi.getCreatePullRequestsStatus as Mock).mockResolvedValue({
         status: "running",
         repos: {
           "owner/repo-a on main": { step: "Creating branch", status: "running", error: null },
@@ -557,11 +558,11 @@ describe("CreatePRModal", () => {
     });
 
     it("shows linked reusable workflow source repo as a progress row during creation", async () => {
-      (pullRequestApi.createPullRequests as jest.Mock).mockResolvedValue({
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
         task_id: "test-task-rwx",
         status: "running",
       });
-      (pullRequestApi.getCreatePullRequestsStatus as jest.Mock).mockResolvedValue({
+      (pullRequestApi.getCreatePullRequestsStatus as Mock).mockResolvedValue({
         status: "running",
         repos: {
           "owner/repo-a on main": { step: "Creating branch", status: "running", error: null },
@@ -597,11 +598,11 @@ describe("CreatePRModal", () => {
     });
 
     it("deduplicates caller repo and RWX source repo when they are the same", async () => {
-      (pullRequestApi.createPullRequests as jest.Mock).mockResolvedValue({
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
         task_id: "test-task-dedup",
         status: "running",
       });
-      (pullRequestApi.getCreatePullRequestsStatus as jest.Mock).mockResolvedValue({
+      (pullRequestApi.getCreatePullRequestsStatus as Mock).mockResolvedValue({
         status: "running",
         repos: {
           "owner/repo-a on main": { step: "Committing files", status: "running", error: null },
@@ -634,11 +635,11 @@ describe("CreatePRModal", () => {
     });
 
     it("shows workflow files with .yml during creation", async () => {
-      (pullRequestApi.createPullRequests as jest.Mock).mockResolvedValue({
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
         task_id: "test-task-456",
         status: "running",
       });
-      (pullRequestApi.getCreatePullRequestsStatus as jest.Mock).mockResolvedValue({
+      (pullRequestApi.getCreatePullRequestsStatus as Mock).mockResolvedValue({
         status: "running",
         repos: {},
         results: {},
@@ -658,11 +659,11 @@ describe("CreatePRModal", () => {
     });
 
     it("does not double .yml on workflow names that already have extension", async () => {
-      (pullRequestApi.createPullRequests as jest.Mock).mockResolvedValue({
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
         task_id: "test-task-789",
         status: "running",
       });
-      (pullRequestApi.getCreatePullRequestsStatus as jest.Mock).mockResolvedValue({
+      (pullRequestApi.getCreatePullRequestsStatus as Mock).mockResolvedValue({
         status: "running",
         repos: {},
         results: {},
@@ -688,13 +689,13 @@ describe("CreatePRModal", () => {
     });
 
     it("shows partial failure with error message", async () => {
-      jest.useFakeTimers();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
 
-      (pullRequestApi.createPullRequests as jest.Mock).mockResolvedValue({
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
         task_id: "test-task-err",
         status: "running",
       });
-      (pullRequestApi.getCreatePullRequestsStatus as jest.Mock).mockResolvedValue({
+      (pullRequestApi.getCreatePullRequestsStatus as Mock).mockResolvedValue({
         status: "error",
         repos: {
           "owner/repo-a on main": { step: "Opening PR", status: "error", error: "GitHub returned 422" },
@@ -713,13 +714,77 @@ describe("CreatePRModal", () => {
       });
 
       // Advance timer to trigger the polling interval
-      jest.advanceTimersByTime(1500);
+      vi.advanceTimersByTime(1500);
 
       await waitFor(() => {
         expect(screen.getByText(/failed to create prs/i)).toBeInTheDocument();
       });
 
-      jest.useRealTimers();
+      vi.useRealTimers();
+    });
+  });
+
+  describe("campaign naming", () => {
+    it("prefills the name from the selection", () => {
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      expect(screen.getByLabelText("Campaign name")).toHaveValue("Update build.yml");
+    });
+
+    it("summarises the count when several workflows are selected", () => {
+      render(
+        <CreatePRModal
+          {...baseProps}
+          workflows={[
+            { name: "build", status: "new" },
+            { name: "deploy", status: "new" },
+            { name: "test", status: "new" },
+          ]}
+        />
+      );
+
+      expect(screen.getByLabelText("Campaign name")).toHaveValue("Update build.yml + 2 more");
+    });
+
+    it("keeps an edited name when the selection changes afterwards", () => {
+      render(
+        <CreatePRModal
+          {...baseProps}
+          workflows={[{ name: "build", status: "new" }, { name: "deploy", status: "new" }]}
+        />
+      );
+      const nameInput = screen.getByLabelText("Campaign name");
+      fireEvent.change(nameInput, { target: { value: "Q3 security rollout" } });
+
+      // Deselecting a workflow re-derives the suggestion — it must not win.
+      fireEvent.click(screen.getByLabelText(/deploy/i));
+
+      expect(nameInput).toHaveValue("Q3 security rollout");
+    });
+
+    it("sends the name and description with the create call", async () => {
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({ prs_created: 1, results: {} });
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      fireEvent.change(screen.getByLabelText("Campaign name"), { target: { value: "Q3 security rollout" } });
+      fireEvent.change(screen.getByLabelText("Description (optional)"), { target: { value: "Pinning actions." } });
+      fireEvent.click(screen.getByRole("button", { name: /create \d+ pr/i }));
+
+      await waitFor(() => expect(pullRequestApi.createPullRequests).toHaveBeenCalled());
+      const { campaign } = (pullRequestApi.createPullRequests as Mock).mock.calls[0][2];
+      expect(campaign).toEqual({ name: "Q3 security rollout", description: "Pinning actions." });
+    });
+
+    it("sends nothing rather than an empty string when the name is cleared", async () => {
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({ prs_created: 1, results: {} });
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      fireEvent.change(screen.getByLabelText("Campaign name"), { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: /create \d+ pr/i }));
+
+      await waitFor(() => expect(pullRequestApi.createPullRequests).toHaveBeenCalled());
+      const { campaign } = (pullRequestApi.createPullRequests as Mock).mock.calls[0][2];
+      expect(campaign).toEqual({ name: undefined, description: undefined });
     });
   });
 });

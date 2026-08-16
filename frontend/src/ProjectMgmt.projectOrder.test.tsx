@@ -14,8 +14,8 @@ import React from "react";
 import { render, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 // Captured from the mocked ProjectList so tests can invoke the reorder contract
 // and observe what the parent renders back.
@@ -29,29 +29,28 @@ vi.mock(
     useNavigate: () => mockNavigate,
     useParams: () => mockUseParams(),
     useLocation: () => ({ pathname: "/", search: "", hash: "", state: null, key: "test" }),
-  }),
-  { virtual: true },
+  })
 );
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  updateProjectName: jest.fn(),
-  updateProjectColor: jest.fn(),
-  updateProjectOrder: jest.fn(),
-  exportProjectBackup: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  updateProjectName: vi.fn(),
+  updateProjectColor: vi.fn(),
+  updateProjectOrder: vi.fn(),
+  exportProjectBackup: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
 }));
 
-vi.mock("./api/projectDeletion", () => ({ deleteProjectEnhanced: jest.fn() }));
-vi.mock("./api/handlers", () => ({ handleSaveProjectWithModal: jest.fn() }));
-vi.mock("./api/secrets", () => ({ getSecrets: jest.fn() }));
-vi.mock("./api/envVars", () => ({ getEnvVars: jest.fn() }));
-vi.mock("./api/pullRequests", () => ({ getProjectPRStatus: jest.fn() }));
+vi.mock("./api/projectDeletion", () => ({ deleteProjectEnhanced: vi.fn() }));
+vi.mock("./api/handlers", () => ({ handleSaveProjectWithModal: vi.fn() }));
+vi.mock("./api/secrets", () => ({ getSecrets: vi.fn() }));
+vi.mock("./api/envVars", () => ({ getEnvVars: vi.fn() }));
+vi.mock("./api/pullRequests", () => ({ getProjectPRStatus: vi.fn() }));
 vi.mock("./api/codeowners", () => ({
-  getProjectCodeownersStatuses: jest.fn().mockResolvedValue({ statuses: [] }),
+  getProjectCodeownersStatuses: vi.fn().mockResolvedValue({ statuses: [] }),
 }));
 
 vi.mock("./components/ProjectList", () => ({
@@ -88,6 +87,7 @@ vi.mock("./components/ProjectColorSelector", () => ({ default: function C() { re
 import ProjectMgmt from "./ProjectMgmt";
 import { fetchProjects, updateProjectOrder } from "./api/projects";
 
+import type { Mock } from 'vitest';
 const userDetails = {
   avatar_url: "https://example.com/avatar.png",
   github_user: "alice",
@@ -107,21 +107,21 @@ function names(): string[] {
 
 describe("ProjectMgmt – persistent project ordering", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     capturedOnReorder = null;
     capturedProjects = null;
     capturedReorderError = null;
     mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
-    (fetchProjects as jest.Mock).mockResolvedValue(PROJECTS);
+    (fetchProjects as Mock).mockResolvedValue(PROJECTS);
   });
 
   test("a drop reorders the grid immediately, before the save resolves", async () => {
     let resolveSave!: (v: number[]) => void;
-    (updateProjectOrder as jest.Mock).mockReturnValue(
+    (updateProjectOrder as Mock).mockReturnValue(
       new Promise<number[]>((resolve) => { resolveSave = resolve; }),
     );
 
-    render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
     await waitFor(() => expect(capturedOnReorder).not.toBeNull());
     await waitFor(() => expect(names()).toEqual(["alpha", "beta", "gamma"]));
 
@@ -133,25 +133,25 @@ describe("ProjectMgmt – persistent project ordering", () => {
   });
 
   test("the complete project id list is sent to the backend", async () => {
-    (updateProjectOrder as jest.Mock).mockResolvedValue([3, 1, 2]);
+    (updateProjectOrder as Mock).mockResolvedValue([3, 1, 2]);
 
-    render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
     await waitFor(() => expect(capturedOnReorder).not.toBeNull());
     await waitFor(() => expect(names()).toEqual(["alpha", "beta", "gamma"]));
 
     await act(async () => { capturedOnReorder!([3, 1, 2]); });
 
     await waitFor(() =>
-      expect(updateProjectOrder as jest.Mock).toHaveBeenCalledWith("alice", [3, 1, 2]),
+      expect(updateProjectOrder as Mock).toHaveBeenCalledWith("alice", [3, 1, 2]),
     );
   });
 
   test("a failed save rolls the order back and surfaces the error", async () => {
-    (updateProjectOrder as jest.Mock).mockRejectedValue({
+    (updateProjectOrder as Mock).mockRejectedValue({
       response: { data: { detail: "Order rejected" } },
     });
 
-    render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
     await waitFor(() => expect(capturedOnReorder).not.toBeNull());
     await waitFor(() => expect(names()).toEqual(["alpha", "beta", "gamma"]));
 
@@ -163,9 +163,9 @@ describe("ProjectMgmt – persistent project ordering", () => {
 
   test("the backend response is treated as canonical", async () => {
     // Backend disagrees with the optimistic guess; its answer wins.
-    (updateProjectOrder as jest.Mock).mockResolvedValue([2, 3, 1]);
+    (updateProjectOrder as Mock).mockResolvedValue([2, 3, 1]);
 
-    render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
     await waitFor(() => expect(capturedOnReorder).not.toBeNull());
     await waitFor(() => expect(names()).toEqual(["alpha", "beta", "gamma"]));
 
@@ -176,11 +176,11 @@ describe("ProjectMgmt – persistent project ordering", () => {
 
   test("a stale in-flight save cannot clobber a newer arrangement", async () => {
     let resolveFirst!: (v: number[]) => void;
-    (updateProjectOrder as jest.Mock)
+    (updateProjectOrder as Mock)
       .mockReturnValueOnce(new Promise<number[]>((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValueOnce([2, 1, 3]);
 
-    render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
     await waitFor(() => expect(capturedOnReorder).not.toBeNull());
     await waitFor(() => expect(names()).toEqual(["alpha", "beta", "gamma"]));
 

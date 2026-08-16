@@ -8,7 +8,7 @@ describe('ProjectColorSelector', () => {
   const user = userEvent.setup();
 
   test('standard projects do not see the RWX-only purple/green options', () => {
-    render(<ProjectColorSelector value="blue" onChange={jest.fn()} projectType="standard" />);
+    render(<ProjectColorSelector value="blue" onChange={vi.fn()} projectType="standard" />);
 
     expect(screen.queryByRole('radio', { name: 'Purple' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Green' })).not.toBeInTheDocument();
@@ -19,14 +19,14 @@ describe('ProjectColorSelector', () => {
   });
 
   test('defaults to the standard (restricted) color list when projectType is omitted', () => {
-    render(<ProjectColorSelector value="blue" onChange={jest.fn()} />);
+    render(<ProjectColorSelector value="blue" onChange={vi.fn()} />);
 
     expect(screen.queryByRole('radio', { name: 'Purple' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Green' })).not.toBeInTheDocument();
   });
 
   test('rwx projects see only purple and green', () => {
-    render(<ProjectColorSelector value="purple" onChange={jest.fn()} projectType="rwx" />);
+    render(<ProjectColorSelector value="purple" onChange={vi.fn()} projectType="rwx" />);
 
     expect(screen.getByRole('radio', { name: 'Purple' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Green' })).toBeInTheDocument();
@@ -36,7 +36,7 @@ describe('ProjectColorSelector', () => {
   });
 
   test('a grandfathered RWX-only color stays visible while selected on a standard project', () => {
-    render(<ProjectColorSelector value="purple" onChange={jest.fn()} projectType="standard" />);
+    render(<ProjectColorSelector value="purple" onChange={vi.fn()} projectType="standard" />);
 
     expect(screen.getByRole('radio', { name: 'Purple' })).toBeChecked();
     expect(screen.queryByRole('radio', { name: 'Green' })).not.toBeInTheDocument();
@@ -44,7 +44,7 @@ describe('ProjectColorSelector', () => {
   });
 
   test('a grandfathered standard color stays visible while selected on an rwx project', () => {
-    render(<ProjectColorSelector value="blue" onChange={jest.fn()} projectType="rwx" />);
+    render(<ProjectColorSelector value="blue" onChange={vi.fn()} projectType="rwx" />);
 
     expect(screen.getByRole('radio', { name: 'Blue' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Purple' })).toBeInTheDocument();
@@ -53,7 +53,7 @@ describe('ProjectColorSelector', () => {
   });
 
   test('selecting a color calls onChange with the color key', async () => {
-    const onChange = jest.fn();
+    const onChange = vi.fn();
     render(<ProjectColorSelector value="purple" onChange={onChange} projectType="rwx" />);
 
     await user.click(screen.getByRole('radio', { name: 'Green' }));

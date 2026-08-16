@@ -15,6 +15,7 @@ the same helpers as the rest of the application.
 """
 
 import base64
+import json
 from typing import Annotated, Optional
 
 import requests
@@ -32,7 +33,7 @@ from models import (
     ProjectRepo,
     Repo,
 )
-from workflows import _find_project_by_name
+from workflows import _find_project_by_name, _fetch_branch_protection
 
 
 router = APIRouter()
@@ -413,7 +414,14 @@ def get_codeowners_drift(
 
 
 def _create_branch(owner: str, repo: str, new_branch: str, base_branch: str, headers: dict):
-    """Create *new_branch* off the head of *base_branch* if it doesn't exist."""
+    """Create *new_branch* off the head of *base_branch* if it doesn't exist.
+
+    Returns the commit the new branch was cut from, for the campaign snapshot,
+    or None when the branch already existed — it has since drifted from the base
+    branch, so today's base head is not what that branch is based on, and
+    recording it would put a SHA in the snapshot the PR is not built on.
+    Most callers ignore the return value.
+    """
     # Look up base SHA
     base_resp = requests.get(
         f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/refs/heads/{base_branch}",
@@ -434,7 +442,7 @@ def _create_branch(owner: str, repo: str, new_branch: str, base_branch: str, hea
         timeout=15,
     )
     if head_resp.status_code == 200:
-        return  # already exists
+        return None  # already exists — its true base is not knowable from here
 
     create_resp = requests.post(
         f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/refs",
@@ -447,6 +455,7 @@ def _create_branch(owner: str, repo: str, new_branch: str, base_branch: str, hea
             status_code=502,
             detail=f"Could not create branch '{new_branch}' ({create_resp.status_code}): {create_resp.text[:200]}",
         )
+    return base_sha
 
 
 @router.post("/api/repos/{repo_ref:path}/codeowners/deploy")
@@ -494,22 +503,39 @@ def deploy_codeowners(
     # Determine the branch we will actually commit to.
     # For PR mode, resolve (or create) the campaign this PR belongs to.
     pr_campaign_id: Optional[int] = None
+    # Set only for a campaign this request created, so the PR URL fill below never
+    # touches a campaign that belongs to a previous run.
+    pr_url_campaign: Optional[ProjectPRCampaign] = None
+    snapshot_key = f"{repo.repo_name} on {target_branch}"
     if payload.mode == "pr":
         commit_branch = f"actions-manager/codeowners-{project.project_code}"
-        _create_branch(owner, repo_short, commit_branch, target_branch, headers)
+        base_sha = _create_branch(owner, repo_short, commit_branch, target_branch, headers)
 
         if payload.campaign_id is not None:
             pr_campaign_id = payload.campaign_id
+            # The campaign was created by the PR-campaign run that sent us here,
+            # so its PR URL slot for this target is still empty — record_pr_url
+            # is append-only and refuses to touch one already filled.
+            pr_url_campaign = db.query(ProjectPRCampaign).filter(
+                ProjectPRCampaign.campaign_id == payload.campaign_id
+            ).first()
         else:
             # Standalone deploy: create a dedicated campaign record.
+            # policy_version stays null — CODEOWNERS is not a workflow template.
             campaign = ProjectPRCampaign(
                 project_id=project.project_id,
                 created_by=payload.github_user,
+                target_repos=json.dumps([repo.repo_name]),
+                base_commits=json.dumps({snapshot_key: base_sha}),
+                branch_protection=json.dumps({
+                    snapshot_key: _fetch_branch_protection(owner, repo_short, target_branch, headers)
+                }),
             )
             db.add(campaign)
             db.commit()
             db.refresh(campaign)
             pr_campaign_id = campaign.campaign_id
+            pr_url_campaign = campaign
     else:
         commit_branch = target_branch
 
@@ -564,6 +590,16 @@ def deploy_codeowners(
         if pr_resp.status_code in (200, 201):
             pr_data = pr_resp.json()
             pr_info = {"number": pr_data.get("number"), "url": pr_data.get("html_url")}
+
+            # This path opens the PR after its campaign row exists, so the snapshot's
+            # empty PR URL slot is filled here — at the point the PR is created.
+            if pr_url_campaign is not None and pr_data.get("html_url"):
+                try:
+                    pr_url_campaign.record_pr_url(snapshot_key, pr_data["html_url"])
+                    db.commit()
+                except ValueError as exc:
+                    print(f"⚠️ Could not record campaign PR URL: {exc}")
+                    db.rollback()
 
             # Track the PR in ProjectPullRequest table so it appears in "Opened PR's" list
             try:

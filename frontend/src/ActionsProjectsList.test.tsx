@@ -6,31 +6,32 @@ import ActionsProjectsList from './ActionsProjectsList';
 import { listActionsProjects } from './api/actionsProjects';
 import { listActionGroups, createActionGroup } from './api/actionGroups';
 
-const mockNavigate = jest.fn();
+import type { Mock } from 'vitest';
+const mockNavigate = vi.fn();
 
 vi.mock('react-router', () => ({
   useNavigate: () => mockNavigate,
-}), { virtual: true });
+}));
 
 vi.mock('./api/actionsProjects', () => ({
-  listActionsProjects: jest.fn(),
+  listActionsProjects: vi.fn(),
 }));
 
 vi.mock('./api/actionGroups', () => ({
-  listActionGroups: jest.fn(),
-  createActionGroup: jest.fn(),
-  updateActionGroup: jest.fn(),
-  deleteActionGroup: jest.fn(),
-  addActionToGroup: jest.fn(),
-  removeActionFromGroup: jest.fn(),
+  listActionGroups: vi.fn(),
+  createActionGroup: vi.fn(),
+  updateActionGroup: vi.fn(),
+  deleteActionGroup: vi.fn(),
+  addActionToGroup: vi.fn(),
+  removeActionFromGroup: vi.fn(),
 }));
 
 vi.mock('./utils/toast', () => ({
   toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    info: jest.fn(),
-    warning: jest.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -38,12 +39,12 @@ describe('ActionsProjectsList', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    (listActionGroups as jest.Mock).mockResolvedValue([]);
+    vi.clearAllMocks();
+    (listActionGroups as Mock).mockResolvedValue([]);
   });
 
   it('renders cards for each returned project', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue([
+    (listActionsProjects as Mock).mockResolvedValue([
       {
         actions_project_id: 1,
         name: 'Setup Node',
@@ -64,7 +65,7 @@ describe('ActionsProjectsList', () => {
   });
 
   it('shows an empty state when there are no projects', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue([]);
+    (listActionsProjects as Mock).mockResolvedValue([]);
 
     render(<ActionsProjectsList user="testuser" />);
 
@@ -74,7 +75,7 @@ describe('ActionsProjectsList', () => {
   });
 
   it('navigates to the detail page when a card is clicked', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue([
+    (listActionsProjects as Mock).mockResolvedValue([
       {
         actions_project_id: 7,
         name: 'Setup Node',
@@ -97,7 +98,7 @@ describe('ActionsProjectsList', () => {
   });
 
   it('navigates to the add flow when "Add Actions Project" is clicked', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue([]);
+    (listActionsProjects as Mock).mockResolvedValue([]);
 
     render(<ActionsProjectsList user="testuser" />);
 
@@ -107,7 +108,7 @@ describe('ActionsProjectsList', () => {
   });
 
   it('renders the marketplace branding icon when present, falling back to a generic icon otherwise', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue([
+    (listActionsProjects as Mock).mockResolvedValue([
       {
         actions_project_id: 1,
         name: 'Branded Action',
@@ -175,8 +176,8 @@ describe('ActionsProjectsList', () => {
   ];
 
   it('narrows the list to a selected group without duplicating an action in multiple groups', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue(twoProjects);
-    (listActionGroups as jest.Mock).mockResolvedValue([
+    (listActionsProjects as Mock).mockResolvedValue(twoProjects);
+    (listActionGroups as Mock).mockResolvedValue([
       { action_group_id: 10, name: 'Deployment', description: null, actions_project_ids: [1] },
       { action_group_id: 11, name: 'Setup', description: null, actions_project_ids: [1, 2] },
     ]);
@@ -198,9 +199,9 @@ describe('ActionsProjectsList', () => {
   });
 
   it('reflects a newly created group in the filter dropdown immediately, without a refresh', async () => {
-    (listActionsProjects as jest.Mock).mockResolvedValue(twoProjects);
-    (listActionGroups as jest.Mock).mockResolvedValue([]);
-    (createActionGroup as jest.Mock).mockResolvedValue({
+    (listActionsProjects as Mock).mockResolvedValue(twoProjects);
+    (listActionGroups as Mock).mockResolvedValue([]);
+    (createActionGroup as Mock).mockResolvedValue({
       action_group_id: 99,
       name: 'Deployment',
       description: null,

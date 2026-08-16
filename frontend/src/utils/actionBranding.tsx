@@ -26,6 +26,21 @@ interface ActionBrandingIconProps {
 }
 
 /**
+ * Builds DynamicIcon's fallback for when a named icon fails to load.
+ *
+ * `fallback` is typed `() => JSX.Element | null`, so it takes no props and has
+ * to close over the size/class it should render at. This factory lives at
+ * module scope so no component is *defined* inside a component (S6478) while
+ * the returned element still matches the non-DynamicIcon path below - a bare
+ * <Package /> would fall back to lucide's 24px default and drop the branding
+ * colour class, which is a visible mismatch against the requested size.
+ */
+export const createPackageFallback =
+  (size: number, className: string) => () => (
+    <Package size={size} className={className} aria-hidden="true" />
+  );
+
+/**
  * Renders an action's marketplace-style branding icon (parsed from its
  * action.yml `branding: {icon, color}` block), falling back to a generic
  * icon when there's no branding or the icon name isn't a recognized Feather
@@ -48,7 +63,7 @@ export const ActionBrandingIcon: React.FC<ActionBrandingIconProps> = ({
         size={size}
         className={combinedClassName}
         aria-hidden="true"
-        fallback={Package}
+        fallback={createPackageFallback(size, combinedClassName)}
       />
     );
   }

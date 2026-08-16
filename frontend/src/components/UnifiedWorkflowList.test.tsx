@@ -62,8 +62,8 @@ const baseProps = {
   selectedRepos: [],
   reusableWorkflowsEnabled: true,
   repoExists: true,
-  setIsCollapsed: jest.fn(),
-  handleSelectWorkflow: jest.fn(),
+  setIsCollapsed: vi.fn(),
+  handleSelectWorkflow: vi.fn(),
 };
 
 /** The section's collapse toggle, found via the section's own accessible region. */
@@ -80,7 +80,7 @@ const panelWidth = (container: HTMLElement) =>
 
 beforeEach(() => {
   localStorage.clear();
-  jest.clearAllMocks();
+  vi.clearAllMocks();
 });
 
 describe('UnifiedWorkflowList', () => {
@@ -155,7 +155,7 @@ describe('UnifiedWorkflowList', () => {
   describe('Compact file selection', () => {
     it('calls handleSelectWorkflow when a workflow row is clicked', async () => {
       const user = userEvent.setup();
-      const handleSelectWorkflow = jest.fn();
+      const handleSelectWorkflow = vi.fn();
 
       render(
         <UnifiedWorkflowList
@@ -189,7 +189,7 @@ describe('UnifiedWorkflowList', () => {
 
     it('calls onSelectCustomFile when a custom file row is clicked', async () => {
       const user = userEvent.setup();
-      const onSelectCustomFile = jest.fn();
+      const onSelectCustomFile = vi.fn();
 
       render(
         <UnifiedWorkflowList
@@ -208,7 +208,7 @@ describe('UnifiedWorkflowList', () => {
 
     it('calls onSelectCodeowners with the first repo when the CODEOWNERS row is clicked', async () => {
       const user = userEvent.setup();
-      const onSelectCodeowners = jest.fn();
+      const onSelectCodeowners = vi.fn();
 
       render(
         <UnifiedWorkflowList
@@ -420,7 +420,7 @@ describe('UnifiedWorkflowList', () => {
   describe('Panel collapse/expand', () => {
     it('collapses the panel from the header toggle', async () => {
       const user = userEvent.setup();
-      const setIsCollapsed = jest.fn();
+      const setIsCollapsed = vi.fn();
 
       render(
         <UnifiedWorkflowList {...baseProps} setIsCollapsed={setIsCollapsed} unifiedWorkflows={[regularWorkflow]} />
@@ -441,7 +441,7 @@ describe('UnifiedWorkflowList', () => {
 
     it('reopens the panel when a rail section icon is clicked', async () => {
       const user = userEvent.setup();
-      const setIsCollapsed = jest.fn();
+      const setIsCollapsed = vi.fn();
 
       render(
         <UnifiedWorkflowList
@@ -458,7 +458,7 @@ describe('UnifiedWorkflowList', () => {
 
     it('does not render the resize handle or Add File button while collapsed', () => {
       render(
-        <UnifiedWorkflowList {...baseProps} isCollapsed addWorkflowFn={jest.fn()} unifiedWorkflows={[]} />
+        <UnifiedWorkflowList {...baseProps} isCollapsed addWorkflowFn={vi.fn()} unifiedWorkflows={[]} />
       );
 
       expect(
@@ -611,7 +611,7 @@ describe('UnifiedWorkflowList', () => {
   describe('Add File button', () => {
     it('renders and calls addWorkflowFn directly when clicked', async () => {
       const user = userEvent.setup();
-      const addWorkflowFn = jest.fn();
+      const addWorkflowFn = vi.fn();
 
       render(<UnifiedWorkflowList {...baseProps} addWorkflowFn={addWorkflowFn} unifiedWorkflows={[]} />);
 
@@ -625,7 +625,7 @@ describe('UnifiedWorkflowList', () => {
           {...baseProps}
           unifiedWorkflows={[]}
           codeownersRepos={['owner/repo']}
-          onSelectCodeowners={jest.fn()}
+          onSelectCodeowners={vi.fn()}
         />
       );
 

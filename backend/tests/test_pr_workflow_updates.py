@@ -34,6 +34,16 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _unprotected_branch():
+    """GitHub's 404 for a branch with no protection configured.
+
+    Campaign creation snapshots each target's protection rules right after it
+    resolves the base commit, so every delivery flow makes this extra GET.
+    """
+    response = Mock()
+    response.status_code = 404
+    return response
+
 class TestPRWorkflowUpdates:
     """Test class for PR-based workflow update functions."""
 
@@ -469,6 +479,7 @@ class TestPRWorkflowUpdates:
             mock_github_get.side_effect = [
                 mock_repo_response,  # get_default_branch
                 mock_target_ref,     # get target branch SHA
+                _unprotected_branch(),  # branch protection snapshot
                 mock_file_check,     # check workflow file
                 mock_branch_check,   # verify branch exists
                 mock_dir_check,      # check directory exists
@@ -716,6 +727,7 @@ class TestPRWorkflowUpdates:
             mock_get.side_effect = [
                 mock_repo_response,  # get_default_branch
                 mock_target_ref,     # get target branch SHA
+                _unprotected_branch(),  # branch protection snapshot
                 mock_file_check,     # check workflow 1 file
                 mock_branch_check,   # verify branch exists
                 mock_dir_check,      # check directory exists
@@ -792,6 +804,7 @@ class TestPRWorkflowUpdates:
             mock_get.side_effect = [
                 mock_repo_response,
                 mock_target_ref,
+                _unprotected_branch(),  # branch protection snapshot
                 mock_file_check,
                 mock_branch_check,
                 mock_dir_check,
@@ -884,6 +897,7 @@ class TestPRWorkflowUpdates:
             mock_github_get.side_effect = [
                 mock_repo_response,  # get_default_branch
                 mock_target_ref,     # get target branch SHA
+                _unprotected_branch(),  # branch protection snapshot
                 mock_file_check,     # check workflow file
                 mock_branch_check,   # verify branch exists
                 mock_dir_check,      # check directory exists
@@ -957,6 +971,7 @@ class TestPRWorkflowUpdates:
             mock_get.side_effect = [
                 mock_repo_response,
                 mock_target_ref,
+                _unprotected_branch(),  # branch protection snapshot
                 # Workflow 1
                 mock_file_check, mock_branch_check, mock_dir_check,
                 # Workflow 2

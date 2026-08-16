@@ -5,8 +5,8 @@ import TemplateSelectionModal from './TemplateSelectionModal';
 import { TemplatesByType } from '../types/workflow';
 
 describe('TemplateSelectionModal Component', () => {
-  const mockSetShowTemplateModal = jest.fn();
-  const mockSelectTemplate = jest.fn();
+  const mockSetShowTemplateModal = vi.fn();
+  const mockSelectTemplate = vi.fn();
 
   const mockTemplatesByType: TemplatesByType = {
     standard: {
@@ -24,7 +24,7 @@ describe('TemplateSelectionModal Component', () => {
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('should render dialog when showTemplateModal is true', () => {

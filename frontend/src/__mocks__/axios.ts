@@ -6,7 +6,7 @@ const axiosMock = {
   put: vi.fn(() => Promise.resolve({ data: {} })),
   delete: vi.fn(() => Promise.resolve({ data: {} })),
   patch: vi.fn(() => Promise.resolve({ data: {} })),
-  create: vi.fn(function () {
+  create: vi.fn(function (this: unknown) {
     return this;
   }),
   interceptors: {

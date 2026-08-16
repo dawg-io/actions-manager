@@ -15,8 +15,8 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 // Capture Sidebar's onProjectNameSave so tests can trigger a rename
 let capturedOnProjectNameSave: ((name: string) => void) | null = null;
@@ -33,43 +33,41 @@ vi.mock(
       state: null,
       key: "test",
     }),
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  updateProjectName: jest.fn(),
-  updateProjectColor: jest.fn(),
-  exportProjectBackup: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  updateProjectName: vi.fn(),
+  updateProjectColor: vi.fn(),
+  exportProjectBackup: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
 }));
 
 vi.mock("./api/projectDeletion", () => ({
-  deleteProjectEnhanced: jest.fn(),
+  deleteProjectEnhanced: vi.fn(),
 }));
 
 vi.mock("./api/handlers", () => ({
-  handleSaveProjectWithModal: jest.fn(),
+  handleSaveProjectWithModal: vi.fn(),
 }));
 
 vi.mock("./api/secrets", () => ({
-  getSecrets: jest.fn(),
+  getSecrets: vi.fn(),
 }));
 
 vi.mock("./api/envVars", () => ({
-  getEnvVars: jest.fn(),
+  getEnvVars: vi.fn(),
 }));
 
 vi.mock("./api/pullRequests", () => ({
-  getProjectPRStatus: jest.fn(),
+  getProjectPRStatus: vi.fn(),
 }));
 
 vi.mock("./api/codeowners", () => ({
-  getProjectCodeownersStatuses: jest.fn().mockResolvedValue({ statuses: [] }),
+  getProjectCodeownersStatuses: vi.fn().mockResolvedValue({ statuses: [] }),
 }));
 
 vi.mock("./components/Sidebar", () => ({
@@ -236,6 +234,7 @@ import { getSecrets } from "./api/secrets";
 import { getEnvVars } from "./api/envVars";
 import { getProjectPRStatus } from "./api/pullRequests";
 
+import type { Mock } from 'vitest';
 const userDetails = {
   avatar_url: "https://example.com/avatar.png",
   github_user: "alice",
@@ -244,17 +243,17 @@ const userDetails = {
 };
 
 function renderWithProject() {
-  return render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+  return render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
 }
 
 describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     capturedOnProjectNameSave = null;
 
     mockUseParams.mockReturnValue({ user: "alice", projectName: "old-name" });
 
-    (fetchProjects as jest.Mock).mockResolvedValue([
+    (fetchProjects as Mock).mockResolvedValue([
       {
         project_id: 42,
         project_name: "old-name",
@@ -264,7 +263,7 @@ describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", 
         project_type: "standard",
       },
     ]);
-    (loadProject as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({
       project_name: "old-name",
       project_id: 42,
       project_code: "OLD",
@@ -279,9 +278,9 @@ describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", 
       project_type: "standard",
       pr_state: "new",
     });
-    (getSecrets as jest.Mock).mockResolvedValue([]);
-    (getEnvVars as jest.Mock).mockResolvedValue([]);
-    (getProjectPRStatus as jest.Mock).mockResolvedValue({
+    (getSecrets as Mock).mockResolvedValue([]);
+    (getEnvVars as Mock).mockResolvedValue([]);
+    (getProjectPRStatus as Mock).mockResolvedValue({
       project_state: "new",
       open_prs: 0,
       merged_prs: 0,
@@ -291,7 +290,7 @@ describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", 
 
   test("navigate is called with new-name URL after a successful rename", async () => {
     const user = userEvent.setup();
-    (updateProjectName as jest.Mock).mockResolvedValue({
+    (updateProjectName as Mock).mockResolvedValue({
       project_id: 42,
       project_name: "new-name",
       project_code: "OLD",
@@ -326,7 +325,7 @@ describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", 
     // Regression: the projects list state must also reflect the new name immediately.
     // Simulate the user navigating back to the project list by clearing the urlProjectName param.
     mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
-    rerender(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    rerender(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
 
     // The project list should now show the new name without requiring a hard refresh
     await waitFor(() => {
@@ -336,7 +335,7 @@ describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", 
 
   test("navigate is NOT called when the rename API call fails", async () => {
     const user = userEvent.setup();
-    (updateProjectName as jest.Mock).mockRejectedValue(
+    (updateProjectName as Mock).mockRejectedValue(
       new Error("Conflict: name already taken")
     );
 

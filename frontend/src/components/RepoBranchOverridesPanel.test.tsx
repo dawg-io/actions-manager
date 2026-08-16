@@ -4,11 +4,12 @@ import '@testing-library/jest-dom';
 
 import RepoBranchOverridesPanel from './RepoBranchOverridesPanel';
 
+import type { MockedFunction } from 'vitest';
 // Mock the API module — these are the only network calls the component makes.
 vi.mock('../api/projects', () => ({
-  fetchProjectRepoBranchConfigs: jest.fn(),
-  updateProjectRepoBranchConfig: jest.fn(),
-  resetProjectRepoBranchConfig: jest.fn(),
+  fetchProjectRepoBranchConfigs: vi.fn(),
+  updateProjectRepoBranchConfig: vi.fn(),
+  resetProjectRepoBranchConfig: vi.fn(),
 }));
 
 import {
@@ -17,13 +18,13 @@ import {
   resetProjectRepoBranchConfig,
 } from '../api/projects';
 
-const mockFetch = fetchProjectRepoBranchConfigs as jest.MockedFunction<
+const mockFetch = fetchProjectRepoBranchConfigs as MockedFunction<
   typeof fetchProjectRepoBranchConfigs
 >;
-const mockUpdate = updateProjectRepoBranchConfig as jest.MockedFunction<
+const mockUpdate = updateProjectRepoBranchConfig as MockedFunction<
   typeof updateProjectRepoBranchConfig
 >;
-const mockReset = resetProjectRepoBranchConfig as jest.MockedFunction<
+const mockReset = resetProjectRepoBranchConfig as MockedFunction<
   typeof resetProjectRepoBranchConfig
 >;
 
@@ -62,10 +63,10 @@ const baseResponse = {
 };
 
 describe('RepoBranchOverridesPanel', () => {
-  const mockOnRemoveRepo = jest.fn();
+  const mockOnRemoveRepo = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockFetch.mockResolvedValue({ ...baseResponse });
   });
 

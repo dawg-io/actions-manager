@@ -57,16 +57,16 @@ describe('WorkflowEditor Component', () => {
     workflowIndex: 0,
     projectCode: 'TEST',
     isModified: false,
-    onWorkflowChange: jest.fn(),
-    onClose: jest.fn(),
-    onSave: jest.fn(),
-    onCreate: jest.fn(),
-    onDelete: jest.fn(),
-    onSync: jest.fn(),
+    onWorkflowChange: vi.fn(),
+    onClose: vi.fn(),
+    onSave: vi.fn(),
+    onCreate: vi.fn(),
+    onDelete: vi.fn(),
+    onSync: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('Component Rendering', () => {
@@ -244,7 +244,7 @@ describe('WorkflowEditor Component', () => {
         content: 'invalid: yaml: content: [[[',
       };
 
-      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       render(<WorkflowEditor {...defaultProps} workflow={invalidWorkflow} />);
 

@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { DiffColumns, diffGridStyle } from "./DiffColumns";
 import {
   getProjectDrift,
   getWorkflowDrift,
@@ -194,59 +195,17 @@ const SideBySideDiff: React.FC<{
   busyAction: DriftDeliveryMode | null;
 }> = ({ left, right, repo, branch, onAdoptGithub, onRestorePR, onRestoreDirect, busyAction }) => {
   const disabled = busyAction !== null;
-  const leftLines = (left || "").split("\n");
-  const rightLines = (right || "").split("\n");
-  const max = Math.max(leftLines.length, rightLines.length);
-  const rows: { l: string; r: string; changed: boolean }[] = [];
-  for (let i = 0; i < max; i++) {
-    const l = leftLines[i] ?? "";
-    const r = rightLines[i] ?? "";
-    rows.push({ l, r, changed: l !== r });
-  }
   return (
     <div
       className="border border-slate-200 dark:border-slate-700 rounded-md overflow-hidden"
-      style={{ display: "grid", gridTemplateColumns: "1fr 1fr", fontFamily: "monospace", fontSize: "0.8rem" }}
+      style={diffGridStyle}
     >
-      {/* Column Headers */}
-      <div className="bg-slate-50 dark:bg-slate-800 px-2 py-1 text-sm font-semibold border-b border-r border-slate-200 dark:border-slate-700">
-        ActionsManager managed version
-      </div>
-      <div className="bg-slate-50 dark:bg-slate-800 px-2 py-1 text-sm font-semibold border-b border-slate-200 dark:border-slate-700">
-        Current GitHub version
-      </div>
-
-      {/* Diff Content */}
-      <div
-        className="m-0 px-2 py-1 overflow-x-auto whitespace-pre border-r border-slate-200 dark:border-slate-700"
-        style={{ background: "transparent" }}
-      >
-        {rows.map((row, i) => (
-          <div
-            key={`l-${i}`}
-            style={{
-              backgroundColor: row.changed && row.l ? "rgba(239,68,68,0.10)" : undefined,
-            }}
-          >
-            {row.l || " "}
-          </div>
-        ))}
-      </div>
-      <div
-        className="m-0 px-2 py-1 overflow-x-auto whitespace-pre"
-        style={{ background: "transparent" }}
-      >
-        {rows.map((row, i) => (
-          <div
-            key={`r-${i}`}
-            style={{
-              backgroundColor: row.changed && row.r ? "rgba(16,185,129,0.12)" : undefined,
-            }}
-          >
-            {row.r || " "}
-          </div>
-        ))}
-      </div>
+      <DiffColumns
+        left={left}
+        right={right}
+        leftLabel="ActionsManager managed version"
+        rightLabel="Current GitHub version"
+      />
 
       {/* Action Buttons aligned with columns */}
       <div className="border-t border-r border-slate-200 dark:border-slate-700 px-2 py-3 bg-slate-50/50 dark:bg-slate-800/50 flex flex-col gap-4">

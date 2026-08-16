@@ -4,9 +4,10 @@ import "@testing-library/jest-dom";
 import RepositoriesAndBranches from "./RepositoriesAndBranches";
 import { fetchRepos } from "../api/repos";
 
+import type { Mock } from 'vitest';
 // Mock the API
 vi.mock("../api/repos", () => ({
-  fetchRepos: jest.fn(),
+  fetchRepos: vi.fn(),
 }));
 
 // Mock child components to isolate tests
@@ -38,11 +39,11 @@ vi.mock("./RepositoryBranchSelector", () => ({
 }));
 
 describe("RepositoriesAndBranches", () => {
-  const mockSetRepos = jest.fn();
-  const mockSetSelectedRepos = jest.fn();
-  const mockSetRegexPattern = jest.fn();
-  const mockSetBranchOption = jest.fn();
-  const mockSetBranchMaxAgeDays = jest.fn();
+  const mockSetRepos = vi.fn();
+  const mockSetSelectedRepos = vi.fn();
+  const mockSetRegexPattern = vi.fn();
+  const mockSetBranchOption = vi.fn();
+  const mockSetBranchMaxAgeDays = vi.fn();
 
   const defaultProps = {
     user: "testuser",
@@ -60,8 +61,8 @@ describe("RepositoriesAndBranches", () => {
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    (fetchRepos as jest.Mock).mockResolvedValue([]);
+    vi.clearAllMocks();
+    (fetchRepos as Mock).mockResolvedValue([]);
   });
 
   describe("Visibility Scope Filtering", () => {
@@ -282,8 +283,8 @@ describe("RepositoriesAndBranches", () => {
     });
 
     it("renders validation repository separately from target repositories", async () => {
-      const mockSetValidationRepo = jest.fn();
-      const mockSetPreflightRequired = jest.fn();
+      const mockSetValidationRepo = vi.fn();
+      const mockSetPreflightRequired = vi.fn();
       const mockRepos = [
         { id: 1, name: "target", full_name: "org/target", private: false },
         { id: 2, name: "validation", full_name: "org/validation", private: false },

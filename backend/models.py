@@ -11,11 +11,12 @@ Defines SQLAlchemy models for:
 - ProjectRepo: Many-to-many relationship between projects and repositories
 """
 
+import json
 import secrets
 import string
 from sqlalchemy import BigInteger, Column, Index, Integer, String, DateTime, ForeignKey, Boolean, UniqueConstraint, Text
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 from database import Base
 
 _FK_ACCOUNTS_USER_ID = "accounts.user_id"
@@ -378,6 +379,85 @@ class ProjectPRCampaign(Base):
     # detect the one-time open -> terminal transition for campaign.completed notifications.
     # campaign_status itself is otherwise computed live on every read, never persisted.
     last_known_status = Column(String(20), nullable=False, default="open")
+
+    # User-chosen name and description, set when the campaign is created.
+    # NULL falls back to the name derived from the campaign's PR rows, which is
+    # how every campaign was named before this existed. Deliberately outside the
+    # snapshot guard below: these describe how the user files the campaign, not
+    # what went out, so renaming later is a legitimate change.
+    campaign_name = Column(Text, nullable=True)
+    campaign_description = Column(Text, nullable=True)
+
+    # Creation-time snapshot (JSON strings). Everything else about a campaign is
+    # derived live from the surviving PR rows, so without these a campaign silently
+    # re-reads against today's repo list, branch heads and workflow content.
+    # Nullable: campaigns created before this existed keep NULL and fall back to
+    # the derived-only rendering.
+    target_repos = Column(Text, nullable=True)     # ["owner/repo", ...] resolved targets, incl. repos that produced no PR
+    base_commits = Column(Text, nullable=True)     # {"owner/repo on main": "<sha>"} — null value where the SHA was unknown
+    policy_version = Column(Text, nullable=True)   # {"ci.yml": {"version": 7, "sha256": "..."}}
+    # {"owner/repo on main": {"status": "protected"|"none"|"unknown", ...}} — "none" and
+    # "unknown" are deliberately distinct: no protection configured is not the same fact
+    # as a token that could not read the protection settings.
+    branch_protection = Column(Text, nullable=True)
+    # {"owner/repo on main": "https://github.com/.../pull/42"}. Append-only rather than
+    # frozen: the CODEOWNERS deploy path creates the campaign before it opens the PR,
+    # so an empty slot is filled once, at the point the PR is created.
+    target_pr_urls = Column(Text, nullable=True)
+
+    # Set only on a rollback campaign — the campaign whose merged changes this one
+    # reverts, and what the user chose to happen to ActionsManager's own stored copy
+    # once the rollback merges: "revert" adopts what is then on GitHub, "keep" holds
+    # the ActionsManager version and lets drift report the divergence. Deliberately
+    # outside the snapshot guard below only because they are never written after
+    # construction anyway; nothing updates them.
+    rollback_of_campaign_id = Column(
+        Integer, ForeignKey("project_pr_campaigns.campaign_id", ondelete=_ON_DELETE_SET_NULL), nullable=True
+    )
+    rollback_am_action = Column(String(20), nullable=True)
+
+    _SNAPSHOT_FIELDS = ("target_repos", "base_commits", "policy_version", "branch_protection")
+
+    @validates(*_SNAPSHOT_FIELDS)
+    def _reject_snapshot_mutation(self, key, value):
+        # campaign_id is only populated once the row has been flushed, so this
+        # allows the constructor and rejects every later write.
+        if self.campaign_id is not None:
+            raise ValueError(
+                f"{key} is a creation-time snapshot and cannot be changed after the "
+                "campaign exists — create a new campaign instead."
+            )
+        return value
+
+    @validates("target_pr_urls")
+    def _reject_pr_url_assignment(self, key, value):
+        # Append-only rather than frozen, so record_pr_url is the single writer
+        # once the row exists — it sets the flag below after enforcing the rule.
+        if self.campaign_id is not None and not self.__dict__.get("_recording_pr_url"):
+            raise ValueError(
+                "target_pr_urls is append-only after the campaign exists — "
+                "use record_pr_url() to fill an empty slot."
+            )
+        return value
+
+    def record_pr_url(self, target_key: str, pr_url: str) -> None:
+        """Fill in the PR URL for a target that did not have one yet.
+
+        Raises if the target already recorded a URL — which PR a campaign opened
+        against a target is decided once, and silently overwriting it would lose
+        the record of what actually went out.
+        """
+        recorded = json.loads(self.target_pr_urls) if self.target_pr_urls else {}
+        if recorded.get(target_key):
+            raise ValueError(
+                f"{target_key} already recorded PR {recorded[target_key]} for this campaign."
+            )
+        recorded[target_key] = pr_url
+        self.__dict__["_recording_pr_url"] = True
+        try:
+            self.target_pr_urls = json.dumps(recorded)
+        finally:
+            self.__dict__.pop("_recording_pr_url", None)
 
 
 class ProjectPullRequest(Base):

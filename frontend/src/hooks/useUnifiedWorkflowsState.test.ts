@@ -2,7 +2,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useUnifiedWorkflowsState } from './useUnifiedWorkflowsState';
 
 const renderState = () =>
-  renderHook(() => useUnifiedWorkflowsState([], jest.fn(), jest.fn()));
+  renderHook(() => useUnifiedWorkflowsState([], vi.fn(), vi.fn()));
 
 beforeEach(() => {
   localStorage.clear();
@@ -52,7 +52,7 @@ describe('useUnifiedWorkflowsState — Project Files panel collapse persistence'
   });
 
   it('falls back to expanded when storage is unavailable', () => {
-    const getItem = jest
+    const getItem = vi
       .spyOn(Storage.prototype, 'getItem')
       .mockImplementation(() => {
         throw new Error('storage blocked');

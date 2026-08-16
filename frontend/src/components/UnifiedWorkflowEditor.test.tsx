@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 
 // Spy on the imperative handle the real editor exposes, so tests can assert what
 // the resource picker inserts without running CodeMirror in jsdom.
-const insertAtCursorSpy = jest.fn();
+const insertAtCursorSpy = vi.fn();
 
 // Mock the sub-components
 vi.mock('./YAMLEditor', () => ({
@@ -49,7 +49,7 @@ vi.mock('./YAMLEditor', () => ({
 }));
 
 vi.mock('../api/environments', () => ({
-  getEnvironments: jest.fn().mockResolvedValue([]),
+  getEnvironments: vi.fn().mockResolvedValue([]),
 }));
 
 // One editor for both kinds now - the testid still distinguishes them, driven
@@ -134,19 +134,21 @@ const defaultProps = {
   projectCode: 'TEST',
   user: 'test-user',
   projectName: 'test-project',
-  setEditMode: jest.fn(),
-  setRegularGuiWorkflow: jest.fn(),
-  setGuiWorkflow: jest.fn(),
-  handleWorkflowChange: jest.fn(),
-  saveDraftWorkflow: jest.fn(),
-  deleteWorkflow: jest.fn()
+  setEditMode: vi.fn(),
+  setRegularGuiWorkflow: vi.fn(),
+  setGuiWorkflow: vi.fn(),
+  handleWorkflowChange: vi.fn(),
+  saveDraftWorkflow: vi.fn(),
+  deleteWorkflow: vi.fn(),
+  importedActions: [],
+  actionGroups: []
 };
 
 describe('UnifiedWorkflowEditor', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('renders empty-state card when no workflow is selected', () => {
@@ -157,7 +159,7 @@ describe('UnifiedWorkflowEditor', () => {
   });
 
   test('empty state Add Workflow button invokes addWorkflowFn and is hidden when read-only', async () => {
-    const addWorkflowFn = jest.fn();
+    const addWorkflowFn = vi.fn();
     const { rerender } = render(
       <UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} addWorkflowFn={addWorkflowFn} />
     );
@@ -173,7 +175,7 @@ describe('UnifiedWorkflowEditor', () => {
   });
 
   test('empty state Import Existing button invokes onImportExisting and is absent when not provided', async () => {
-    const onImportExisting = jest.fn();
+    const onImportExisting = vi.fn();
     const { rerender } = render(
       <UnifiedWorkflowEditor {...defaultProps} selectedWorkflow={null} onImportExisting={onImportExisting} />
     );
@@ -575,8 +577,8 @@ describe('UnifiedWorkflowEditor', () => {
   });
 
   test('calls handleWorkflowChange for both name and content when GUI changes', () => {
-    const mockSetRegularGuiWorkflow = jest.fn();
-    const mockHandleWorkflowChange = jest.fn();
+    const mockSetRegularGuiWorkflow = vi.fn();
+    const mockHandleWorkflowChange = vi.fn();
     
     const guiWorkflow: WorkflowGUI = {
       name: 'UpdatedName',
@@ -750,7 +752,7 @@ describe('UnifiedWorkflowEditor', () => {
     });
 
     test('renders Save to RWX Project button when saveDraftLinkedWorkflow is provided', () => {
-      const mockSaveDraftLinked = jest.fn().mockResolvedValue(undefined);
+      const mockSaveDraftLinked = vi.fn().mockResolvedValue(undefined);
       render(
         <UnifiedWorkflowEditor
           {...defaultProps}
@@ -767,7 +769,7 @@ describe('UnifiedWorkflowEditor', () => {
     });
 
     test('calls saveDraftLinkedWorkflow when Save to RWX Project button is clicked', () => {
-      const mockSaveDraftLinked = jest.fn().mockResolvedValue(undefined);
+      const mockSaveDraftLinked = vi.fn().mockResolvedValue(undefined);
       render(
         <UnifiedWorkflowEditor
           {...defaultProps}
@@ -827,7 +829,7 @@ describe('UnifiedWorkflowEditor', () => {
   });
 
   describe('Unlink Workflow', () => {
-    const unlinkMock = jest.fn().mockResolvedValue(undefined);
+    const unlinkMock = vi.fn().mockResolvedValue(undefined);
 
     test('shows More menu with Unlink option for linked workflows', async () => {
       render(
@@ -1213,7 +1215,7 @@ describe('UnifiedWorkflowEditor editor-mode toggle', () => {
   test('exposes the selected mode to assistive tech, not just via colour', async () => {
     // Previously the active mode was conveyed only by a CSS class, so screen
     // readers heard two identical unlabelled buttons.
-    const setEditMode = jest.fn();
+    const setEditMode = vi.fn();
     const { rerender } = render(
       <UnifiedWorkflowEditor {...defaultProps} editMode="yaml" setEditMode={setEditMode} />
     );
@@ -1260,7 +1262,7 @@ describe('UnifiedWorkflowEditor editor-mode toggle', () => {
 
   test('still switches mode when clicked', async () => {
     const user = userEvent.setup();
-    const setEditMode = jest.fn();
+    const setEditMode = vi.fn();
     render(<UnifiedWorkflowEditor {...defaultProps} editMode="yaml" setEditMode={setEditMode} />);
 
     await user.click(guiBtn());

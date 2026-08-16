@@ -2,20 +2,21 @@ import axios from "axios";
 import apiClient from "./apiClient";
 import { createSecrets, getSecrets, deleteSecrets, syncSecret, getSecretsCount } from "./secrets";
 
+import type { Mocked } from 'vitest';
 vi.mock("./apiClient", () => ({
   __esModule: true,
   default: {
-    post: jest.fn(),
-    delete: jest.fn(),
+    post: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 vi.mock("../utils/toast", () => ({ toast: { error: vi.fn() } }));
 
-const mockedApiClient = apiClient as jest.Mocked<typeof apiClient>;
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockedApiClient = apiClient as Mocked<typeof apiClient>;
+const mockedAxios = axios as Mocked<typeof axios>;
 
 describe("secrets API", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => vi.clearAllMocks());
 
   describe("createSecrets", () => {
     it("returns error and calls toast when user is missing", async () => {
@@ -34,7 +35,7 @@ describe("secrets API", () => {
     });
 
     it("posts secrets and calls setSecrets with refreshed data", async () => {
-      const mockSetSecrets = jest.fn();
+      const mockSetSecrets = vi.fn();
       mockedApiClient.post.mockResolvedValueOnce({ data: { results: "ok" } });
       mockedAxios.get.mockResolvedValueOnce({ data: { secrets: [{ secret_key: "TOKEN" }] } });
 
@@ -113,7 +114,7 @@ describe("secrets API", () => {
     });
 
     it("deletes secret and refreshes setSecrets", async () => {
-      const mockSetSecrets = jest.fn();
+      const mockSetSecrets = vi.fn();
       mockedApiClient.delete.mockResolvedValueOnce({ data: { results: "ok" } });
       mockedAxios.get.mockResolvedValueOnce({ data: { secrets: [] } });
 

@@ -51,7 +51,7 @@ describe('ValidationPanel', () => {
   });
 
   test('clickable items render as a real button and activate on click', () => {
-    const handleDiagnosticClick = jest.fn();
+    const handleDiagnosticClick = vi.fn();
 
     render(
       <ValidationPanel
@@ -70,7 +70,7 @@ describe('ValidationPanel', () => {
 
   test('activates interactive items from the keyboard (native button behavior)', async () => {
     const user = userEvent.setup();
-    const handleDiagnosticClick = jest.fn();
+    const handleDiagnosticClick = vi.fn();
 
     render(
       <ValidationPanel

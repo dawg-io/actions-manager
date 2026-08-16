@@ -128,6 +128,8 @@ export interface PRCampaign {
   campaign_id: string;
   campaign_name: string;
   campaign_status: "open" | "completed" | "cancelled" | "partially_completed" | "failed" | string;
+  /** User-entered; absent when the campaign was never named. */
+  campaign_description?: string | null;
   project_name: string;
   project_code: string | null;
   created_by: string | null;
@@ -135,6 +137,8 @@ export interface PRCampaign {
   updated_at: string;
   completed_at: string | null;
   target_branches: string[];
+  /** The project's configured branch mode; absent on legacy responses. */
+  branch_option?: "default" | "pattern" | null;
   workflow_names: string[];
   custom_file_paths?: string[];
   repositories: string[];
@@ -144,6 +148,72 @@ export interface PRCampaign {
   failed_count: number;
   completion_percentage: number;
   pull_requests: PRCampaignPRItem[];
+  /** Resolved target repos at creation, including any that produced no PR. */
+  target_repos?: string[];
+  /** Keyed `"owner/repo on branch"`; null where the SHA could not be read. */
+  base_commits?: Record<string, string | null>;
+  policy_version?: Record<string, { version: number | null; sha256: string }>;
+  /** Keyed `"owner/repo on branch"`; the PR opened against that target. */
+  target_pr_urls?: Record<string, string | null>;
+  /** `"none"` = no protection configured; `"unknown"` = could not be read. */
+  branch_protection?: Record<string, {
+    status: "protected" | "none" | "unknown";
+    required_reviews?: number | null;
+    required_status_checks?: string[];
+    enforce_admins?: boolean;
+    error?: string;
+  }>;
+  /** Set only on a rollback campaign: the campaign it reverts. */
+  rollback_of_campaign_id?: number | null;
+  /** What happens to ActionsManager's stored copy once the rollback merges. */
+  rollback_am_action?: RollbackAmAction | null;
+}
+
+/**
+ * What a rollback does to ActionsManager's own stored workflows once its PRs
+ * merge. `revert` abandons the change — ActionsManager goes back to the previous
+ * version too, so nothing is reported as drifted. `keep` holds the new version so
+ * the change can be fixed and delivered again, and the rolled-back repositories
+ * are reported as drifted until it is.
+ */
+export type RollbackAmAction = "revert" | "keep";
+
+export interface RollbackFile {
+  path: string;
+  action: "restore" | "delete";
+  /** Content on the target branch right now. */
+  before: string;
+  /** Content the rollback would commit; empty for a delete. */
+  after: string;
+}
+
+export interface RollbackTarget {
+  repo_name: string;
+  target_branch: string;
+  pr_number: number;
+  pr_url: string;
+  workflow_names: string | null;
+  invertible: boolean;
+  /** Why this repo cannot be rolled back automatically; null when it can. */
+  reason: string | null;
+  files: RollbackFile[];
+}
+
+export interface RollbackPreviewResponse {
+  campaign_id: number;
+  campaign_name: string;
+  targets: RollbackTarget[];
+  invertible_count: number;
+}
+
+export interface RollbackCreateResponse {
+  campaign_id: number | null;
+  prs_created: number;
+  /** Keyed `"owner/repo on branch"`. Entries whose status is not pr_created/pr_updated failed. */
+  results: Record<string, { status?: string; error?: string } & Record<string, any>>;
+  skipped: { repo_name: string; target_branch: string; reason: string }[];
+  /** Set when delivery stopped part-way (e.g. the GitHub rate limit ran out). */
+  aborted?: string | null;
 }
 
 export interface PRCampaignsResponse {
@@ -167,15 +237,25 @@ export interface PRCampaignsResponse {
  * @param selectedReusableWorkflows - Optional array of reusable workflow names to include in the PR
  * @returns Promise with the response
  */
+export interface CreatePullRequestsOptions {
+  selectedRepos?: string[];
+  selectedWorkflows?: string[];
+  selectedReusableWorkflows?: string[];
+  /** Always send an array — omitting it means "all changed", [] means "none". */
+  selectedCustomFileIds?: number[];
+  selectedCodeownersRepos?: string[];
+  campaign?: { name?: string; description?: string };
+}
+
 export async function createPullRequests(
   githubUser: string,
   projectName: string,
-  selectedRepos?: string[],
-  selectedWorkflows?: string[],
-  selectedReusableWorkflows?: string[],
-  selectedCustomFileIds?: number[],
-  selectedCodeownersRepos?: string[]
+  options: CreatePullRequestsOptions = {}
 ): Promise<CreatePRsResponse> {
+  const {
+    selectedRepos, selectedWorkflows, selectedReusableWorkflows,
+    selectedCustomFileIds, selectedCodeownersRepos, campaign,
+  } = options;
   try {
     const response = await fetch(`${BACKEND_URL}/api/create-pull-requests`, {
       method: "POST",
@@ -188,6 +268,8 @@ export async function createPullRequests(
         selected_reusable_workflows: selectedReusableWorkflows || null,
         selected_custom_file_ids: selectedCustomFileIds ?? null,
         selected_codeowners_repos: selectedCodeownersRepos || null,
+        campaign_name: campaign?.name || null,
+        campaign_description: campaign?.description || null,
         async_mode: true
       }),
     });
@@ -527,4 +609,64 @@ export async function getPRCampaigns(
     console.error("Error fetching PR campaigns:", error);
     throw error;
   }
+}
+
+async function postRollback<T>(path: string, body: Record<string, unknown>, failure: string): Promise<T> {
+  const response = await fetch(`${BACKEND_URL}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: writeHeaders(),
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `${failure}: ${response.status}`);
+  }
+  return await response.json();
+}
+
+/**
+ * The proposed inverse of a campaign, for review before any revert PR opens.
+ * Read-only — nothing is created by calling this.
+ */
+export async function previewCampaignRollback(
+  githubUser: string,
+  projectName: string,
+  campaignId: string
+): Promise<RollbackPreviewResponse> {
+  return postRollback<RollbackPreviewResponse>(
+    "/api/campaign-rollback-preview",
+    { github_user: githubUser, project_name: projectName, campaign_id: campaignId },
+    "Failed to load the rollback preview"
+  );
+}
+
+/**
+ * Open the rollback campaign. The inverse is recomputed server-side, so a repo
+ * that changed since the preview comes back in `skipped` rather than being
+ * clobbered.
+ */
+export async function createCampaignRollback(
+  githubUser: string,
+  projectName: string,
+  campaignId: string,
+  options: {
+    amAction: RollbackAmAction;
+    campaignName?: string;
+    campaignDescription?: string;
+  }
+): Promise<RollbackCreateResponse> {
+  return postRollback<RollbackCreateResponse>(
+    "/api/campaign-rollback",
+    {
+      github_user: githubUser,
+      project_name: projectName,
+      campaign_id: campaignId,
+      am_action: options.amAction,
+      campaign_name: options.campaignName,
+      campaign_description: options.campaignDescription,
+    },
+    "Failed to create the rollback campaign"
+  );
 }

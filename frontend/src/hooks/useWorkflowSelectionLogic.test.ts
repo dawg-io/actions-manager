@@ -14,20 +14,21 @@ vi.mock('../utils/workflowGuiConversion', async (importOriginal) => {
 
 import { yamlToGuiResult } from '../utils/workflowGuiConversion';
 
+import type { Mock } from 'vitest';
 // The hook converts through yamlToGuiResult so it can report a failure; these
 // helpers keep the tests reading in terms of the model, not the wrapper shape.
 const mockConversion = (gui: WorkflowGUI) =>
-  (yamlToGuiResult as jest.Mock).mockReturnValue({ gui, error: null });
+  (yamlToGuiResult as Mock).mockReturnValue({ gui, error: null });
 const mockConversionFailure = (error: string) =>
-  (yamlToGuiResult as jest.Mock).mockReturnValue({ gui: DEFAULT_WORKFLOW_GUI, error });
+  (yamlToGuiResult as Mock).mockReturnValue({ gui: DEFAULT_WORKFLOW_GUI, error });
 
 describe('useWorkflowSelectionLogic', () => {
-  const mockSetSelectedWorkflowId = jest.fn();
-  const mockSetGuiWorkflow = jest.fn();
-  const mockSetRegularGuiWorkflow = jest.fn();
+  const mockSetSelectedWorkflowId = vi.fn();
+  const mockSetGuiWorkflow = vi.fn();
+  const mockSetRegularGuiWorkflow = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockConversion({ ...DEFAULT_WORKFLOW_GUI, name: 'Parsed Workflow' });
   });
 
@@ -279,7 +280,7 @@ describe('useWorkflowSelectionLogic', () => {
     });
 
     // The name should be overridden from the unified workflow
-    const callArgs = (mockSetRegularGuiWorkflow as jest.Mock).mock.calls[0][0];
+    const callArgs = (mockSetRegularGuiWorkflow as Mock).mock.calls[0][0];
     expect(callArgs.name).toBe('Custom Name');
   });
 

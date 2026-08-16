@@ -5,10 +5,10 @@ import EventPicker from './EventPicker';
 import { WorkflowEvent } from '../utils/workflowGuiConversion';
 
 describe('EventPicker advanced options', () => {
-  const mockOnChange = jest.fn();
+  const mockOnChange = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   const openAdvanced = () => {
@@ -77,10 +77,10 @@ describe('EventPicker advanced options', () => {
 });
 
 describe('EventPicker trigger toggle', () => {
-  const mockOnChange = jest.fn();
+  const mockOnChange = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   const triggerButton = (name: string) => screen.getByRole('button', { name });

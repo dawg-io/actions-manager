@@ -59,6 +59,8 @@ MIGRATION_SCRIPTS = [
     "migrate_add_drift_configuration.py",          # Moves drift sweep config out of env vars: global settings + per-project interval
     # After the seed account exists, so it repairs the same boot that creates it.
     "migrate_revoke_seed_workspace_membership.py", # Takes workspace admin off the seed account and restores it to the installer
+    "migrate_add_campaign_snapshot.py",            # Adds target_repos/base_commits/policy_version snapshot columns to project_pr_campaigns
+    "migrate_add_campaign_rollback.py",            # Adds rollback_of_campaign_id/rollback_am_action to project_pr_campaigns
     # Must stay last: purges rows orphaned while SQLite foreign keys were
     # disabled, so every table it cleans has to exist by the time it runs.
     "migrate_add_project_workflow_unique.py",      # Enforces one project per workflow (drift hardening PR 4)

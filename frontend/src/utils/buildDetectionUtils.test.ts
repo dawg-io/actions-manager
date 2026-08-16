@@ -15,25 +15,26 @@ vi.mock('../api/workflowTemplates');
 // Mock toast to capture notifications
 vi.mock('./toast', () => ({
   toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    info: jest.fn(),
-    warning: jest.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
 import { toast } from './toast';
 
+import type { Mock } from 'vitest';
 describe('buildDetectionUtils', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('detectBuildTypesForRepos', () => {
     test('should alert if no repositories selected', async () => {
-      const setDetectedBuildTypes = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
+      const setDetectedBuildTypes = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
 
       await detectBuildTypesForRepos(
         [], 'testuser', setDetectedBuildTypes, 
@@ -47,9 +48,9 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should detect build types for multiple repositories', async () => {
-      const setDetectedBuildTypes = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
+      const setDetectedBuildTypes = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
       const selectedRepos = ['owner1/repo1', 'owner2/repo2'];
 
       const mockBuildTypes1 = {
@@ -63,7 +64,7 @@ describe('buildDetectionUtils', () => {
         ]
       };
 
-      (detectBuildTypes as jest.Mock)
+      (detectBuildTypes as Mock)
         .mockResolvedValueOnce(mockBuildTypes1)
         .mockResolvedValueOnce(mockBuildTypes2);
 
@@ -84,12 +85,12 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should handle detection errors', async () => {
-      const setDetectedBuildTypes = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
+      const setDetectedBuildTypes = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
       const selectedRepos = ['owner/repo'];
 
-      (detectBuildTypes as jest.Mock).mockRejectedValue(new Error('API Error'));
+      (detectBuildTypes as Mock).mockRejectedValue(new Error('API Error'));
 
       await detectBuildTypesForRepos(
         selectedRepos, 'testuser', setDetectedBuildTypes,
@@ -102,12 +103,12 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should filter out invalid repository names', async () => {
-      const setDetectedBuildTypes = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
+      const setDetectedBuildTypes = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
       const selectedRepos = ['valid/repo', 'invalid', '', null as any];
 
-      (detectBuildTypes as jest.Mock).mockResolvedValue({
+      (detectBuildTypes as Mock).mockResolvedValue({
         detected_build_types: []
       });
 
@@ -121,12 +122,12 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should clear previous detection results', async () => {
-      const setDetectedBuildTypes = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
+      const setDetectedBuildTypes = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
       const selectedRepos = ['owner/repo'];
 
-      (detectBuildTypes as jest.Mock).mockResolvedValue({
+      (detectBuildTypes as Mock).mockResolvedValue({
         detected_build_types: []
       });
 
@@ -148,16 +149,16 @@ describe('buildDetectionUtils', () => {
 
     test('should create workflow from build type detection', async () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowWorkflowCreationDialog = jest.fn();
-      const setWorkflowCreationType = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setDetectedBuildTypes = jest.fn();
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowWorkflowCreationDialog = vi.fn();
+      const setWorkflowCreationType = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setDetectedBuildTypes = vi.fn();
 
       const mockWorkflowYaml = 'name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest';
-      (suggestWorkflow as jest.Mock).mockResolvedValue(mockWorkflowYaml);
+      (suggestWorkflow as Mock).mockResolvedValue(mockWorkflowYaml);
 
       await addWorkflowFromDetection(
         'owner/repo', mockBuildType, 'custom-workflow', workflows, 'PROJECT123', 'testuser',
@@ -184,13 +185,13 @@ describe('buildDetectionUtils', () => {
 
     test('should handle invalid repository name', async () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowWorkflowCreationDialog = jest.fn();
-      const setWorkflowCreationType = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setDetectedBuildTypes = jest.fn();
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowWorkflowCreationDialog = vi.fn();
+      const setWorkflowCreationType = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setDetectedBuildTypes = vi.fn();
 
       await addWorkflowFromDetection(
         'invalidrepo', mockBuildType, 'custom-workflow', workflows, null, 'testuser',
@@ -207,13 +208,13 @@ describe('buildDetectionUtils', () => {
 
     test('should handle null build type', async () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowWorkflowCreationDialog = jest.fn();
-      const setWorkflowCreationType = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setDetectedBuildTypes = jest.fn();
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowWorkflowCreationDialog = vi.fn();
+      const setWorkflowCreationType = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setDetectedBuildTypes = vi.fn();
 
       await addWorkflowFromDetection(
         'owner/repo', null as any, 'custom-workflow', workflows, null, 'testuser',
@@ -229,15 +230,15 @@ describe('buildDetectionUtils', () => {
 
     test('should handle API error response', async () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowWorkflowCreationDialog = jest.fn();
-      const setWorkflowCreationType = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setDetectedBuildTypes = jest.fn();
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowWorkflowCreationDialog = vi.fn();
+      const setWorkflowCreationType = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setDetectedBuildTypes = vi.fn();
 
-      (suggestWorkflow as jest.Mock).mockResolvedValue({
+      (suggestWorkflow as Mock).mockResolvedValue({
         error: 'Failed to generate'
       });
 
@@ -255,15 +256,15 @@ describe('buildDetectionUtils', () => {
 
     test('should handle empty workflow response', async () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowWorkflowCreationDialog = jest.fn();
-      const setWorkflowCreationType = jest.fn();
-      const setShowDetectionResultsInModal = jest.fn();
-      const setShowDetectionResults = jest.fn();
-      const setDetectedBuildTypes = jest.fn();
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowWorkflowCreationDialog = vi.fn();
+      const setWorkflowCreationType = vi.fn();
+      const setShowDetectionResultsInModal = vi.fn();
+      const setShowDetectionResults = vi.fn();
+      const setDetectedBuildTypes = vi.fn();
 
-      (suggestWorkflow as jest.Mock).mockResolvedValue('   ');
+      (suggestWorkflow as Mock).mockResolvedValue('   ');
 
       await addWorkflowFromDetection(
         'owner/repo', mockBuildType, 'custom-workflow', workflows, null, 'testuser',
@@ -280,8 +281,8 @@ describe('buildDetectionUtils', () => {
 
   describe('generateTemplates', () => {
     test('should alert if no repositories selected', async () => {
-      const setTemplatesByType = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setTemplatesByType = vi.fn();
+      const setShowTemplateModal = vi.fn();
 
       await generateTemplates(
         [], [], null, 'testuser', setTemplatesByType, setShowTemplateModal
@@ -294,8 +295,8 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should generate templates based on detected build types', async () => {
-      const setTemplatesByType = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setTemplatesByType = vi.fn();
+      const setShowTemplateModal = vi.fn();
       const selectedRepos = ['owner/repo'];
       const detectedBuildTypes: DetectedBuildResult[] = [
         {
@@ -314,7 +315,7 @@ describe('buildDetectionUtils', () => {
         ]
       };
 
-      (generateWorkflowTemplates as jest.Mock).mockResolvedValue(mockTemplates);
+      (generateWorkflowTemplates as Mock).mockResolvedValue(mockTemplates);
 
       await generateTemplates(
         selectedRepos, detectedBuildTypes, 'PROJECT123', 'testuser',
@@ -331,12 +332,12 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should use generic build type when no build types detected', async () => {
-      const setTemplatesByType = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setTemplatesByType = vi.fn();
+      const setShowTemplateModal = vi.fn();
       const selectedRepos = ['owner/repo'];
       const detectedBuildTypes: DetectedBuildResult[] = [];
 
-      (generateWorkflowTemplates as jest.Mock).mockResolvedValue({
+      (generateWorkflowTemplates as Mock).mockResolvedValue({
         templates: []
       });
 
@@ -349,11 +350,11 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should handle empty templates response', async () => {
-      const setTemplatesByType = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setTemplatesByType = vi.fn();
+      const setShowTemplateModal = vi.fn();
       const selectedRepos = ['owner/repo'];
 
-      (generateWorkflowTemplates as jest.Mock).mockResolvedValue({
+      (generateWorkflowTemplates as Mock).mockResolvedValue({
         templates: null
       });
 
@@ -366,11 +367,11 @@ describe('buildDetectionUtils', () => {
     });
 
     test('should handle template generation errors', async () => {
-      const setTemplatesByType = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setTemplatesByType = vi.fn();
+      const setShowTemplateModal = vi.fn();
       const selectedRepos = ['owner/repo'];
 
-      (generateWorkflowTemplates as jest.Mock).mockRejectedValue(new Error('API Error'));
+      (generateWorkflowTemplates as Mock).mockRejectedValue(new Error('API Error'));
 
       await generateTemplates(
         selectedRepos, [], null, 'testuser',
@@ -391,10 +392,10 @@ describe('buildDetectionUtils', () => {
 
     test('should add regular workflow from template', () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowTemplateModal = vi.fn();
 
       selectTemplate(
         mockTemplate, false, 'TestProject',
@@ -419,10 +420,10 @@ describe('buildDetectionUtils', () => {
 
     test('should add reusable workflow from template', () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowTemplateModal = vi.fn();
 
       selectTemplate(
         mockTemplate, true, 'TestProject',
@@ -434,7 +435,7 @@ describe('buildDetectionUtils', () => {
       expect(setShowTemplateModal).toHaveBeenCalledWith(false);
       
       // Extract callback and test it
-      const callback = (setRXWorkflows as jest.Mock).mock.calls[0][0];
+      const callback = (setRXWorkflows as Mock).mock.calls[0][0];
       const result = callback([]);
       
       expect(result[0]).toMatchObject({
@@ -449,10 +450,10 @@ describe('buildDetectionUtils', () => {
       const workflows: Workflow[] = [
         { name: 'existing', content: 'test', isReusable: false }
       ];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowTemplateModal = vi.fn();
 
       selectTemplate(
         mockTemplate, false, 'TestProject',
@@ -465,10 +466,10 @@ describe('buildDetectionUtils', () => {
 
     test('should handle existing reusable workflows', () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
-      const setShowTemplateModal = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+      const setShowTemplateModal = vi.fn();
 
       selectTemplate(
         mockTemplate, true, 'TestProject',
@@ -476,7 +477,7 @@ describe('buildDetectionUtils', () => {
         setSelectedWorkflowId, setShowTemplateModal
       );
 
-      const callback = (setRXWorkflows as jest.Mock).mock.calls[0][0];
+      const callback = (setRXWorkflows as Mock).mock.calls[0][0];
       const result = callback([
         { name: 'existing-rx', content: 'test', isReusable: true }
       ]);

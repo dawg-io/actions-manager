@@ -16,19 +16,19 @@ describe('WorkflowCreationDialog', () => {
     isGeneratingTemplates: false,
     reusableWorkflowsEnabled: true,
     selectedRepos: ['owner/repo'],
-    setShowWorkflowCreationDialog: jest.fn(),
-    selectWorkflowType: jest.fn(),
-    createBlankWorkflow: jest.fn(),
-    handleDetectBuildTypes: jest.fn(),
-    handleCreateFromTemplates: jest.fn(),
-    addWorkflowFromDetection: jest.fn(),
-    setWorkflowCreationType: jest.fn(),
-    setShowDetectionResultsInModal: jest.fn(),
-    setDetectedBuildTypes: jest.fn(),
+    setShowWorkflowCreationDialog: vi.fn(),
+    selectWorkflowType: vi.fn(),
+    createBlankWorkflow: vi.fn(),
+    handleDetectBuildTypes: vi.fn(),
+    handleCreateFromTemplates: vi.fn(),
+    addWorkflowFromDetection: vi.fn(),
+    setWorkflowCreationType: vi.fn(),
+    setShowDetectionResultsInModal: vi.fn(),
+    setDetectedBuildTypes: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     user = userEvent.setup();
   });
 
@@ -50,8 +50,8 @@ describe('WorkflowCreationDialog', () => {
   });
 
   test('should render custom file and codeowners options when provided', async () => {
-    const onAddCustomFile = jest.fn();
-    const onSelectCodeowners = jest.fn();
+    const onAddCustomFile = vi.fn();
+    const onSelectCodeowners = vi.fn();
     render(
       <WorkflowCreationDialog
         {...defaultProps}
@@ -70,7 +70,7 @@ describe('WorkflowCreationDialog', () => {
   });
 
   test('clicking CODEOWNERS closes dialog and selects the first codeowners repo', async () => {
-    const onSelectCodeowners = jest.fn();
+    const onSelectCodeowners = vi.fn();
     render(
       <WorkflowCreationDialog
         {...defaultProps}
@@ -96,7 +96,7 @@ describe('WorkflowCreationDialog', () => {
       <WorkflowCreationDialog
         {...defaultProps}
         showLinkReusableWorkflow={true}
-        onLinkReusableWorkflow={jest.fn()}
+        onLinkReusableWorkflow={vi.fn()}
       />
     );
 
@@ -107,7 +107,7 @@ describe('WorkflowCreationDialog', () => {
   });
 
   test('clicking link reusable workflow closes create dialog and opens link flow', async () => {
-    const onLinkReusableWorkflow = jest.fn();
+    const onLinkReusableWorkflow = vi.fn();
     render(
       <WorkflowCreationDialog
         {...defaultProps}
@@ -127,7 +127,7 @@ describe('WorkflowCreationDialog', () => {
       <WorkflowCreationDialog
         {...defaultProps}
         showLinkReusableWorkflow={false}
-        onLinkReusableWorkflow={jest.fn()}
+        onLinkReusableWorkflow={vi.fn()}
       />
     );
 

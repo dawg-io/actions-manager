@@ -16,13 +16,19 @@ AccordionItem.displayName = "AccordionItem"
 
 const AccordionTrigger = React.forwardRef<
   React.ComponentRef<typeof AccordionPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger> & {
+    // Controls that sit in the header row but must not be part of the toggle.
+    // The Trigger is a <button>, so anything interactive has to be a sibling of
+    // it rather than a child — a nested button is invalid, and faking one with
+    // role="button" trips typescript:S6819.
+    trailing?: React.ReactNode
+  }
+>(({ className, children, trailing, ...props }, ref) => (
   // asChild + div (not the default h3) — the campaign card header already
   // contains a real <h3>{campaign.campaign_name}</h3>; keeping Header as h3
   // would nest headings.
   <AccordionPrimitive.Header asChild>
-    <div className="flex">
+    <div className="flex items-center">
       <AccordionPrimitive.Trigger
         ref={ref}
         className={cn(
@@ -34,6 +40,7 @@ const AccordionTrigger = React.forwardRef<
         {children}
         <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-200 opacity-60" />
       </AccordionPrimitive.Trigger>
+      {trailing}
     </div>
   </AccordionPrimitive.Header>
 ))

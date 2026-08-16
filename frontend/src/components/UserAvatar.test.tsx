@@ -1,26 +1,24 @@
 // Mock window.matchMedia before any imports
-const mockMatchMedia = jest.fn((query) => ({
+const mockMatchMedia = vi.fn((query) => ({
   matches: false,
   media: query,
   onchange: null,
-  addListener: jest.fn(), 
-  removeListener: jest.fn(), 
-  addEventListener: jest.fn(),
-  removeEventListener: jest.fn(),
-  dispatchEvent: jest.fn(),
+  addListener: vi.fn(), 
+  removeListener: vi.fn(), 
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+  dispatchEvent: vi.fn(),
 }));
 
 globalThis.matchMedia = mockMatchMedia;
 
 // Mock react-router
-const mockNavigate = jest.fn();
+const mockNavigate = vi.fn();
 vi.mock(
   'react-router',
   () => ({
     useNavigate: () => mockNavigate,
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock('./ui', () => {
   const React = require('react');
@@ -86,14 +84,15 @@ import UserAvatar from './UserAvatar';
 import { ThemeProvider } from './ThemeContext';
 
 vi.mock('../api/user', () => ({
-  getGitHubTokenStatus: jest.fn(),
-  testGitHubToken: jest.fn(),
-  saveGitHubToken: jest.fn(),
-  removeGitHubToken: jest.fn(),
+  getGitHubTokenStatus: vi.fn(),
+  testGitHubToken: vi.fn(),
+  saveGitHubToken: vi.fn(),
+  removeGitHubToken: vi.fn(),
 }));
 
 import { getGitHubTokenStatus, saveGitHubToken, testGitHubToken, removeGitHubToken } from '../api/user';
 
+import type { Mock } from 'vitest';
 interface UserAvatarProps {
   avatarUrl: string | null;
   username: string | null;
@@ -146,14 +145,14 @@ describe('UserAvatar Component', () => {
     // Clear mock calls before each test
     mockMatchMedia.mockClear();
     mockNavigate.mockClear();
-    (testGitHubToken as jest.Mock).mockReset();
-    (saveGitHubToken as jest.Mock).mockReset();
-    (removeGitHubToken as jest.Mock).mockReset();
-    (getGitHubTokenStatus as jest.Mock).mockReset();
+    (testGitHubToken as Mock).mockReset();
+    (saveGitHubToken as Mock).mockReset();
+    (removeGitHubToken as Mock).mockReset();
+    (getGitHubTokenStatus as Mock).mockReset();
   });
 
   test('should render with avatar image', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -172,7 +171,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should render placeholder when no avatar URL', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: null,
       username: 'testuser',
@@ -189,7 +188,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should render question mark when no username', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: null,
       username: null,
@@ -215,7 +214,7 @@ describe('UserAvatar Component', () => {
         message: 'Token configured.',
         token_type: 'fine_grained_pat'
       },
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);
@@ -232,11 +231,11 @@ describe('UserAvatar Component', () => {
   });
 
   test('should save token without exposing the raw value afterwards', async () => {
-    const onGitHubAuthUpdated = jest.fn();
-    (saveGitHubToken as jest.Mock).mockResolvedValue({
+    const onGitHubAuthUpdated = vi.fn();
+    (saveGitHubToken as Mock).mockResolvedValue({
       saved: true
     });
-    (getGitHubTokenStatus as jest.Mock).mockResolvedValue({
+    (getGitHubTokenStatus as Mock).mockResolvedValue({
       configured: true,
       status: 'valid',
       message: 'Token configured.',
@@ -249,7 +248,7 @@ describe('UserAvatar Component', () => {
       accountType: 'free',
       githubAccountType: 'User',
       onGitHubAuthUpdated,
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);
@@ -271,7 +270,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should handle empty username', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: null,
       username: '',
@@ -286,7 +285,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should render as a button element with proper ARIA attributes', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -303,7 +302,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should toggle dropdown when button is clicked', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -323,7 +322,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should support keyboard navigation with Enter key', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -343,7 +342,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should support keyboard navigation with Space key', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -363,7 +362,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should format professional account type correctly', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -381,7 +380,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should format free account type correctly', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -399,7 +398,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should format enterprise account type correctly', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -424,7 +423,7 @@ describe('UserAvatar Component', () => {
       installationMode: 'self-hosted',
       githubAccountType: 'User',
       workspaceRole: 'admin',
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);
@@ -453,7 +452,7 @@ describe('UserAvatar Component', () => {
       installationMode: 'cloud',
       githubAccountType: 'Organization',
       workspaceRole: 'member',
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);
@@ -474,7 +473,7 @@ describe('UserAvatar Component', () => {
       connectedGithubAccount: 'whatsupdawg',
       connectedGithubAccountType: 'Organization',
       workspaceRole: 'admin',
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);
@@ -496,7 +495,7 @@ describe('UserAvatar Component', () => {
         username="unknown-type-user"
         accountType="free"
         githubAccountType={undefined}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
     openUserMenu('User menu for unknown-type-user');
@@ -510,7 +509,7 @@ describe('UserAvatar Component', () => {
         username="enterprise-owner"
         accountType="free"
         githubAccountType="Enterprise"
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
     openUserMenu('User menu for enterprise-owner');
@@ -523,7 +522,7 @@ describe('UserAvatar Component', () => {
       username: 'enterprise-user',
       accountType: 'enterprise',
       githubAccountType: 'User',
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);
@@ -535,7 +534,7 @@ describe('UserAvatar Component', () => {
   });
 
   test('should preserve API usage and menu actions', () => {
-    const mockOnLogout = jest.fn();
+    const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {
       avatarUrl: 'https://github.com/testuser.png',
       username: 'testuser',
@@ -576,7 +575,7 @@ describe('UserAvatar Component', () => {
       username: longUsername,
       accountType: 'free',
       githubAccountType: 'Organization',
-      onLogout: jest.fn()
+      onLogout: vi.fn()
     };
 
     renderWithTheme(<UserAvatar {...props} />);

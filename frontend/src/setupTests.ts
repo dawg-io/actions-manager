@@ -5,7 +5,7 @@
 import '@testing-library/jest-dom';
 
 // Mock axios for all tests
-jest.mock('axios');
+vi.mock('axios');
 
 // jsdom has no layout engine, so scrollIntoView is simply absent. Components
 // that scroll a newly revealed panel into view would throw on mount.

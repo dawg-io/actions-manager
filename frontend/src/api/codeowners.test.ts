@@ -1,18 +1,19 @@
 import apiClient from "./apiClient";
 import { getCodeowners, saveCodeownersDraft, getCodeownersDrift, deployCodeowners } from "./codeowners";
 
+import type { Mocked } from 'vitest';
 vi.mock("./apiClient", () => ({
   __esModule: true,
   default: {
-    get: jest.fn(),
-    post: jest.fn(),
+    get: vi.fn(),
+    post: vi.fn(),
   },
 }));
 
-const mockedApiClient = apiClient as jest.Mocked<typeof apiClient>;
+const mockedApiClient = apiClient as Mocked<typeof apiClient>;
 
 describe("codeowners API", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => vi.clearAllMocks());
 
   describe("getCodeowners", () => {
     it("fetches from the correct endpoint with params", async () => {

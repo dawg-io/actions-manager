@@ -4,15 +4,15 @@ import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import ProjectList from './ProjectList';
 
+import type { MockInstance } from 'vitest';
 // --- Mocks ---
-const mockNavigate = jest.fn();
+const mockNavigate = vi.fn();
 
 vi.mock(
   'react-router',
   () => ({
     useNavigate: () => mockNavigate,
-  }),
-  { virtual: true } // <-- this tells Jest not to look for a real package
+  })
 );
 
 function renderedOrder(): string[] {
@@ -24,16 +24,16 @@ function renderedOrder(): string[] {
 describe('ProjectList', () => {
   const user = userEvent.setup();
 
-  let logSpy: jest.SpyInstance;
-  let errorSpy: jest.SpyInstance;
+  let logSpy: MockInstance;
+  let errorSpy: MockInstance;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockNavigate.mockResolvedValue(undefined);
 
     // Silence console.log/error during tests
-    logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -554,7 +554,7 @@ describe('ProjectList', () => {
     });
 
     test('shows Open PR only when a PR URL is available', async () => {
-      const openSpy = jest.spyOn(globalThis, 'open').mockImplementation(() => null);
+      const openSpy = vi.spyOn(globalThis, 'open').mockImplementation(() => null);
       renderProjectList({
         projects: [
           {
@@ -598,7 +598,7 @@ describe('ProjectList', () => {
   });
 
   test('renders New Project and Managed Actions alongside the status pills, not the title row or toolbar', async () => {
-    const onCreateProject = jest.fn();
+    const onCreateProject = vi.fn();
     renderProjectList({ onCreateProject });
 
     const newProjectButton = screen.getByTestId('new-project-button');
@@ -620,7 +620,7 @@ describe('ProjectList', () => {
   });
 
   test('New Project respects the disabled state', () => {
-    renderProjectList({ onCreateProject: jest.fn(), isCreateProjectDisabled: true });
+    renderProjectList({ onCreateProject: vi.fn(), isCreateProjectDisabled: true });
 
     expect(screen.getByTestId('new-project-button')).toBeDisabled();
   });
@@ -671,13 +671,13 @@ describe('ProjectList', () => {
     });
 
     test('drag handles are enabled when no filter is active', () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       expect(screen.getByTestId('project-drag-handle-Project01')).toBeEnabled();
     });
 
     test('drag handles are disabled while a filter is active, with an explanation', async () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       await user.type(screen.getByTestId('project-search-input'), 'Project01');
 
@@ -687,7 +687,7 @@ describe('ProjectList', () => {
     });
 
     test('clearing filters restores the complete saved order', async () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       await user.type(screen.getByTestId('project-search-input'), 'Project01');
       expect(screen.getAllByTestId(/^project-row-/)).toHaveLength(1);
@@ -699,7 +699,7 @@ describe('ProjectList', () => {
     });
 
     test('clicking the drag handle does not navigate', async () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       await user.click(screen.getByTestId('project-drag-handle-Project01'));
 
@@ -707,7 +707,7 @@ describe('ProjectList', () => {
     });
 
     test('card navigation still works alongside the drag handle', async () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       await user.click(screen.getByRole('button', { name: 'Open project Project03' }));
 
@@ -715,7 +715,7 @@ describe('ProjectList', () => {
     });
 
     test('the three-dot menu still opens alongside the drag handle', async () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       await user.click(screen.getByTestId('project-more-Project01'));
 
@@ -726,7 +726,7 @@ describe('ProjectList', () => {
     test('a reorder failure surfaces an error to the user', () => {
       renderProjectList({
         projects: manyProjects,
-        onReorder: jest.fn(),
+        onReorder: vi.fn(),
         reorderError: 'Failed to save project order.',
       });
 
@@ -736,7 +736,7 @@ describe('ProjectList', () => {
     });
 
     test('the responsive grid still wraps the cards directly', () => {
-      renderProjectList({ projects: manyProjects, onReorder: jest.fn() });
+      renderProjectList({ projects: manyProjects, onReorder: vi.fn() });
 
       const grid = screen.getByTestId('project-row-Project01').parentElement;
       expect(grid).toHaveClass('grid');

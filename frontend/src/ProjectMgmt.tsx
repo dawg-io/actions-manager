@@ -586,7 +586,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       let dashEnd = cleanedProjectName.length;
       while (dashEnd > dashStart && cleanedProjectName[dashEnd - 1] === "-") dashEnd--;
       const safeProjectName = cleanedProjectName.slice(dashStart, dashEnd) || "project";
-      const fallbackFileName = `actionsmanager-project-${safeProjectName}-${new Date().toISOString().replace(/[:]/g, "-")}.json`;
+      const fallbackFileName = `actionsmanager-project-${safeProjectName}-${new Date().toISOString().replaceAll(":", "-")}.json`;
 
       const url = globalThis.URL.createObjectURL(blob);
       const link = document.createElement("a");
