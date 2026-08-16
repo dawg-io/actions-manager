@@ -6,10 +6,12 @@ import {
   PRCampaign,
   PRCampaignPRItem,
   PRCampaignsResponse,
+  RollbackCreateResponse,
 } from "../api/pullRequests";
 import { formatRelativeTime } from "../utils/timeFormat";
 import { normalizeWorkflowFilename } from "../utils/workflowFilename";
 import ConfirmDialog from "./ConfirmDialog";
+import RollbackCampaignModal from "./RollbackCampaignModal";
 import { Button } from "./ui/button";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "./ui/accordion";
 import { toast } from "../utils/toast";
@@ -48,6 +50,48 @@ const getStateClassFn = (state: string) =>
     : state === "open"
     ? "pr-campaign-state-open"
     : "pr-history-state-closed";
+
+// The snapshot maps are all keyed "owner/repo on branch" because a repo can be
+// targeted on several branches in one campaign; the repo header shows the first.
+const firstForRepo = <T,>(map: Record<string, T> | undefined, repoName: string): T | null =>
+  Object.entries(map ?? {}).find(([key]) => key.startsWith(`${repoName} on `))?.[1] ?? null;
+
+// The branch half of that same key — non-null exactly when firstForRepo matched,
+// since both test the same prefix. A repo's default branch differs per repo, so
+// a base SHA on its own doesn't say what it is the base of.
+const firstBranchForRepo = (map: Record<string, unknown> | undefined, repoName: string): string | null =>
+  Object.keys(map ?? {}).find((key) => key.startsWith(`${repoName} on `))?.slice(`${repoName} on `.length) ?? null;
+
+const snapshotForRepo = (campaign: PRCampaign | undefined, repoName: string) => ({
+  baseSha: firstForRepo(campaign?.base_commits, repoName),
+  baseBranch: firstBranchForRepo(campaign?.base_commits, repoName),
+  prUrl: firstForRepo(campaign?.target_pr_urls, repoName),
+  protection: firstForRepo(campaign?.branch_protection, repoName),
+});
+
+const branchOptionLabels: Record<string, string> = {
+  default: "Default branch",
+  pattern: "Pattern",
+};
+
+const formatPolicyVersion = (version: number | null, sha256: string) =>
+  version !== null && version !== undefined ? `v${version}` : sha256.slice(0, 7);
+
+type BranchProtection = NonNullable<PRCampaign['branch_protection']>[string];
+
+// GitHub's enforce_admins is true when admins are *not* exempt, so the wording
+// is derived here rather than stored inverted.
+const describeProtection = (protection: BranchProtection): string => {
+  if (protection.status === 'none') return 'no branch protection';
+  if (protection.status !== 'protected') return 'protection unreadable';
+
+  const checks = protection.required_status_checks ?? [];
+  return [
+    protection.required_reviews ? `${protection.required_reviews} reviews` : 'no required reviews',
+    checks.length > 0 ? `checks: ${checks.join(', ')}` : 'no required checks',
+    protection.enforce_admins ? 'admins enforced' : 'admins exempt',
+  ].join(' · ');
+};
 
 interface PRRowProps {
   pr: PRCampaignPRItem;
@@ -150,6 +194,7 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [rollbackCampaign, setRollbackCampaign] = useState<PRCampaign | null>(null);
   const [filters, setFilters] = useState({
     repo: "",
     workflow: "",
@@ -238,6 +283,74 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     [data]
   );
 
+  // "campaign-<id>" of a source campaign -> the campaign that rolls it back, so
+  // both cards can name the other without the API carrying a reverse field.
+  const rollbackBySource = useMemo(() => {
+    const map = new Map<string, PRCampaign>();
+    (data?.campaigns ?? []).forEach((campaign) => {
+      if (campaign.rollback_of_campaign_id != null) {
+        map.set(`campaign-${campaign.rollback_of_campaign_id}`, campaign);
+      }
+    });
+    return map;
+  }, [data]);
+
+  const campaignNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    (data?.campaigns ?? []).forEach((campaign) => map.set(campaign.campaign_id, campaign.campaign_name));
+    return map;
+  }, [data]);
+
+  /** Per-repo delivery failures, which come back on a 200 alongside any successes. */
+  const rollbackFailures = (result: RollbackCreateResponse) =>
+    Object.entries(result.results ?? {})
+      .filter(([, r]) => r?.status !== "pr_created" && r?.status !== "pr_updated")
+      .map(([key, r]) => `${key}: ${r?.error || "delivery failed"}`);
+
+  const handleRolledBack = async (result: RollbackCreateResponse) => {
+    setRollbackCampaign(null);
+    setError(null);
+    setSuccess(null);
+    const failures = rollbackFailures(result);
+    const skipped = result.skipped.length;
+    let skippedNote = "";
+    if (skipped === 1) {
+      skippedNote = " 1 repository was skipped as non-invertible.";
+    } else if (skipped > 1) {
+      skippedNote = ` ${skipped} repositories were skipped as non-invertible.`;
+    }
+    if (failures.length > 0) {
+      skippedNote += ` Failed: ${failures.join("; ")}`;
+    }
+    if (result.aborted) {
+      skippedNote += ` Delivery stopped early at ${result.aborted}`;
+    }
+
+    // A 200 with no PRs is still a failed rollback — reporting it as success is
+    // how "opened with 0 pull requests" ends up in a green toast.
+    const opened = result.prs_created > 0;
+    const plural = result.prs_created === 1 ? "" : "s";
+    const headline = opened
+      ? `Rollback campaign opened with ${result.prs_created} pull request${plural}.`
+      : "No rollback pull requests were opened.";
+    const message = `${headline}${skippedNote}`;
+
+    try {
+      await refreshProjectCampaignState(false);
+      if (opened) {
+        setSuccess(message);
+        toast.success(message);
+      } else {
+        setError(message);
+        toast.error(message);
+      }
+    } catch (refreshError) {
+      console.warn("⚠️ Rollback campaign created but refresh failed:", refreshError);
+      setError(REFRESH_WARNING);
+      toast.warning(REFRESH_WARNING);
+    }
+  };
+
   const openPRsForCampaign = (campaign: PRCampaign) =>
     campaign.pull_requests.filter((pr) => pr.pr_state === "open");
   const mergeableOpenPRsForCampaign = (campaign: PRCampaign) =>
@@ -284,16 +397,41 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     }
   };
 
-  const renderWorkflowChips = (workflows: string[] | string | null) => {
+  const renderWorkflowChips = (workflows: string[] | string | null, campaign?: PRCampaign) => {
     const names = Array.isArray(workflows)
       ? workflows
       : (workflows || "").split(",").map((name) => name.trim()).filter(Boolean);
-    if (names.length === 0) return <span className="pr-campaign-muted">No workflows recorded</span>;
+
+    // The snapshot is keyed by the stored workflow name, the chips render the
+    // normalized filename, so match on the normalized form. Snapshotted
+    // workflows with no chip of their own are appended rather than dropped.
+    const applied = new Map(
+      Object.entries(campaign?.policy_version ?? {}).map(
+        ([name, version]) => [normalizeWorkflowFilename(name), version]
+      )
+    );
+    // Deduplicated after normalizing: the stored forms "ci" and "ci.yml" both
+    // occur and collapse to one filename, which would otherwise render two
+    // chips sharing a React key.
+    const shown = [...new Set(names.map(normalizeWorkflowFilename))];
+    const allNames = [...shown, ...[...applied.keys()].filter((name) => !shown.includes(name))];
+
+    if (allNames.length === 0) return <span className="pr-campaign-muted">No workflows recorded</span>;
     return (
       <div className="pr-history-workflows">
-        {names.map((name) => (
-          <span key={name} className="pr-history-workflow-chip">🔀 {normalizeWorkflowFilename(name)}</span>
-        ))}
+        {allNames.map((name) => {
+          const version = applied.get(name);
+          return (
+            <span
+              key={name}
+              className="pr-history-workflow-chip"
+              title={version ? `Applied at campaign creation — sha256 ${version.sha256.slice(0, 16)}…` : undefined}
+            >
+              🔀 {name}
+              {version && ` · ${formatPolicyVersion(version.version, version.sha256)}`}
+            </span>
+          );
+        })}
       </div>
     );
   };
@@ -327,7 +465,7 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
     </div>
   );
 
-  const renderPRTable = (prs: PRCampaignPRItem[], includeActions: boolean) => {
+  const renderPRTable = (prs: PRCampaignPRItem[], includeActions: boolean, campaign?: PRCampaign) => {
     // Group PRs by repository
     const grouped = prs.reduce((acc, pr) => {
       if (!acc[pr.repo_name]) acc[pr.repo_name] = [];
@@ -335,24 +473,80 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
       return acc;
     }, {} as Record<string, PRCampaignPRItem[]>);
 
+    // Snapshotted targets that produced no PR would otherwise vanish from a
+    // partially-rolled-out campaign, which is exactly what it needs to show.
+    const repoNames = Array.from(
+      new Set([...Object.keys(grouped), ...(campaign?.target_repos ?? [])])
+    );
+
     return (
       <div className="pr-campaign-grouped-list">
-        {Object.entries(grouped).map(([repoName, repoPRs]) => (
-          <div key={repoName} className="pr-campaign-repo-group">
-            <h4 className="pr-campaign-repo-title">{repoName}</h4>
-            <div className="pr-campaign-repo-prs">
-              {repoPRs.map((pr) => (
-                <PRRow
-                  key={`${pr.pr_id}-${pr.pr_state}`}
-                  pr={pr}
-                  includeActions={includeActions}
-                  processingKey={processingKey}
-                  setPendingAction={setPendingAction}
-                />
-              ))}
+        {repoNames.map((repoName) => {
+          const repoPRs = grouped[repoName] ?? [];
+          const { baseSha, baseBranch, prUrl, protection } = snapshotForRepo(campaign, repoName);
+          const hasSnapshot = baseSha || prUrl || protection;
+          return (
+            <div key={repoName} className="pr-campaign-repo-group">
+              <h4 className="pr-campaign-repo-title">{repoName}</h4>
+              {hasSnapshot && (
+                <div className="pr-campaign-repo-snapshot" data-testid="repo-snapshot-line">
+                  {baseSha && (
+                    <span title={`Base commit on ${baseBranch} at campaign creation: ${baseSha}`}>
+                      base {baseBranch} {baseSha.slice(0, 7)}
+                    </span>
+                  )}
+                  {prUrl && (
+                    <a href={prUrl} target="_blank" rel="noopener noreferrer" className="pr-campaign-pr-link">
+                      PR #{prUrl.split('/').pop()}
+                    </a>
+                  )}
+                  {protection && (
+                    <span title={protection.error || undefined}>{describeProtection(protection)}</span>
+                  )}
+                </div>
+              )}
+              <div className="pr-campaign-repo-prs">
+                {repoPRs.length > 0 ? (
+                  repoPRs.map((pr) => (
+                    <PRRow
+                      key={`${pr.pr_id}-${pr.pr_state}`}
+                      pr={pr}
+                      includeActions={includeActions}
+                      processingKey={processingKey}
+                      setPendingAction={setPendingAction}
+                    />
+                  ))
+                ) : (
+                  <div className="pr-campaign-grouped-pr pr-campaign-muted" data-testid="repo-no-pr-row">
+                    No PR opened
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderRollbackLinks = (campaign: PRCampaign) => {
+    const sourceName = campaign.rollback_of_campaign_id != null
+      ? campaignNameById.get(`campaign-${campaign.rollback_of_campaign_id}`)
+      : undefined;
+    const rolledBackBy = rollbackBySource.get(campaign.campaign_id);
+    if (!sourceName && !rolledBackBy) return null;
+    return (
+      <div className="pr-rollback-links">
+        {sourceName && (
+          <span className="pr-history-source-project-badge" data-testid="rollback-of-badge">
+            ↩ Rollback of {sourceName}
+          </span>
+        )}
+        {rolledBackBy && (
+          <span className="pr-history-source-project-badge" data-testid="rolled-back-by-badge">
+            ↩ Rolled back by {rolledBackBy.campaign_name}
+          </span>
+        )}
       </div>
     );
   };
@@ -360,33 +554,78 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
   const renderCampaignCard = (campaign: PRCampaign, operational: boolean) => {
     const openPRs = openPRsForCampaign(campaign);
     const mergeableOpenPRs = mergeableOpenPRsForCampaign(campaign);
+    const targetCount = campaign.target_repos?.length ?? 0;
     return (
       <AccordionItem key={campaign.campaign_id} value={campaign.campaign_id} className="pr-campaign-card">
-        <AccordionTrigger className="pr-campaign-card-header">
+        <AccordionTrigger
+          className="pr-campaign-card-header"
+          trailing={
+            <div className="pr-campaign-header-actions">
+              {/* Outside the operational gate on purpose: a fully merged
+                  campaign sits in Completed, and that is exactly when a
+                  rollback is wanted. Passed as `trailing` so it stays a real
+                  <button> beside the toggle instead of nested inside it. */}
+              {campaign.merged_count > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => setRollbackCampaign(campaign)}
+                  disabled={processingKey !== null}
+                  data-testid="rollback-campaign-button"
+                  title={`Builds the inverse of the ${campaign.merged_count} merged pull request${campaign.merged_count === 1 ? "" : "s"} for review before any revert PR opens.`}
+                >
+                  Roll Back Campaign
+                </Button>
+              )}
+              <div className="pr-campaign-progress" aria-label={`${campaign.completion_percentage}% complete`}>
+                <span>{campaign.completion_percentage}%</span>
+              </div>
+            </div>
+          }
+        >
           <div className="pr-campaign-header-title">
             <div className="pr-campaign-eyebrow">Campaign: {campaign.campaign_name}</div>
             <h3>{campaign.campaign_name}</h3>
+            {campaign.campaign_description && (
+              <p className="pr-campaign-description">{campaign.campaign_description}</p>
+            )}
             <p>
               Status: <strong>{statusLabels[campaign.campaign_status] || campaign.campaign_status}</strong>
               {" · "}
               {campaign.open_count} open • {campaign.merged_count} merged • {campaign.closed_count} closed
             </p>
           </div>
-          <div className="pr-campaign-progress" aria-label={`${campaign.completion_percentage}% complete`}>
-            <span>{campaign.completion_percentage}%</span>
-          </div>
         </AccordionTrigger>
         <AccordionContent>
+          {renderRollbackLinks(campaign)}
           <div className="pr-campaign-meta-grid">
             <div><span>Project</span><strong>{campaign.project_name}{campaign.project_code ? ` (${campaign.project_code})` : ""}</strong></div>
             <div><span>Created by</span><strong>{campaign.created_by || "Unknown"}</strong></div>
             <div><span>Created</span><strong>{formatRelativeTime(campaign.created_at)}</strong></div>
-            <div><span>Target branch</span><strong>{campaign.target_branches.join(", ") || "Unknown"}</strong></div>
-            <div><span>Repositories affected</span><strong>{campaign.repositories.length}</strong></div>
+            <div>
+              <span>Target branch</span>
+              {/* The configured mode, not the branches it resolved to — a
+                  project set to "default" follows each repo's own default. */}
+              <strong title={campaign.target_branches.join(", ")}>
+                {(campaign.branch_option && branchOptionLabels[campaign.branch_option])
+                  || campaign.target_branches.join(", ")
+                  || "Unknown"}
+              </strong>
+            </div>
+            <div>
+              <span>Repositories affected</span>
+              {/* Targets that opened no PR are only in target_repos, so the two
+                  counts diverge exactly when one failed to produce a PR. */}
+              <strong title={(campaign.target_repos ?? campaign.repositories).join(", ")}>
+                {targetCount > campaign.repositories.length
+                  ? `${campaign.repositories.length} of ${targetCount} targeted`
+                  : campaign.repositories.length}
+              </strong>
+            </div>
+            <div><span>Remaining to merge</span><strong>{campaign.open_count}</strong></div>
             <div><span>Completed</span><strong>{campaign.completed_at ? formatRelativeTime(campaign.completed_at) : "In progress"}</strong></div>
           </div>
 
-          {renderWorkflowChips(campaign.workflow_names)}
+          {renderWorkflowChips(campaign.workflow_names, campaign)}
           {campaign.custom_file_paths && campaign.custom_file_paths.length > 0 && (
             <div className="pr-history-workflows">
               {campaign.custom_file_paths.map((path) => (
@@ -416,7 +655,7 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
             </div>
           )}
 
-          {renderPRTable(campaign.pull_requests, operational)}
+          {renderPRTable(campaign.pull_requests, operational, campaign)}
         </AccordionContent>
       </AccordionItem>
     );
@@ -588,6 +827,15 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
           }}
         />
       )}
+
+      <RollbackCampaignModal
+        open={rollbackCampaign !== null}
+        user={user}
+        projectName={projectName}
+        campaign={rollbackCampaign}
+        onClose={() => setRollbackCampaign(null)}
+        onRolledBack={(result) => { void handleRolledBack(result); }}
+      />
     </div>
   );
 };

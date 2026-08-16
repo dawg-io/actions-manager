@@ -15,7 +15,7 @@ vi.mock('../utils/copyUtils', () => ({
   CopyButton: ({ textToCopy, title }: { textToCopy: string; title: string }) => (
     <button title={title}>Copy {textToCopy}</button>
   ),
-  copyToClipboard: jest.fn(),
+  copyToClipboard: vi.fn(),
 }));
 
 vi.mock('./PrefixedInput', () => ({
@@ -45,18 +45,18 @@ const baseProps = {
   projectName: 'test-project',
   selectedRepos: ['repo1'],
   envVars: [],
-  setEnvVars: jest.fn(),
+  setEnvVars: vi.fn(),
   manualEnvVars: [{ key: '', value: '' }],
-  setManualEnvVars: jest.fn(),
+  setManualEnvVars: vi.fn(),
   accountType: 'enterprise',
-  onAddEnvVar: jest.fn(),
+  onAddEnvVar: vi.fn(),
   projectCode: 'TEST',
   usePrefix: true,
 };
 
 describe('EnvVars redesigned UI', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('renders polished header with title and description', () => {
@@ -80,7 +80,7 @@ describe('EnvVars redesigned UI', () => {
   });
 
   test('Add Variable button is disabled until both fields are valid', () => {
-    const setManualEnvVars = jest.fn();
+    const setManualEnvVars = vi.fn();
     const { rerender } = render(
       <EnvVars
         {...baseProps}
@@ -140,7 +140,7 @@ describe('EnvVars redesigned UI', () => {
   test('surfaces backend error when saving fails', async () => {
     vi.mocked(updateEnvVars).mockRejectedValueOnce(new Error('boom'));
 
-    const setManualEnvVars = jest.fn();
+    const setManualEnvVars = vi.fn();
     render(
       <EnvVars
         {...baseProps}

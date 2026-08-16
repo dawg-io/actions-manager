@@ -1,12 +1,13 @@
 import { getGitHubTokenStatus, getUserDetails, loginWithGitHubToken, removeGitHubToken, saveGitHubToken, testGitHubToken, UserDetails } from './user';
 import config from '../config';
 
+import type { MockedFunction } from 'vitest';
 // Mock fetch globally
-globalThis.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
+globalThis.fetch = vi.fn() as MockedFunction<typeof fetch>;
 
 describe('user API', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('getUserDetails', () => {
@@ -24,7 +25,7 @@ describe('user API', () => {
         }
       };
 
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
         json: async () => mockUserData,
       } as Response);
@@ -41,9 +42,9 @@ describe('user API', () => {
     });
 
     test('should handle HTTP error responses', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: false,
         status: 404,
       } as Response);
@@ -66,9 +67,9 @@ describe('user API', () => {
     });
 
     test('should handle network errors', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
-      (fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (fetch as MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
 
       const result = await getUserDetails('testuser');
 
@@ -82,11 +83,11 @@ describe('user API', () => {
     });
 
     test('should handle invalid JSON response', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
-        json: jest.fn().mockRejectedValue(new Error('Invalid JSON')),
+        json: vi.fn().mockRejectedValue(new Error('Invalid JSON')),
       } as unknown as Response);
 
       const result = await getUserDetails('testuser');
@@ -110,7 +111,7 @@ describe('user API', () => {
         token_type: 'fine_grained_pat'
       };
 
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
         json: async () => mockStatus,
       } as Response);
@@ -128,7 +129,7 @@ describe('user API', () => {
 
     test('should send test token request with session credentials', async () => {
       const mockValidation = { status: 'valid', valid: true };
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
         json: async () => mockValidation,
       } as Response);
@@ -154,7 +155,7 @@ describe('user API', () => {
         saved: true
       };
 
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
         json: async () => mockSaveResult,
       } as Response);
@@ -174,7 +175,7 @@ describe('user API', () => {
         }
       };
 
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
         json: async () => mockRemoveResult,
       } as Response);
@@ -199,7 +200,7 @@ describe('user API', () => {
         user: 'testuser'
       };
 
-      (fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (fetch as MockedFunction<typeof fetch>).mockResolvedValueOnce({
         ok: true,
         json: async () => mockLoginResult,
       } as Response);

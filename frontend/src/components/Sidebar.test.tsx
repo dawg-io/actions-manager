@@ -34,7 +34,7 @@ describe('Sidebar', () => {
   });
 
   test('expanded sidebar shows editable project name above project key', async () => {
-    const onProjectNameSave = jest.fn();
+    const onProjectNameSave = vi.fn();
     render(
       <Sidebar
         isCollapsed={false}
@@ -57,7 +57,7 @@ describe('Sidebar', () => {
   });
 
   test('collapse toggle button reflects state (via title) and calls handler', async () => {
-    const onToggleCollapse = jest.fn();
+    const onToggleCollapse = vi.fn();
 
     const { rerender, container } = render(
       <Sidebar isCollapsed={false} onToggleCollapse={onToggleCollapse} />
@@ -92,7 +92,7 @@ describe('Sidebar', () => {
   });
 
   test('clicking Project Files calls onSectionChange with workflows key', async () => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(<Sidebar projectType="rwx" onSectionChange={onSectionChange} isCollapsed={false} />);
 
     await user.click(screen.getByRole('button', { name: /Project Files/i }));
@@ -100,7 +100,7 @@ describe('Sidebar', () => {
   });
 
   test('clicking Build Metrics routes to the build metrics view', async () => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(<Sidebar onSectionChange={onSectionChange} isCollapsed={false} />);
 
     await user.click(screen.getByRole('button', { name: /Build Metrics/i }));
@@ -108,7 +108,7 @@ describe('Sidebar', () => {
   });
 
   test('sidebar shows PR Campaigns and routes to PR campaign view', async () => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(<Sidebar projectType="rwx" onSectionChange={onSectionChange} isCollapsed={false} />);
 
     expect(screen.queryByText('PR History')).not.toBeInTheDocument();
@@ -180,7 +180,7 @@ describe('Sidebar', () => {
   });
 
   test('clicking Linked Projects calls onSectionChange with linked-projects', async () => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(
       <Sidebar
         projectType="rwx"
@@ -218,7 +218,7 @@ describe('Sidebar', () => {
   });
 
   test('clicking Danger Zone calls onSectionChange with danger-zone', async () => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(
       <Sidebar
         projectType="standard"
@@ -321,7 +321,7 @@ describe('Sidebar', () => {
   });
 
   test('clicking Project Info calls onSectionChange with project-info', async () => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(
       <Sidebar
         projectType="standard"
@@ -424,7 +424,7 @@ describe('Sidebar', () => {
     ['Environment Secrets', 'secrets'],
     ['Environment Rulesets', 'rulesets'],
   ])('clicking %s calls onSectionChange with %s key', async (label, key) => {
-    const onSectionChange = jest.fn();
+    const onSectionChange = vi.fn();
     render(
       <Sidebar
         projectType="standard"

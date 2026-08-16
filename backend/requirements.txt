@@ -14,3 +14,10 @@ pytest-asyncio
 PyYAML
 cryptography>=50.0.0
 
+# Runtime deps that were previously installed only inside backend/Dockerfile,
+# so local dev and CI never had them while the image did. Declared here so
+# every environment resolves the same set. Unpinned to match this file's
+# existing style.
+psycopg2-binary
+websockets
+wsproto

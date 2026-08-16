@@ -2,15 +2,16 @@ import { handleWorkflowChange } from './workflowOperations';
 import { Workflow, RXWorkflow, UnifiedWorkflowItem } from '../types/workflow';
 import { WorkflowGUI, DEFAULT_WORKFLOW_GUI, DEFAULT_REUSABLE_WORKFLOW_GUI } from './workflowGuiConversion';
 
+import type { Mock } from 'vitest';
 describe('workflowChangeHandlers', () => {
   describe('handleWorkflowChange', () => {
     let mockWorkflows: Workflow[];
     let mockRXWorkflows: RXWorkflow[];
-    let mockSetWorkflows: jest.Mock;
-    let mockSetRXWorkflows: jest.Mock;
-    let mockSetRegularGuiWorkflow: jest.Mock;
-    let mockSetGuiWorkflow: jest.Mock;
-    let mockMarkWorkflowAsModified: jest.Mock;
+    let mockSetWorkflows: Mock;
+    let mockSetRXWorkflows: Mock;
+    let mockSetRegularGuiWorkflow: Mock;
+    let mockSetGuiWorkflow: Mock;
+    let mockMarkWorkflowAsModified: Mock;
     let mockRegularGuiWorkflow: WorkflowGUI;
     let mockGuiWorkflow: WorkflowGUI;
 
@@ -22,15 +23,15 @@ describe('workflowChangeHandlers', () => {
         { name: 'reusable-workflow', content: 'name: reusable\non: [workflow_call]', isModified: false, isReusable: true }
       ];
       // Mock setWorkflows to execute the functional updater (like React's useState)
-      mockSetWorkflows = jest.fn((updater) => {
+      mockSetWorkflows = vi.fn((updater) => {
         if (typeof updater === 'function') {
           updater(mockWorkflows);
         }
       });
-      mockSetRXWorkflows = jest.fn();
-      mockSetRegularGuiWorkflow = jest.fn();
-      mockSetGuiWorkflow = jest.fn();
-      mockMarkWorkflowAsModified = jest.fn();
+      mockSetRXWorkflows = vi.fn();
+      mockSetRegularGuiWorkflow = vi.fn();
+      mockSetGuiWorkflow = vi.fn();
+      mockMarkWorkflowAsModified = vi.fn();
       mockRegularGuiWorkflow = { ...DEFAULT_WORKFLOW_GUI, name: 'test' };
       mockGuiWorkflow = { ...DEFAULT_REUSABLE_WORKFLOW_GUI, name: 'reusable' };
     });
@@ -240,7 +241,7 @@ describe('workflowChangeHandlers', () => {
       };
 
       // Mock setRXWorkflows to execute the callback function
-      const mockSetRXWorkflowsWithCallback = jest.fn((callback) => {
+      const mockSetRXWorkflowsWithCallback = vi.fn((callback) => {
         if (typeof callback === 'function') {
           callback(mockRXWorkflows);
         }
@@ -281,7 +282,7 @@ describe('workflowChangeHandlers', () => {
       };
 
       // Mock setRXWorkflows to execute the callback function
-      const mockSetRXWorkflowsWithCallback = jest.fn((callback) => {
+      const mockSetRXWorkflowsWithCallback = vi.fn((callback) => {
         if (typeof callback === 'function') {
           callback(mockRXWorkflows);
         }

@@ -6,34 +6,35 @@ import { Workflow, RXWorkflow } from '../types/workflow';
 
 // Mock the API modules
 vi.mock('../api/workflows', () => ({
-  saveWorkflows: jest.fn(),
-  updateWorkflows: jest.fn(),
-  deleteWorkflowFromGitHub: jest.fn(),
-  deleteWorkflowFromDatabase: jest.fn(),
-  deleteReusableWorkflowFromGitHub: jest.fn(),
+  saveWorkflows: vi.fn(),
+  updateWorkflows: vi.fn(),
+  deleteWorkflowFromGitHub: vi.fn(),
+  deleteWorkflowFromDatabase: vi.fn(),
+  deleteReusableWorkflowFromGitHub: vi.fn(),
 }));
 vi.mock('../api/rxworkflows', () => ({
-  saveRxWorkflows: jest.fn(),
+  saveRxWorkflows: vi.fn(),
 }));
 vi.mock('../api/projects', () => ({
-  updateLinkedReusableWorkflow: jest.fn(),
+  updateLinkedReusableWorkflow: vi.fn(),
 }));
 
 // Mock the toast utility so we can assert toast messages without browser popups
 vi.mock('./toast', () => ({
   toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    info: jest.fn(),
-    warning: jest.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
 import { toast } from './toast';
 
+import type { Mock } from 'vitest';
 describe('workflowOperations', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('createBlankWorkflow', () => {
@@ -41,9 +42,9 @@ describe('workflowOperations', () => {
       const workflows: Workflow[] = [
         { name: 'existing', content: 'test', isReusable: false }
       ];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
       createBlankWorkflow('regular', 'new-workflow', workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId);
 
@@ -57,9 +58,9 @@ describe('workflowOperations', () => {
 
     test('should create blank reusable workflow and select it', () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
       createBlankWorkflow('reusable', 'new-reusable', workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId);
 
@@ -67,7 +68,7 @@ describe('workflowOperations', () => {
       expect(setWorkflows).not.toHaveBeenCalled();
       
       // Extract the callback function and test it
-      const callback = (setRXWorkflows as jest.Mock).mock.calls[0][0];
+      const callback = (setRXWorkflows as Mock).mock.calls[0][0];
       const result = callback([]);
       
       expect(result).toEqual([
@@ -77,13 +78,13 @@ describe('workflowOperations', () => {
 
     test('should handle existing reusable workflows array', () => {
       const workflows: Workflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
       createBlankWorkflow('reusable', 'new-reusable', workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId);
 
-      const callback = (setRXWorkflows as jest.Mock).mock.calls[0][0];
+      const callback = (setRXWorkflows as Mock).mock.calls[0][0];
       const result = callback([
         { name: 'existing', content: 'test', isReusable: true }
       ]);
@@ -147,9 +148,9 @@ describe('workflowOperations', () => {
       const rxworkflows: RXWorkflow[] = [];
       const user = 'testuser';
       const projectName = 'testproject';
-      const markWorkflowAsSaved = jest.fn();
+      const markWorkflowAsSaved = vi.fn();
 
-      (saveWorkflows as jest.Mock).mockResolvedValue({ success: true });
+      (saveWorkflows as Mock).mockResolvedValue({ success: true });
 
       await saveDraftWorkflow(
         0, 'regular', workflows, rxworkflows, user, projectName, 
@@ -172,7 +173,7 @@ describe('workflowOperations', () => {
       ];
       const rxworkflows: RXWorkflow[] = [];
 
-      (saveWorkflows as jest.Mock).mockResolvedValue({ success: true });
+      (saveWorkflows as Mock).mockResolvedValue({ success: true });
 
       await saveDraftWorkflow(0, 'regular', workflows, rxworkflows, 'user', 'project');
 
@@ -187,7 +188,7 @@ describe('workflowOperations', () => {
       ];
       const rxworkflows: RXWorkflow[] = [];
 
-      (saveWorkflows as jest.Mock).mockResolvedValue({ success: true });
+      (saveWorkflows as Mock).mockResolvedValue({ success: true });
 
       await saveDraftWorkflow(0, 'regular', workflows, rxworkflows, 'testuser', 'testproject');
 
@@ -201,9 +202,9 @@ describe('workflowOperations', () => {
       ];
       const user = 'testuser';
       const projectName = 'testproject';
-      const markWorkflowAsSaved = jest.fn();
+      const markWorkflowAsSaved = vi.fn();
 
-      (saveRxWorkflows as jest.Mock).mockResolvedValue({ success: true });
+      (saveRxWorkflows as Mock).mockResolvedValue({ success: true });
 
       await saveDraftWorkflow(
         0, 'reusable', workflows, rxworkflows, user, projectName,
@@ -222,9 +223,9 @@ describe('workflowOperations', () => {
         { name: 'test-workflow', content: 'test content', isReusable: false }
       ];
       const rxworkflows: RXWorkflow[] = [];
-      const onProjectStateChange = jest.fn();
+      const onProjectStateChange = vi.fn();
 
-      (saveWorkflows as jest.Mock).mockResolvedValue({ success: true, pr_state: 'draft' });
+      (saveWorkflows as Mock).mockResolvedValue({ success: true, pr_state: 'draft' });
 
       await saveDraftWorkflow(
         0, 'regular', workflows, rxworkflows, 'testuser', 'testproject',
@@ -239,9 +240,9 @@ describe('workflowOperations', () => {
       const rxworkflows: RXWorkflow[] = [
         { name: 'rx-workflow', content: 'test content', isReusable: true }
       ];
-      const onProjectStateChange = jest.fn();
+      const onProjectStateChange = vi.fn();
 
-      (saveRxWorkflows as jest.Mock).mockResolvedValue({ success: true, pr_state: 'draft' });
+      (saveRxWorkflows as Mock).mockResolvedValue({ success: true, pr_state: 'draft' });
 
       await saveDraftWorkflow(
         0, 'reusable', workflows, rxworkflows, 'testuser', 'testproject',
@@ -256,10 +257,10 @@ describe('workflowOperations', () => {
       const rxworkflows: RXWorkflow[] = [
         { name: 'rx-workflow', content: 'test content', isReusable: true }
       ];
-      const onProjectStateChange = jest.fn();
-      const markWorkflowAsSaved = jest.fn();
+      const onProjectStateChange = vi.fn();
+      const markWorkflowAsSaved = vi.fn();
 
-      (saveRxWorkflows as jest.Mock).mockRejectedValue(new Error('Network error'));
+      (saveRxWorkflows as Mock).mockRejectedValue(new Error('Network error'));
 
       await saveDraftWorkflow(
         0, 'reusable', workflows, rxworkflows, 'testuser', 'testproject',
@@ -281,7 +282,7 @@ describe('workflowOperations', () => {
       const user = 'testuser';
       const projectName = 'testproject';
 
-      (saveWorkflows as jest.Mock).mockRejectedValue(new Error('Network error'));
+      (saveWorkflows as Mock).mockRejectedValue(new Error('Network error'));
 
       await saveDraftWorkflow(0, 'regular', workflows, rxworkflows, user, projectName);
 
@@ -297,9 +298,9 @@ describe('workflowOperations', () => {
       const rxworkflows: RXWorkflow[] = [];
       const user = 'testuser';
       const projectName = 'testproject';
-      const fetchWorkflowsCount = jest.fn();
+      const fetchWorkflowsCount = vi.fn();
 
-      (saveWorkflows as jest.Mock).mockResolvedValue({ success: true });
+      (saveWorkflows as Mock).mockResolvedValue({ success: true });
 
       await saveDraftWorkflow(
         0, 'regular', workflows, rxworkflows, user, projectName,
@@ -316,12 +317,12 @@ describe('workflowOperations', () => {
         { name: 'test-workflow', content: 'test', isReusable: false }
       ];
       const rxworkflows: RXWorkflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
-      (deleteWorkflowFromGitHub as jest.Mock).mockResolvedValue({});
-      (deleteWorkflowFromDatabase as jest.Mock).mockResolvedValue({});
+      (deleteWorkflowFromGitHub as Mock).mockResolvedValue({});
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
 
       await deleteWorkflow(
         0, 'regular', workflows, rxworkflows, 'user', 'project',
@@ -346,12 +347,12 @@ describe('workflowOperations', () => {
       const rxworkflows: RXWorkflow[] = [
         { name: 'rx-workflow', content: 'test', isReusable: true }
       ];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
-      (deleteReusableWorkflowFromGitHub as jest.Mock).mockResolvedValue({});
-      (deleteWorkflowFromDatabase as jest.Mock).mockResolvedValue({});
+      (deleteReusableWorkflowFromGitHub as Mock).mockResolvedValue({});
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
 
       await deleteWorkflow(
         0, 'reusable', workflows, rxworkflows, 'user', 'project',
@@ -372,23 +373,23 @@ describe('workflowOperations', () => {
         { name: 'test-workflow', content: 'test', isReusable: false }
       ];
       const rxworkflows: RXWorkflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
       const error = {
         response: { status: 401, data: { detail: 'Unauthorized' } }
       };
-      (deleteWorkflowFromGitHub as jest.Mock).mockRejectedValue(error);
+      (deleteWorkflowFromGitHub as Mock).mockRejectedValue(error);
 
       // Mock localStorage
       const mockLocalStorage = {
-        removeItem: jest.fn(),
-        getItem: jest.fn(),
-        setItem: jest.fn(),
-        clear: jest.fn(),
+        removeItem: vi.fn(),
+        getItem: vi.fn(),
+        setItem: vi.fn(),
+        clear: vi.fn(),
         length: 0,
-        key: jest.fn()
+        key: vi.fn()
       };
       Object.defineProperty(globalThis, 'localStorage', {
         value: mockLocalStorage,
@@ -397,7 +398,7 @@ describe('workflowOperations', () => {
 
       // Mock globalThis.location.reload
       delete (globalThis as any).location;
-      (globalThis as any).location = { reload: jest.fn() };
+      (globalThis as any).location = { reload: vi.fn() };
 
       await deleteWorkflow(
         0, 'regular', workflows, rxworkflows, 'user', 'project',
@@ -414,14 +415,14 @@ describe('workflowOperations', () => {
         { name: 'test-workflow', content: 'test', isReusable: false }
       ];
       const rxworkflows: RXWorkflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
       const error = {
         response: { status: 404, data: { detail: 'Not found' } }
       };
-      (deleteWorkflowFromGitHub as jest.Mock).mockRejectedValue(error);
+      (deleteWorkflowFromGitHub as Mock).mockRejectedValue(error);
 
       await deleteWorkflow(
         0, 'regular', workflows, rxworkflows, 'user', 'project',
@@ -436,9 +437,9 @@ describe('workflowOperations', () => {
     test('should return early if workflow does not exist', async () => {
       const workflows: Workflow[] = [];
       const rxworkflows: RXWorkflow[] = [];
-      const setWorkflows = jest.fn();
-      const setRXWorkflows = jest.fn();
-      const setSelectedWorkflowId = jest.fn();
+      const setWorkflows = vi.fn();
+      const setRXWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
 
       await deleteWorkflow(
         0, 'regular', workflows, rxworkflows, 'user', 'project',
@@ -456,7 +457,7 @@ describe('workflowOperations', () => {
     const STD_PROJECT = 'my-std-project';
 
     test('should update linked workflow via dedicated endpoint (not via saveRxWorkflows)', async () => {
-      (updateLinkedReusableWorkflow as jest.Mock).mockResolvedValue({
+      (updateLinkedReusableWorkflow as Mock).mockResolvedValue({
         message: 'Reusable workflow updated in my-rwx-project.',
         workflow_id: 1,
         workflow_name: 'my-linked-wf',
@@ -464,8 +465,8 @@ describe('workflowOperations', () => {
         rwx_project_name: 'my-rwx-project',
         workflow_status: 'committed_locally',
       });
-      const setLinkedWorkflows = jest.fn();
-      const refreshProjectsList = jest.fn().mockResolvedValue(undefined);
+      const setLinkedWorkflows = vi.fn();
+      const refreshProjectsList = vi.fn().mockResolvedValue(undefined);
 
       await saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT, setLinkedWorkflows, refreshProjectsList);
 
@@ -485,10 +486,10 @@ describe('workflowOperations', () => {
     });
 
     test('should clear isModified and set workflowStatus from response after successful save', async () => {
-      (updateLinkedReusableWorkflow as jest.Mock).mockResolvedValue({
+      (updateLinkedReusableWorkflow as Mock).mockResolvedValue({
         workflow_status: 'committed_locally',
       });
-      const setLinkedWorkflows = jest.fn();
+      const setLinkedWorkflows = vi.fn();
 
       await saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT, setLinkedWorkflows);
 
@@ -501,10 +502,10 @@ describe('workflowOperations', () => {
     });
 
     test('should set workflowStatus to under_review when backend signals open PR campaign lock', async () => {
-      (updateLinkedReusableWorkflow as jest.Mock).mockResolvedValue({
+      (updateLinkedReusableWorkflow as Mock).mockResolvedValue({
         workflow_status: 'under_review',
       });
-      const setLinkedWorkflows = jest.fn();
+      const setLinkedWorkflows = vi.fn();
 
       await saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT, setLinkedWorkflows);
 
@@ -516,8 +517,8 @@ describe('workflowOperations', () => {
     });
 
     test('should fall back to committed_locally when API response omits workflow_status', async () => {
-      (updateLinkedReusableWorkflow as jest.Mock).mockResolvedValue({});
-      const setLinkedWorkflows = jest.fn();
+      (updateLinkedReusableWorkflow as Mock).mockResolvedValue({});
+      const setLinkedWorkflows = vi.fn();
 
       await saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT, setLinkedWorkflows);
 
@@ -530,7 +531,7 @@ describe('workflowOperations', () => {
     });
 
     test('should not clear isModified if setLinkedWorkflows is not provided', async () => {
-      (updateLinkedReusableWorkflow as jest.Mock).mockResolvedValue({});
+      (updateLinkedReusableWorkflow as Mock).mockResolvedValue({});
       await expect(
         saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT)
       ).resolves.toBeUndefined();
@@ -548,8 +549,8 @@ describe('workflowOperations', () => {
     test('should show a clear error (not create a duplicate) when source link is not found', async () => {
       const err: any = new Error('not found');
       err.response = { status: 404, data: { detail: 'Linked reusable workflow not found for this project' } };
-      (updateLinkedReusableWorkflow as jest.Mock).mockRejectedValue(err);
-      const setLinkedWorkflows = jest.fn();
+      (updateLinkedReusableWorkflow as Mock).mockRejectedValue(err);
+      const setLinkedWorkflows = vi.fn();
 
       await saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT, setLinkedWorkflows);
 
@@ -561,8 +562,8 @@ describe('workflowOperations', () => {
     });
 
     test('should handle save failure and not clear isModified', async () => {
-      (updateLinkedReusableWorkflow as jest.Mock).mockRejectedValue(new Error('Network error'));
-      const setLinkedWorkflows = jest.fn();
+      (updateLinkedReusableWorkflow as Mock).mockRejectedValue(new Error('Network error'));
+      const setLinkedWorkflows = vi.fn();
 
       await saveDraftLinkedWorkflow(0, linkedWorkflows, 'user', STD_PROJECT, setLinkedWorkflows);
 

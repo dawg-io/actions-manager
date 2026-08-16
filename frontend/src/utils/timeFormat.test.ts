@@ -7,12 +7,12 @@ import { formatRelativeTime } from "./timeFormat";
 describe("formatRelativeTime", () => {
   beforeEach(() => {
     // Mock the current time for consistent testing
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date("2024-01-15T12:00:00Z"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2024-01-15T12:00:00Z"));
   });
 
   afterEach(() => {
-    jest.useRealTimers();
+    vi.useRealTimers();
   });
 
   it("should return 'just now' for times less than 60 seconds ago", () => {

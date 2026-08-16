@@ -1,9 +1,16 @@
-import { handleSaveProject, handleSaveProjectWithModal, handleUpdateGitHub } from "./handlers";
+import {
+  handleSaveProject,
+  handleSaveProjectWithModal,
+  handleUpdateGitHub,
+  type HandleUpdateGitHubParams,
+  type SaveProjectWithModalParams,
+} from "./handlers";
 import { saveProject } from "./projects";
 import { updateWorkflows } from "./workflows";
 import { createSecrets } from "./secrets";
 import { createEnvironment } from "./environments";
 
+import type { MockedFunction } from 'vitest';
 vi.mock("./projects", () => ({
   saveProject: vi.fn(),
   fetchProjects: vi.fn().mockResolvedValue([]),
@@ -15,19 +22,19 @@ vi.mock("./envVars", () => ({ updateEnvVars: vi.fn() }));
 vi.mock("./environments", () => ({ createEnvironment: vi.fn() }));
 vi.mock("../utils/toast", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-const mockedSaveProject = saveProject as jest.MockedFunction<typeof saveProject>;
-const mockedUpdateWorkflows = updateWorkflows as jest.MockedFunction<typeof updateWorkflows>;
-const mockedCreateSecrets = createSecrets as jest.MockedFunction<typeof createSecrets>;
-const mockedCreateEnvironment = createEnvironment as jest.MockedFunction<typeof createEnvironment>;
+const mockedSaveProject = saveProject as MockedFunction<typeof saveProject>;
+const mockedUpdateWorkflows = updateWorkflows as MockedFunction<typeof updateWorkflows>;
+const mockedCreateSecrets = createSecrets as MockedFunction<typeof createSecrets>;
+const mockedCreateEnvironment = createEnvironment as MockedFunction<typeof createEnvironment>;
 
 beforeEach(() => {
-  jest.clearAllMocks();
-  jest.spyOn(console, "log").mockImplementation(() => undefined);
-  jest.spyOn(console, "error").mockImplementation(() => undefined);
-  jest.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.clearAllMocks();
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
 
-afterEach(() => jest.restoreAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 // ── handleSaveProject ─────────────────────────────────────────────────────────
 
@@ -121,7 +128,7 @@ describe("handleSaveProject", () => {
 // ── handleUpdateGitHub ────────────────────────────────────────────────────────
 
 describe("handleUpdateGitHub", () => {
-  const base = {
+  const base: HandleUpdateGitHubParams = {
     user: "testuser",
     selectedRepos: ["org/repo1"] as string[],
     workflows: [],
@@ -139,7 +146,7 @@ describe("handleUpdateGitHub", () => {
     setProjects: null,
     projectId: null,
     skipProjectSave: true,
-  } as const;
+  };
 
   it("returns failure when selectedRepos is empty", async () => {
     const result = await handleUpdateGitHub({ ...base, selectedRepos: [] });
@@ -200,7 +207,7 @@ describe("handleUpdateGitHub", () => {
   });
 
   it("calls onProgress at key stages", async () => {
-    const onProgress = jest.fn();
+    const onProgress = vi.fn();
 
     await handleUpdateGitHub({ ...base, onProgress });
 
@@ -211,7 +218,7 @@ describe("handleUpdateGitHub", () => {
 // ── handleSaveProjectWithModal ────────────────────────────────────────────────
 
 describe("handleSaveProjectWithModal", () => {
-  const base = {
+  const base: SaveProjectWithModalParams = {
     user: "testuser",
     projectName: "My Project",
     selectedRepos: ["org/repo1"] as string[],
@@ -228,7 +235,7 @@ describe("handleSaveProjectWithModal", () => {
     projectId: null,
     selectedItems: null,
     updateGitHub: false,
-  } as const;
+  };
 
   it("returns success after saving project without GitHub update", async () => {
     mockedSaveProject.mockResolvedValueOnce({ project_code: "PRJ1", project_id: "42" });
@@ -261,7 +268,7 @@ describe("handleSaveProjectWithModal", () => {
   });
 
   it("calls onProgress callback at key stages", async () => {
-    const onProgress = jest.fn();
+    const onProgress = vi.fn();
     mockedSaveProject.mockResolvedValueOnce({ project_code: "PRJ1", project_id: "42" });
 
     await handleSaveProjectWithModal({ ...base, onProgress });

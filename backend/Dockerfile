@@ -10,7 +10,6 @@ WORKDIR /app
 
 # Copy and install required dependencies
 COPY requirements.txt .
-RUN pip install psycopg2-binary websockets wsproto
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install stage: Copy application code and finalize setup

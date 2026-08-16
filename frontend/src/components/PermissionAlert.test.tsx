@@ -5,8 +5,8 @@ import PermissionAlert from "./PermissionAlert";
 import { PermissionValidationResult } from "../api/user";
 
 describe("PermissionAlert", () => {
-  const mockOnDismiss = jest.fn();
-  const mockOnReconnect = jest.fn();
+  const mockOnDismiss = vi.fn();
+  const mockOnReconnect = vi.fn();
 
   beforeEach(() => {
     mockOnDismiss.mockClear();

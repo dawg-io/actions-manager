@@ -9,6 +9,7 @@ import {
 } from "../api/pullRequests";
 import { deployCodeowners } from "../api/codeowners";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { getDocsUrl } from "../help/helpLinks";
 import { normalizeWorkflowFilename } from "../utils/workflowFilename";
 
@@ -254,6 +255,19 @@ function usePreflightValidation(
   };
 }
 
+// Mirrors the backend's _derive_campaign_name so an accepted suggestion matches
+// what an unnamed campaign would have been called anyway. Deliberately a
+// separate copy — sharing it would mean an API round-trip to name a text box.
+function suggestCampaignName(
+  workflows: Set<string>, reusableWorkflows: Set<string>, customFileCount: number, codeownersCount: number,
+): string {
+  const names = [...workflows, ...reusableWorkflows].map(normalizeWorkflowFilename);
+  if (names.length === 1) return `Update ${names[0]}`;
+  if (names.length > 1) return `Update ${names[0]} + ${names.length - 1} more`;
+  if (customFileCount > 0 || codeownersCount > 0) return "File rollout";
+  return "";
+}
+
 // ─── useCreatePRCampaign ─────────────────────────────────────────────────────
 
 interface CreatePRCampaignParams {
@@ -265,10 +279,13 @@ interface CreatePRCampaignParams {
   selectedCustomFileIds: Set<number>;
   onSuccess: (workflowNames: string[], reusableNames: string[], customFileIds: number[], codeownersRepos: string[]) => void;
   selectedCodeownersRepos: Set<string>;
+  campaignName: string;
+  campaignDescription: string;
 }
 
 function useCreatePRCampaign({
   user, projectName, selectedRepos, selectedWorkflows, selectedReusableWorkflows, selectedCustomFileIds, selectedCodeownersRepos, onSuccess,
+  campaignName, campaignDescription,
 }: CreatePRCampaignParams) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -318,15 +335,15 @@ function useCreatePRCampaign({
       // Always go through createPullRequests — it creates the campaign record so that
       // CODEOWNERS PRs (deployed afterwards) can share the same campaign_id and appear
       // as a single campaign card rather than a separate legacy group.
-      const response = await createPullRequests(
-        user, projectName,
-        Array.from(selectedRepos),
-        selectedWorkflows.size > 0 ? Array.from(selectedWorkflows) : undefined,
-        selectedReusableWorkflows.size > 0 ? Array.from(selectedReusableWorkflows) : undefined,
+      const response = await createPullRequests(user, projectName, {
+        selectedRepos: Array.from(selectedRepos),
+        selectedWorkflows: selectedWorkflows.size > 0 ? Array.from(selectedWorkflows) : undefined,
+        selectedReusableWorkflows: selectedReusableWorkflows.size > 0 ? Array.from(selectedReusableWorkflows) : undefined,
         // Always send array so empty selection explicitly excludes files (not undefined=all)
-        Array.from(selectedCustomFileIds),
-        hasCodeowners ? codeownersRepoList : undefined,
-      );
+        selectedCustomFileIds: Array.from(selectedCustomFileIds),
+        selectedCodeownersRepos: hasCodeowners ? codeownersRepoList : undefined,
+        campaign: { name: campaignName.trim() || undefined, description: campaignDescription.trim() || undefined },
+      });
       if (response.task_id) {
         setTaskStatus({ status: "running", repos: {} });
         prPollIntervalRef.current = setInterval(async () => {
@@ -362,7 +379,7 @@ function useCreatePRCampaign({
       setError(err.message || "Failed to create pull requests");
       setCreating(false);
     }
-  }, [user, projectName, selectedRepos, selectedWorkflows, selectedReusableWorkflows, selectedCustomFileIds, selectedCodeownersRepos, onSuccess]);
+  }, [user, projectName, selectedRepos, selectedWorkflows, selectedReusableWorkflows, selectedCustomFileIds, selectedCodeownersRepos, onSuccess, campaignName, campaignDescription]);
 
   return { creating, error, results, taskStatus, handleCreate };
 }
@@ -673,6 +690,10 @@ const WorkflowSection: React.FC<WorkflowSectionProps> = ({
 );
 
 interface PRCreationFormProps {
+  campaignName: string;
+  campaignDescription: string;
+  onCampaignNameChange: (value: string) => void;
+  onCampaignDescriptionChange: (value: string) => void;
   error: string | null;
   validationRepo: string | null;
   preflight: ReturnType<typeof usePreflightValidation>;
@@ -718,6 +739,7 @@ interface PRCreationFormProps {
 }
 
 const PRCreationForm: React.FC<PRCreationFormProps> = ({
+  campaignName, campaignDescription, onCampaignNameChange, onCampaignDescriptionChange,
   error, validationRepo, preflight, formattedPreflightStatus,
   requiresPreflight, preflightPassed, campaignBlockedByPreflight,
   validationActionInProgress, selectedWorkflows, selectedReusableWorkflows,
@@ -741,6 +763,28 @@ const PRCreationForm: React.FC<PRCreationFormProps> = ({
         Preflight creates a validation pull request in a safe repository before the real campaign is created. Review the validation PR in GitHub. If the changes look correct, merge the validation PR to approve preflight. If the changes are wrong or need updates, close the validation PR and re-run preflight after making fixes.
       </p>
       {error && <div className="error-message">❌ {error}</div>}
+      <div className="campaign-naming">
+        <label className="campaign-naming-label" htmlFor="campaign-name">Campaign name</label>
+        <Input
+          id="campaign-name"
+          value={campaignName}
+          maxLength={200}
+          disabled={creating}
+          placeholder="e.g. Q3 security rollout"
+          onChange={(e) => onCampaignNameChange(e.target.value)}
+        />
+        <label className="campaign-naming-label" htmlFor="campaign-description">Description (optional)</label>
+        <textarea
+          id="campaign-description"
+          className="campaign-naming-textarea"
+          value={campaignDescription}
+          maxLength={2000}
+          rows={3}
+          disabled={creating}
+          placeholder="What is this rollout for?"
+          onChange={(e) => onCampaignDescriptionChange(e.target.value)}
+        />
+      </div>
       {validationRepo && (
         <PreflightSection
           preflight={preflight}
@@ -917,6 +961,19 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
   );
   const [selectedCodeownersRepos, setSelectedCodeownersRepos] = useState<Set<string>>(new Set(codeownersRepos));
 
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignDescription, setCampaignDescription] = useState("");
+  // Tracked so re-deriving the suggestion after a selection change never
+  // overwrites a name the user typed.
+  const [campaignNameTouched, setCampaignNameTouched] = useState(false);
+  const suggestedCampaignName = useMemo(
+    () => suggestCampaignName(selectedWorkflows, selectedReusableWorkflows, selectedCustomFileIds.size, selectedCodeownersRepos.size),
+    [selectedWorkflows, selectedReusableWorkflows, selectedCustomFileIds, selectedCodeownersRepos],
+  );
+  useEffect(() => {
+    if (!campaignNameTouched) setCampaignName(suggestedCampaignName);
+  }, [suggestedCampaignName, campaignNameTouched]);
+
   const preflight = usePreflightValidation(
     user, projectName, validationRepo,
     { status: preflightStatus, runAt: preflightRunAt, error: preflightError, prUrl: preflightPrUrl },
@@ -925,6 +982,7 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
 
   const { creating, error, results, taskStatus, handleCreate } = useCreatePRCampaign({
     user, projectName, selectedRepos, selectedWorkflows, selectedReusableWorkflows, selectedCustomFileIds, selectedCodeownersRepos, onSuccess,
+    campaignName, campaignDescription,
   });
 
   const handleToggleRepo = (name: string) => {
@@ -1014,6 +1072,10 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
             <PRCreationResults results={results} />
           ) : (
             <PRCreationForm
+              campaignName={campaignName}
+              campaignDescription={campaignDescription}
+              onCampaignNameChange={(value) => { setCampaignNameTouched(true); setCampaignName(value); }}
+              onCampaignDescriptionChange={setCampaignDescription}
               error={error}
               validationRepo={validationRepo}
               preflight={preflight}

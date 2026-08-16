@@ -20,7 +20,7 @@ from database import SessionLocal, get_db
 import auth as auth_module
 from auth import user_tokens, get_github_api_endpoints
 from models import Project, Workflow, ProjectWorkflow, Account, ProjectPullRequest, ProjectPRCampaign, Repo, ProjectRepo, WorkflowVersion, LinkedReusableWorkflow, WorkspaceMember, ProjectMembership, RepoWorkflowOverride, CustomFile, Codeowners, WorkflowDriftState, WorkflowTreeCache
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, List, Optional
 from authorization import is_project_admin, check_project_access
 from mode_validation import resolve_app_url, _host_is_loopback
@@ -69,6 +69,17 @@ class CreatePullRequestsRequest(BaseModel):
     selected_custom_file_ids: Optional[List[int]] = None  # None = all changed, [] = none
     selected_codeowners_repos: Optional[List[str]] = None  # Repos to deploy CODEOWNERS via PR
     async_mode: Optional[bool] = False
+    # Bounded here rather than in the UI — this endpoint is reachable directly.
+    campaign_name: Optional[str] = Field(default=None, max_length=200)
+    campaign_description: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("campaign_name", "campaign_description")
+    @classmethod
+    def _blank_is_unnamed(cls, value: Optional[str]) -> Optional[str]:
+        # A whitespace-only name must fall back to the derived one rather than
+        # storing an empty title that renders as a blank campaign card.
+        cleaned = (value or "").strip()
+        return cleaned or None
 
 
 class RunPreflightRequest(BaseModel):
@@ -185,6 +196,7 @@ class PRCampaignResponse(BaseModel):
     """Derived campaign grouped from existing Actions Manager pull requests."""
     campaign_id: str
     campaign_name: str
+    campaign_description: Optional[str] = None
     campaign_status: str
     project_name: str
     project_code: Optional[str] = None
@@ -193,6 +205,9 @@ class PRCampaignResponse(BaseModel):
     updated_at: str
     completed_at: Optional[str] = None
     target_branches: List[str]
+    # The project's configured branch mode ("default"/"pattern"), not the
+    # branches it resolved to — those are target_branches.
+    branch_option: Optional[str] = None
     workflow_names: List[str]
     custom_file_paths: List[str] = []
     repositories: List[str]
@@ -202,6 +217,16 @@ class PRCampaignResponse(BaseModel):
     failed_count: int = 0
     completion_percentage: int
     pull_requests: List[PRCampaignPRResponse]
+    # Creation-time snapshot. Empty for legacy campaigns created before it was recorded.
+    target_repos: List[str] = []
+    base_commits: dict = {}
+    policy_version: dict = {}
+    branch_protection: dict = {}
+    target_pr_urls: dict = {}
+    # Set only on a rollback campaign: the campaign it reverts, and what the user
+    # chose to happen to ActionsManager's stored copy once it merges.
+    rollback_of_campaign_id: Optional[int] = None
+    rollback_am_action: Optional[str] = None
 
 
 class PRCampaignsResponse(BaseModel):
@@ -449,6 +474,7 @@ _ERROR_RESPONSES = {
     403: {"description": "Access denied"},
     404: {"description": "Not found"},
     409: {"description": "Conflicts with the current state"},
+    429: {"description": "GitHub API rate limit reached"},
     500: {"description": "Unexpected server error"},
     502: {"description": "Upstream GitHub request failed"},
 }
@@ -4762,6 +4788,37 @@ def _mark_codeowners_committed(db: Session, project_id: int, repo_id: int, new_s
         db.rollback()
 
 
+def _includes_regular_workflows(payload) -> bool:
+    """Whether this run delivers to the project's caller repos at all.
+
+    Regular workflows are included when the caller explicitly listed
+    selected_workflows, or when neither workflow type was requested (the
+    backward-compatible default). A reusable-only run never touches the caller
+    repos, so they are not targets of that campaign.
+    """
+    return (
+        payload.selected_workflows is not None
+        or payload.selected_reusable_workflows is None
+    )
+
+
+def _campaign_meta(payload, project: Project, db: Session,
+                   workflow_names: Optional[List[str]] = None) -> dict:
+    """Everything the PR body needs that is the same for every target.
+
+    The policy table and the project lookup are identical on every repo/branch
+    in a campaign, so they are resolved once here rather than per PR — a
+    50-repo campaign would otherwise re-run them a hundred times inside the
+    GitHub PR-creation loop.
+    """
+    return {
+        "name": getattr(payload, "campaign_name", None),
+        "description": getattr(payload, "campaign_description", None),
+        "project_name": project.project_name,
+        "policy": _build_policy_version(db, project.project_id, workflow_names or []),
+    }
+
+
 def _build_regular_workflow_results(project: Project, payload: "CreatePullRequestsRequest", repo_names: List[str], headers: dict, db: Session, github_user: str = None, progress_callback=None, custom_files: Optional[List[dict]] = None, codeowners_files: Optional[dict] = None):
     """Process regular (non-reusable) workflows and return (results, selected_names).
 
@@ -4773,10 +4830,7 @@ def _build_regular_workflow_results(project: Project, payload: "CreatePullReques
     ``custom_files`` are committed to the same AM branch as workflows so they
     land in the same PR Campaign PR.
     """
-    include_regular = (
-        payload.selected_workflows is not None
-        or payload.selected_reusable_workflows is None
-    )
+    include_regular = _includes_regular_workflows(payload)
     custom_files = custom_files or []
     workflow_dicts = []
     selected_names = []
@@ -4812,6 +4866,7 @@ def _build_regular_workflow_results(project: Project, payload: "CreatePullReques
         project=project,
         codeowners_files=codeowners_files,
         progress_callback=progress_callback,
+        campaign_meta=_campaign_meta(payload, project, db, selected_names),
         custom_files=custom_files,
     )
     return results, selected_names
@@ -4948,7 +5003,8 @@ def _build_reusable_workflow_results(project: Project, payload: "CreatePullReque
         db=db,
         reusable_repo=_get_reusable_workflow_repo(project, user, db),
         use_prefix=effective_prefix,
-        progress_callback=progress_callback
+        progress_callback=progress_callback,
+        campaign_meta=_campaign_meta(payload, project, db, selected_names),
     )
     return results, selected_names
 
@@ -5040,7 +5096,87 @@ def _update_linked_workflow_statuses(db: Session, project_id: int, all_selected:
         print(f"✅ Set {len(linked_wf_ids)} linked reusable workflow(s) to under_review")
 
 
-def _save_prs_and_update_status(results: dict, project: Project, selected_workflow_names: List[str], selected_reusable_workflow_names: List[str], db: Session, github_user: Optional[str] = None, custom_file_ids: Optional[List[int]] = None):
+def _build_policy_version(db: Session, project_id: int, all_selected: List[str]) -> dict:
+    """Pin the exact workflow content this campaign is delivering.
+
+    ``version`` is what a human reads back ("which version went out"), but it is
+    None for a workflow that was never saved through the versioning path, so the
+    content hash is recorded alongside it — that one is always available and
+    identifies the YAML exactly.
+    """
+    if not all_selected:
+        return {}
+
+    workflows = db.query(Workflow).join(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project_id,
+        Workflow.workflow_name.in_(all_selected),
+    ).all()
+    linked_ids = _get_linked_workflow_ids_for_project(db, project_id, workflow_names=all_selected)
+    if linked_ids:
+        already = {w.workflow_id for w in workflows}
+        workflows += db.query(Workflow).filter(
+            Workflow.workflow_id.in_([i for i in linked_ids if i not in already])
+        ).all()
+
+    if not workflows:
+        return {}
+
+    latest = {}
+    for workflow_id, number, content in (
+        db.query(WorkflowVersion.workflow_id, WorkflowVersion.version_number, WorkflowVersion.content)
+        .filter(WorkflowVersion.workflow_id.in_([w.workflow_id for w in workflows]))
+        .order_by(WorkflowVersion.workflow_id, WorkflowVersion.version_number.desc())
+        .all()
+    ):
+        latest.setdefault(workflow_id, (number, content))
+
+    applied = {}
+    for workflow in workflows:
+        yaml_text = workflow.workflow_yaml or ""
+        number, content = latest.get(workflow.workflow_id, (None, None))
+        # create_workflow_version swallows its own failures and several paths
+        # assign workflow_yaml directly, so the newest version row is not
+        # necessarily what is about to ship. Reporting "v7" for content that is
+        # not v7 is the exact misreading this snapshot exists to prevent — when
+        # they disagree, only the hash is claimed.
+        applied[workflow.workflow_name] = {
+            "version": number if content == yaml_text else None,
+            "sha256": hashlib.sha256(yaml_text.encode()).hexdigest(),
+        }
+    return applied
+
+
+def _build_campaign_snapshot(db: Session, project: Project, repo_names: Optional[List[str]],
+                             results: dict, all_selected: List[str]) -> dict:
+    """Freeze what this campaign was aimed at, as of right now.
+
+    Everything else a campaign shows is derived live from its surviving PR rows,
+    so without this a campaign re-reads against today's repo list, branch heads
+    and workflow content, and a target that produced no PR leaves no trace.
+    Returned as ``ProjectPRCampaign`` kwargs — JSON strings, written once at
+    construction and never updated.
+    """
+    targets = {
+        result_key: result
+        for result_key, result in (results or {}).items()
+        if isinstance(result, dict)
+    }
+    return {
+        "target_repos": json.dumps(repo_names or []),
+        "base_commits": json.dumps({k: r.get("base_sha") for k, r in targets.items()}),
+        "branch_protection": json.dumps(
+            {k: r["branch_protection"] for k, r in targets.items() if r.get("branch_protection")}
+        ),
+        # Straight off the create-PR response from this same run, so the URL is
+        # recorded at the point the PR was opened rather than looked up later.
+        "target_pr_urls": json.dumps(
+            {k: r["pr_url"] for k, r in targets.items() if r.get("pr_url")}
+        ),
+        "policy_version": json.dumps(_build_policy_version(db, project.project_id, all_selected)),
+    }
+
+
+def _save_prs_and_update_status(results: dict, project: Project, selected_workflow_names: List[str], selected_reusable_workflow_names: List[str], db: Session, github_user: Optional[str] = None, custom_file_ids: Optional[List[int]] = None, repo_names: Optional[List[str]] = None, campaign_name: Optional[str] = None, campaign_description: Optional[str] = None):
     """Persist PR records to the database and update project/workflow statuses.
 
     Every run that produces PR records creates a NEW unique campaign record so
@@ -5064,6 +5200,9 @@ def _save_prs_and_update_status(results: dict, project: Project, selected_workfl
         campaign = ProjectPRCampaign(
             project_id=project.project_id,
             created_by=github_user,
+            campaign_name=campaign_name,
+            campaign_description=campaign_description,
+            **_build_campaign_snapshot(db, project, repo_names, results, all_selected),
         )
         db.add(campaign)
         db.commit()
@@ -5149,12 +5288,22 @@ def _run_create_pull_requests_async(task_id: str, payload: CreatePullRequestsReq
             pr_count, campaign_id = _save_prs_and_update_status(
                 results, project, selected_workflow_names, selected_reusable_workflow_names, db,
                 github_user=github_user, custom_file_ids=custom_file_ids,
+                repo_names=repo_names if _includes_regular_workflows(payload) else [],
+                campaign_name=payload.campaign_name, campaign_description=payload.campaign_description,
             )
 
             if has_codeowners and campaign_id is None:
                 # CODEOWNERS-only (or all workflow PRs were no-ops): create a campaign
                 # so CODEOWNERS PRs have somewhere to attach.
-                campaign = ProjectPRCampaign(project_id=project.project_id, created_by=github_user)
+                campaign = ProjectPRCampaign(
+                    project_id=project.project_id, created_by=github_user,
+                    campaign_name=payload.campaign_name,
+                    campaign_description=payload.campaign_description,
+                    **_build_campaign_snapshot(
+                        db, project, repo_names, results,
+                        selected_workflow_names + selected_reusable_workflow_names,
+                    ),
+                )
                 db.add(campaign)
                 db.commit()
                 db.refresh(campaign)
@@ -5230,9 +5379,19 @@ def create_pull_requests(
         pr_count, campaign_id = _save_prs_and_update_status(
             results, project, selected_workflow_names, selected_reusable_workflow_names, db,
             github_user=github_user, custom_file_ids=custom_file_ids,
+            repo_names=repo_names if _includes_regular_workflows(payload) else [],
+            campaign_name=payload.campaign_name, campaign_description=payload.campaign_description,
         )
         if has_codeowners and campaign_id is None:
-            campaign = ProjectPRCampaign(project_id=project.project_id, created_by=github_user)
+            campaign = ProjectPRCampaign(
+                project_id=project.project_id, created_by=github_user,
+                campaign_name=payload.campaign_name,
+                campaign_description=payload.campaign_description,
+                **_build_campaign_snapshot(
+                    db, project, repo_names, results,
+                    selected_workflow_names + selected_reusable_workflow_names,
+                ),
+            )
             db.add(campaign)
             db.commit()
             db.refresh(campaign)
@@ -6269,6 +6428,34 @@ def _campaign_status_from_counts(open_count: int, merged_count: int, closed_coun
     return "open"
 
 
+def _campaign_snapshot_response(campaign: Optional[ProjectPRCampaign]) -> dict:
+    """Decode a campaign's creation-time snapshot into PRCampaignResponse fields.
+
+    Campaigns created before the snapshot existed, and heuristically grouped
+    legacy PR rows, have no record to decode — they fall back to empty, and the
+    UI renders only the live-derived view for them.
+    """
+    # JSON-encoded snapshot columns, with the fallback used when they are NULL.
+    json_fields = {
+        "target_repos": [], "base_commits": {}, "policy_version": {},
+        "branch_protection": {}, "target_pr_urls": {},
+    }
+    # Plain columns, decoded as-is.
+    scalar_fields = ("rollback_of_campaign_id", "rollback_am_action")
+
+    if campaign is None:
+        return {**json_fields, **dict.fromkeys(scalar_fields)}
+
+    decoded = {field: getattr(campaign, field, None) for field in scalar_fields}
+    for field, fallback in json_fields.items():
+        raw = getattr(campaign, field, None)
+        try:
+            decoded[field] = json.loads(raw) if raw else fallback
+        except (ValueError, TypeError):
+            decoded[field] = fallback
+    return decoded
+
+
 def _campaign_group_key(pr: ProjectPullRequest) -> tuple:
     """Best-effort campaign key using existing PR fields without new schema."""
     workflow_key = ",".join(sorted(_split_workflow_names(pr.workflow_names)))
@@ -6701,6 +6888,17 @@ def _clear_drift_for_merged_pr(db, project, pr_record) -> None:
                              pr_record.target_branch)
 
 
+def _apply_rollback_campaign_action(db: Session, pr_record, github_user: Optional[str] = None) -> None:
+    """Reconcile ActionsManager's stored workflows when a rollback campaign's PR merges.
+
+    A no-op for every PR that is not part of a rollback campaign. Imported inside
+    the function rather than at module scope: campaign_rollback imports this module
+    for the delivery helpers, so a top-level import either way would be circular.
+    """
+    from campaign_rollback import handle_rollback_pr_merged
+    handle_rollback_pr_merged(db, pr_record, github_user)
+
+
 def _handle_merged_pull_request(*, response, project, repo_name, pr_number, owner, repo, github_user, db, merge_method):
     """Persist database state and clean up after a successful PR merge; returns the response dict."""
     merge_data = response.json()
@@ -6740,6 +6938,11 @@ def _handle_merged_pull_request(*, response, project, repo_name, pr_number, owne
 
     # Create a "pr_merged" version entry for each non-reusable workflow so History shows ⭐
     _create_pr_merged_version_entries(db, project, pr_number, repo_name)
+
+    # Last, so a rollback's choice about ActionsManager's own copy wins over the
+    # synced_with_github stamping above — this repo no longer holds what AM holds.
+    if pr_record:
+        _apply_rollback_campaign_action(db, pr_record, github_user)
 
     # Attempt to delete the source branch (best-effort; never fails the merge)
     branch_deleted = False
@@ -7154,6 +7357,13 @@ def get_project_pr_campaigns(
         visible_projects = db.query(Project).filter(
             Project.project_id.in_(project_id_map.keys())
         ).all()
+        # Deferred import: projects.py imports this module at module scope, so
+        # importing it back at the top would be circular.
+        from projects import _migrate_branch_option
+        project_branch_option_map = {
+            proj.project_id: _migrate_branch_option(proj.branch_option)
+            for proj in visible_projects
+        }
         linked_rows = db.query(LinkedReusableWorkflow, Workflow).join(
             Workflow, LinkedReusableWorkflow.workflow_id == Workflow.workflow_id
         ).filter(
@@ -7263,6 +7473,9 @@ def get_project_pr_campaigns(
                 if len(key) == 3 and key[1] == "campaign"
                 else None
             )
+            snapshot = _campaign_snapshot_response(campaign_record)
+            campaign_name = _derive_campaign_name(campaign_prs)
+            campaign_description = None
             if campaign_record is not None:
                 try:
                     record_campaign_status_transition(
@@ -7279,6 +7492,8 @@ def get_project_pr_campaigns(
                     (pr.author for pr in campaign_prs if pr.author), github_user
                 )
                 created_at_dt = campaign_record.created_at or created_at_dt
+                campaign_name = campaign_record.campaign_name or campaign_name
+                campaign_description = campaign_record.campaign_description
             elif len(key) == 3 and key[1] == "campaign":
                 campaign_id_str = f"campaign-{key[2]}"
                 created_by = next((pr.author for pr in campaign_prs if pr.author), github_user)
@@ -7292,7 +7507,8 @@ def get_project_pr_campaigns(
                 created_by = next((pr.author for pr in campaign_prs if pr.author), github_user)
             campaigns.append(PRCampaignResponse(
                 campaign_id=campaign_id_str,
-                campaign_name=_derive_campaign_name(campaign_prs),
+                campaign_name=campaign_name,
+                campaign_description=campaign_description,
                 campaign_status=status,
                 project_name=project_id_map.get(campaign_project_id, project.project_name),
                 project_code=project.project_code if campaign_project_id == project.project_id else None,
@@ -7301,6 +7517,7 @@ def get_project_pr_campaigns(
                 updated_at=updated_at_dt.isoformat() if updated_at_dt else "",
                 completed_at=completed_at,
                 target_branches=target_branches,
+                branch_option=project_branch_option_map.get(campaign_project_id),
                 workflow_names=workflow_names,
                 custom_file_paths=custom_file_paths,
                 repositories=repositories,
@@ -7310,6 +7527,7 @@ def get_project_pr_campaigns(
                 failed_count=0,
                 completion_percentage=round(((merged_count + closed_count) / total_count) * 100) if total_count else 0,
                 pull_requests=campaign_items,
+                **snapshot,
             ))
 
             open_prs += open_count
@@ -7439,6 +7657,11 @@ def _handle_pr_merged(db: Session, pr_record, pr_number: int, repo_full_name: st
     except Exception as e:
         print(f"❌ Error creating pr_merged version entries: {str(e)}")
         db.rollback()
+
+    # Last, so a rollback's choice about ActionsManager's own copy wins over the
+    # synced_with_github stamping above. No user token reaches a webhook, so a
+    # "revert" degrades to "keep" here and drift reports the divergence instead.
+    _apply_rollback_campaign_action(db, pr_record)
 
     return {"status": "processed", "action": "merged", "pr_number": pr_number, "repo_name": repo_full_name}
 
@@ -8176,7 +8399,8 @@ def _ensure_reusable_repo_exists(owner: str, repo: str, auth_headers: dict,
 
 def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: str,
                                         target_branch: str, project_code: str, headers: dict,
-                                        user: str = None, db: Session = None) -> tuple:
+                                        user: str = None, db: Session = None,
+                                        base_shas: Optional[dict] = None) -> tuple:
     """
     Initialize an empty (no commits) repository by creating an initial commit
     via the Contents API, then creating the AM branch.
@@ -8192,6 +8416,10 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
 
     If the repository does not exist at all it is created first via the
     GitHub Repos API.
+
+    Pass a dict as ``base_shas`` to also collect {target_branch: base_commit_sha}
+    — the commit the AM branch was cut from. The return type stays a 3-tuple so
+    existing callers and their mocks are unaffected.
 
     Returns:
         tuple: (am_branch_name, created_bool, error_or_none)
@@ -8245,6 +8473,9 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
         print(f"❌ {error_msg}")
         return None, False, error_msg
 
+    if base_shas is not None:
+        base_shas[target_branch] = commit_sha
+
     # Step 2: Ensure the target branch exists.
     # The Contents API creates the repo's *default* branch which is usually the
     # target branch, but we create it explicitly in case they differ.
@@ -8281,9 +8512,74 @@ def _initialize_am_branch_in_empty_repo(owner: str, repo: str, am_branch_name: s
         return None, False, error_msg
 
 
-def _create_or_get_am_branch(owner: str, repo: str, target_branch: str, 
-                            project_code: str, headers: dict, 
-                            user: str = None, db: Session = None) -> tuple:
+def _stamp_target_metadata(results: dict, base_commits: dict, protection: dict) -> None:
+    """Record each target's base commit SHA and branch protection on its result dict.
+
+    Written after the fact rather than inline because both are known before the
+    result dict exists, and errored targets — which take an early continue —
+    belong in the campaign snapshot just as much as successful ones.
+    """
+    for result_key, result in results.items():
+        if isinstance(result, dict):
+            result["base_sha"] = base_commits.get(result_key)
+            result["branch_protection"] = protection.get(result_key)
+
+
+def _summarize_branch_protection(payload: dict) -> dict:
+    """Reduce GitHub's branch protection payload to the fields we snapshot.
+
+    ``enforce_admins`` keeps GitHub's polarity: True means admins are *not*
+    exempt from the rules. ``contexts`` is GitHub's deprecated spelling of the
+    required checks, so fall back to the newer ``checks`` list.
+    """
+    checks_block = payload.get("required_status_checks") or {}
+    contexts = checks_block.get("contexts") or [
+        check.get("context") for check in (checks_block.get("checks") or [])
+    ]
+    reviews_block = payload.get("required_pull_request_reviews") or {}
+    return {
+        "status": "protected",
+        "required_reviews": reviews_block.get("required_approving_review_count"),
+        "required_status_checks": [c for c in contexts if c],
+        "enforce_admins": bool((payload.get("enforce_admins") or {}).get("enabled")),
+    }
+
+
+def _fetch_branch_protection(owner: str, repo: str, branch: str, headers: dict,
+                             user: str = None, db: Session = None) -> dict:
+    """Snapshot a target branch's protection rules.
+
+    "none" (GitHub's 404 — no protection configured) and "unknown" (the token
+    cannot read protection settings) are deliberately distinct: an unprotected
+    branch and an unreadable one are different facts about the rollout, and
+    collapsing them would make the snapshot lie.
+
+    Never raises — a campaign must not fail because protection could not be read.
+    """
+    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/branches/{branch}/protection"
+    try:
+        if user and db:
+            response = github_get(url, user, db, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
+        else:
+            response = requests.get(url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
+
+        if response.status_code == 200:
+            return _summarize_branch_protection(response.json())
+        if response.status_code == 404:
+            return {"status": "none"}
+        return {
+            "status": "unknown",
+            "error": f"{response.status_code} {response.text[:120]}",
+        }
+    except Exception as exc:
+        print(f"⚠️ Could not read branch protection for {owner}/{repo}@{branch}: {exc}")
+        return {"status": "unknown", "error": str(exc)[:120]}
+
+
+def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
+                            project_code: str, headers: dict,
+                            user: str = None, db: Session = None,
+                            base_shas: Optional[dict] = None) -> tuple:
     """
     Create a new unique Actions Manager dedicated branch for a project.
     Branch name format: actions-manager/<project_code>/<repo_slug>/<short_id>-<target_branch>
@@ -8299,7 +8595,10 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
         headers: GitHub API headers
         user: GitHub username for authenticated API calls
         db: Database session for authenticated API calls
-    
+        base_shas: Optional dict to collect {target_branch: base_commit_sha} — the
+            commit the AM branch was cut from. The return type stays a 3-tuple so
+            existing callers and their mocks are unaffected.
+
     Returns:
         tuple: (am_branch_name, created_or_existed_boolean, error_message_or_none)
     """
@@ -8327,7 +8626,8 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
             # Definitely needs to be bootstrapped with an initial commit.
             print(f"⚠️ Repository '{owner}/{repo}' is empty (409), bootstrapping with initial commit...")
             return _initialize_am_branch_in_empty_repo(
-                owner, repo, am_branch_name, target_branch, project_code, headers, user, db
+                owner, repo, am_branch_name, target_branch, project_code, headers, user, db,
+                base_shas=base_shas
             )
         elif target_response.status_code == 404:
             # 404 can mean (a) the repo is empty with no commits, or (b) the
@@ -8357,7 +8657,8 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
             # Repo is empty (no commits) or commits endpoint returned non-200 — bootstrap it.
             print(f"⚠️ Repository '{owner}/{repo}' has no commits, bootstrapping with initial commit...")
             return _initialize_am_branch_in_empty_repo(
-                owner, repo, am_branch_name, target_branch, project_code, headers, user, db
+                owner, repo, am_branch_name, target_branch, project_code, headers, user, db,
+                base_shas=base_shas
             )
         else:
             error_msg = f"Failed to get target branch '{target_branch}': {target_response.status_code}"
@@ -8366,6 +8667,8 @@ def _create_or_get_am_branch(owner: str, repo: str, target_branch: str,
     
     target_sha = target_response.json()["object"]["sha"]
     print(f"📌 Target branch '{target_branch}' HEAD SHA: {target_sha}")
+    if base_shas is not None:
+        base_shas[target_branch] = target_sha
     
     # Create the new Actions Manager branch
     am_branch_ref = f"heads/{am_branch_name}"
@@ -8452,10 +8755,108 @@ def _check_existing_pr(owner: str, repo: str, am_branch: str,
     return None
 
 
-def _create_pull_request(owner: str, repo: str, am_branch: str, 
+def _campaign_view_url(user: Optional[str], project_name: Optional[str]) -> Optional[str]:
+    """Link back to the project's PR Campaigns view.
+
+    None when the deployment has not configured an app URL — the frontend then
+    auto-detects from the browser, which the backend cannot do on its behalf,
+    and a wrong link is worse than no link.
+    """
+    if not (auth_module.FRONTEND_URL and user and project_name):
+        return None
+    return f"{auth_module.FRONTEND_URL}/project/{quote(user)}/{quote(project_name)}"
+
+
+def _pr_body_heading(project_code: str, campaign_meta: Optional[dict]) -> List[str]:
+    """Open with the campaign's own name when the user gave it one."""
+    name = (campaign_meta or {}).get("name")
+    if not name:
+        return [f"This PR updates ActionsManager workflows for project **{project_code}**."]
+    lines = [f"## {name}", ""]
+    description = (campaign_meta or {}).get("description")
+    if description:
+        lines += [description, ""]
+    lines.append(f"Delivered by ActionsManager for project **{project_code}**.")
+    return lines
+
+
+def _pr_body_workflow_table(workflows_committed: List[str], policy: dict) -> List[str]:
+    """One row per delivered workflow: which version, and the exact content."""
+    if not workflows_committed:
+        return []
+    lines = ["| Workflow | Version | Content sha256 |", "|---|---|---|"]
+    for workflow_name in workflows_committed:
+        applied = policy.get(workflow_name) or {}
+        version = f"v{applied['version']}" if applied.get("version") is not None else "—"
+        digest = f"`{applied['sha256'][:16]}`" if applied.get("sha256") else "—"
+        lines.append(f"| {workflow_name} | {version} | {digest} |")
+    lines.append("")
+    return lines
+
+
+def _pr_body_delivery_lines(target_branch: str, base_sha: Optional[str],
+                            custom_files_result: Optional[dict]) -> List[str]:
+    """Where this landed, and what else rode along with the workflows."""
+    lines = [f"**Target branch:** `{target_branch}`"]
+    if base_sha:
+        lines.append(f"**Base commit:** `{base_sha[:7]}`")
+
+    files = list((custom_files_result or {}).get("custom_files_committed") or [])
+    codeowners = (custom_files_result or {}).get("codeowners_committed")
+    if codeowners:
+        files.append(codeowners)
+    if files:
+        lines.append("**Files:** " + ", ".join(f"`{path}`" for path in files))
+    return lines
+
+
+def _campaign_pr_body(db: Session, project_code: str, user: Optional[str],
+                      workflows_committed: List[str], target_branch: str,
+                      base_sha: Optional[str], custom_files_result: Optional[dict],
+                      campaign_meta: Optional[dict] = None) -> str:
+    """Describe what this PR is delivering, in the PR itself.
+
+    The delivered workflow list alone does not say *which* version of each
+    workflow went out, so a reviewer looking at the PR months later cannot tell
+    what it was supposed to contain. The version and content hash recorded here
+    are the same ones the campaign snapshot pins.
+
+    ``campaign_meta`` carries the name and description the user gave the campaign.
+    Unlike the campaign id, those come off the request and so are known before
+    the campaign row exists — they lead the body when present.
+    """
+    meta = campaign_meta or {}
+    project_name = meta.get("project_name")
+    policy = meta.get("policy")
+    if project_name is None or policy is None:
+        # Direct callers (and tests) that have no precomputed campaign context.
+        project = db.query(Project).filter(Project.project_code == project_code).first() if db else None
+        project_name = project_name or (project.project_name if project else None)
+        if policy is None:
+            policy = (
+                _build_policy_version(db, project.project_id, workflows_committed)
+                if (db and project and workflows_committed) else {}
+            )
+
+    lines = _pr_body_heading(project_code, campaign_meta)
+    lines.append("")
+    lines += _pr_body_workflow_table(workflows_committed, policy)
+    lines += _pr_body_delivery_lines(target_branch, base_sha, custom_files_result)
+
+    campaign_url = _campaign_view_url(user, project_name)
+    if campaign_url:
+        lines += ["", f"**Campaign:** [PR Campaigns — {project_name}]({campaign_url})"]
+
+    lines += ["", "---", "*This PR was automatically created by ActionsManager.*"]
+    return "\n".join(lines) + "\n"
+
+
+def _create_pull_request(owner: str, repo: str, am_branch: str,
                         target_branch: str, project_code: str,
                         workflows_committed: List[str], headers: dict,
-                        user: str = None, db: Session = None) -> Optional[dict]:
+                        user: str = None, db: Session = None,
+                        body: Optional[str] = None,
+                        title: Optional[str] = None) -> Optional[dict]:
     """
     Create a new Pull Request from the Actions Manager branch to the target branch.
     
@@ -8469,15 +8870,17 @@ def _create_pull_request(owner: str, repo: str, am_branch: str,
         headers: GitHub API headers
         user: GitHub username for authenticated API calls
         db: Database session for authenticated API calls
-    
+        body: Prebuilt PR body. Falls back to the plain workflow list when the
+            caller has no campaign context to describe.
+        title: Prebuilt PR title, for deliveries that are not a workflow update.
+
     Returns:
         dict or None: PR data if created successfully, None otherwise
     """
     pr_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/pulls"
-    
-    # Build PR body with list of workflows
+
     workflows_list = "\n".join([f"- {wf}" for wf in workflows_committed])
-    pr_body = f"""This PR updates Actions Manager workflows for project **{project_code}**.
+    pr_body = body or f"""This PR updates Actions Manager workflows for project **{project_code}**.
 
 ## Workflows Updated
 {workflows_list}
@@ -8485,9 +8888,9 @@ def _create_pull_request(owner: str, repo: str, am_branch: str,
 ---
 *This PR was automatically created by Actions Manager.*
 """
-    
+
     pr_payload = {
-        "title": f"[Actions Manager] Update {project_code} workflows",
+        "title": title or f"[Actions Manager] Update {project_code} workflows",
         "body": pr_body,
         "head": am_branch,
         "base": target_branch
@@ -8688,9 +9091,14 @@ def _update_workflow_git_hash(db: Session, workflow_name: str, new_sha: str,
         print(f"✅ Updated git hash for workflow '{workflow_name}' in {project_code}: {new_sha}")
 
 
-def _db_update_custom_file_sha(db: Session, file_id: int, new_sha: Optional[str]) -> None:
-    """Persist the blob SHA returned by GitHub after a successful custom file write."""
-    if not new_sha:
+def _db_update_custom_file_sha(db: Session, file_id: Optional[int], new_sha: Optional[str]) -> None:
+    """Persist the blob SHA returned by GitHub after a successful custom file write.
+
+    ``file_id`` is None when the writer is not a CustomFile at all — the campaign
+    rollback path reuses this committer for plain paths — and there is nothing to
+    stamp in that case.
+    """
+    if not new_sha or file_id is None:
         return
     cf = db.query(CustomFile).filter_by(id=file_id).first()
     if cf:
@@ -8980,19 +9388,30 @@ def _build_pr_success_result(pr: dict, existing_pr: Optional[dict], am_branch: s
 
 
 def _finalize_pr_result(owner: str, repo: str, am_branch: str, target_branch: str, headers: dict, user: str,
-                         db: Session, project_code: str, workflows_committed: list, workflow_errors: list,
-                         progress_callback, result_key: str,
-                         custom_files_result: Optional[dict] = None) -> dict:
+                         db: Session, project_code: str, progress_callback, result_key: str,
+                         delivery: Optional[dict] = None) -> dict:
     """Resolve existing-PR-update vs new-PR-create and shape the per-branch result dict.
 
-    Shared by the regular and reusable workflow update flows — pass custom_files_result
-    (a dict with custom_files_committed/custom_file_errors/codeowners_committed keys) to
-    include the custom-files/CODEOWNERS keys the regular flow needs; leave it None (the
-    reusable flow's case) to omit them entirely.
+    Shared by the regular and reusable workflow update flows. ``delivery`` carries
+    what this target actually received and the campaign context describing it:
+    ``workflows_committed``, ``workflow_errors``, ``base_sha``, ``campaign_meta``,
+    an optional ``pr_title``, and ``custom_files_result`` (custom_files_committed/
+    custom_file_errors/codeowners_committed). Leave ``custom_files_result`` out —
+    the reusable flow's case — to omit those keys from the result entirely.
     """
+    delivery = delivery or {}
+    workflows_committed = delivery.get("workflows_committed") or []
+    workflow_errors = delivery.get("workflow_errors") or []
+    custom_files_result = delivery.get("custom_files_result")
+
     existing_pr = _check_existing_pr(owner, repo, am_branch, target_branch, headers, user, db)
     pr = existing_pr or _create_pull_request(
-        owner, repo, am_branch, target_branch, project_code, workflows_committed, headers, user, db
+        owner, repo, am_branch, target_branch, project_code, workflows_committed, headers, user, db,
+        body=_campaign_pr_body(
+            db, project_code, user, workflows_committed, target_branch,
+            delivery.get("base_sha"), custom_files_result, delivery.get("campaign_meta"),
+        ),
+        title=delivery.get("pr_title"),
     )
 
     if not pr:
@@ -9013,7 +9432,8 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
                                     headers: dict, db: Session, user: str = None, use_prefix: bool = True,
                                     project: "Project" = None, progress_callback=None,
                                     custom_files: Optional[List[dict]] = None,
-                                    codeowners_files: Optional[dict] = None) -> dict:
+                                    codeowners_files: Optional[dict] = None,
+                                    campaign_meta: Optional[dict] = None) -> dict:
     """
     Process updates for regular workflows across multiple repositories.
     Creates dedicated Actions Manager branches and Pull Requests per (repo, target_branch).
@@ -9034,6 +9454,8 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
         dict: Results with PR URLs and status per repo/branch combination
     """
     results = {}
+    base_commits: dict = {}
+    protection: dict = {}
     custom_files = custom_files or []
     codeowners_files = codeowners_files or {}
 
@@ -9064,11 +9486,17 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
                 progress_callback(result_key, PROGRESS_CREATING_BRANCH, "running")
 
             # Step 1: Create or get the Actions Manager dedicated branch
+            branch_shas: dict = {}
             am_branch, branch_created, error_msg = _create_or_get_am_branch(
-                owner, repo, target_branch, project_code, headers, user, db
+                owner, repo, target_branch, project_code, headers, user, db, base_shas=branch_shas
             )
+            base_commits[result_key] = branch_shas.get(target_branch)
 
             if not am_branch:
+                # A 404 here would be the missing repo/branch, not "no protection
+                # configured" — recording "none" would assert something about a
+                # target this campaign never reached. Skips a wasted call too.
+                protection[result_key] = {"status": "unknown", "error": error_msg}
                 print(f"❌ Failed to create/get AM branch: {error_msg}")
                 results[result_key] = {"status": "error", "error": error_msg}
                 if progress_callback:
@@ -9076,6 +9504,9 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
                 continue
 
             print(f"{'✅ Created' if branch_created else '📌 Using existing'} AM branch: {am_branch}")
+            protection[result_key] = _fetch_branch_protection(
+                owner, repo, target_branch, headers, user, db
+            )
             if progress_callback:
                 progress_callback(result_key, PROGRESS_COMMITTING_FILES, "running")
 
@@ -9109,15 +9540,21 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
                 progress_callback(result_key, PROGRESS_OPENING_PR, "running")
             results[result_key] = _finalize_pr_result(
                 owner, repo, am_branch, target_branch, headers, user, db,
-                project_code, workflows_committed, workflow_errors,
-                progress_callback, result_key,
-                custom_files_result={
-                    "custom_files_committed": custom_files_committed,
-                    "custom_file_errors": custom_file_errors,
-                    "codeowners_committed": codeowners_committed,
+                project_code, progress_callback, result_key,
+                delivery={
+                    "workflows_committed": workflows_committed,
+                    "workflow_errors": workflow_errors,
+                    "custom_files_result": {
+                        "custom_files_committed": custom_files_committed,
+                        "custom_file_errors": custom_file_errors,
+                        "codeowners_committed": codeowners_committed,
+                    },
+                    "base_sha": base_commits.get(result_key),
+                    "campaign_meta": campaign_meta,
                 },
             )
 
+    _stamp_target_metadata(results, base_commits, protection)
     print(f"\n🔍 _process_regular_workflows_update complete. Results: {results}")
     return results
 
@@ -9126,7 +9563,8 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
                                      project_code: str,
                                      regex_pattern: str, branch_max_age_days: int,
                                      headers: dict, db: Session = None,
-                                     reusable_repo: str = None, use_prefix: bool = True, progress_callback=None) -> dict:
+                                     reusable_repo: str = None, use_prefix: bool = True, progress_callback=None,
+                                     campaign_meta: Optional[dict] = None) -> dict:
     """
     Process updates for reusable workflows in the dedicated repository.
     Creates dedicated Actions Manager branches and Pull Requests per target_branch.
@@ -9140,6 +9578,8 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
         dict: Results with PR URLs and status per branch combination
     """
     results = {}
+    base_commits: dict = {}
+    protection: dict = {}
     if not reusable_repo:
         reusable_repo = f"{user}/am-reuseable-workflow"
     
@@ -9167,11 +9607,14 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
             progress_callback(result_key, PROGRESS_CREATING_BRANCH, "running")
 
         # Step 1: Create or get the Actions Manager dedicated branch
+        branch_shas: dict = {}
         am_branch, branch_created, error_msg = _create_or_get_am_branch(
-            owner, repo, target_branch, project_code, headers, user, db
+            owner, repo, target_branch, project_code, headers, user, db, base_shas=branch_shas
         )
+        base_commits[result_key] = branch_shas.get(target_branch)
 
         if not am_branch:
+            protection[result_key] = {"status": "unknown", "error": error_msg}
             print(f"❌ Failed to create/get AM branch: {error_msg}")
             results[result_key] = {"status": "error", "error": error_msg}
             if progress_callback:
@@ -9179,6 +9622,9 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
             continue
 
         print(f"{'✅ Created' if branch_created else '📌 Using existing'} AM branch: {am_branch}")
+        protection[result_key] = _fetch_branch_protection(
+            owner, repo, target_branch, headers, user, db
+        )
         if progress_callback:
             progress_callback(result_key, PROGRESS_COMMITTING_FILES, "running")
 
@@ -9203,10 +9649,16 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
             progress_callback(result_key, PROGRESS_OPENING_PR, "running")
         results[result_key] = _finalize_pr_result(
             owner, repo, am_branch, target_branch, headers, user, db,
-            project_code, workflows_committed, workflow_errors,
-            progress_callback, result_key,
+            project_code, progress_callback, result_key,
+            delivery={
+                "workflows_committed": workflows_committed,
+                "workflow_errors": workflow_errors,
+                "base_sha": base_commits.get(result_key),
+                "campaign_meta": campaign_meta,
+            },
         )
 
+    _stamp_target_metadata(results, base_commits, protection)
     print(f"\n🔍 _process_reusable_workflows_update complete. Results: {results}")
     return results
 

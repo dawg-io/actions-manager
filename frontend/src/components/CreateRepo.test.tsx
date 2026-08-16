@@ -31,10 +31,10 @@ interface CreateRepoButtonProps {
 }
 
 describe('CreateRepoButton TypeScript Types', () => {
-  const mockSetRepoExists = jest.fn();
+  const mockSetRepoExists = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('TypeScript interface allows required props', () => {

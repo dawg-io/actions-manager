@@ -9,7 +9,7 @@ describe('PrefixedInput Component', () => {
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
-      onChange: jest.fn(),
+      onChange: vi.fn(),
       placeholder: 'Enter value'
     };
     
@@ -18,7 +18,7 @@ describe('PrefixedInput Component', () => {
   });
 
   test('should call onChange when input changes', () => {
-    const onChange = jest.fn();
+    const onChange = vi.fn();
     const props = {
       prefix: 'PREFIX_',
       value: '',
@@ -38,7 +38,7 @@ describe('PrefixedInput Component', () => {
   });
 
   test('should pass only string value to onChange, not event object', () => {
-    const onChange = jest.fn();
+    const onChange = vi.fn();
     const props = {
       prefix: 'TEST_',
       value: 'initial',
@@ -67,7 +67,7 @@ describe('PrefixedInput Component', () => {
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
-      onChange: jest.fn()
+      onChange: vi.fn()
     };
     
     const { getByText } = render(<PrefixedInput {...props} />);
@@ -78,7 +78,7 @@ describe('PrefixedInput Component', () => {
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
-      onChange: jest.fn()
+      onChange: vi.fn()
     };
 
     const { container } = render(<PrefixedInput {...props} />);
@@ -94,7 +94,7 @@ describe('PrefixedInput Component', () => {
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
-      onChange: jest.fn()
+      onChange: vi.fn()
     };
 
     const { container } = render(<PrefixedInput {...props} />);
@@ -116,7 +116,7 @@ describe('PrefixedInput Component', () => {
     const props = {
       prefix: 'PREFIX_',
       value: 'test',
-      onChange: jest.fn(),
+      onChange: vi.fn(),
       disabled: true
     };
 

@@ -6,10 +6,10 @@ import { WorkflowResourcesProvider, useWorkflowResources } from './WorkflowResou
 import { getEnvironments } from '../api/environments';
 
 vi.mock('../api/environments', () => ({
-  getEnvironments: jest.fn(),
+  getEnvironments: vi.fn(),
 }));
 
-const mockedGetEnvironments = getEnvironments as unknown as ReturnType<typeof jest.fn>;
+const mockedGetEnvironments = getEnvironments as unknown as ReturnType<typeof vi.fn>;
 
 const Probe: React.FC = () => {
   const { resources, loadingEnvironments, environmentsError, requestEnvironments } =
@@ -40,7 +40,7 @@ const renderProvider = (repos: string[] = ['acme/web']) =>
 
 describe('WorkflowResourcesProvider', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockedGetEnvironments.mockResolvedValue([{ name: 'production' }]);
   });
 

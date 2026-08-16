@@ -11,15 +11,15 @@ import {
 vi.mock("./apiClient", () => ({
   __esModule: true,
   default: {
-    post: jest.fn(),
-    delete: jest.fn(),
+    post: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
-const mockedAxios = /** @type {jest.Mocked<typeof axios>} */ (axios);
+const mockedAxios = /** @type {import('vitest').Mocked<typeof axios>} */ (axios);
 
 describe("environments API", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => vi.clearAllMocks());
 
   describe("createEnvironment", () => {
     it("posts to create-environment and returns data", async () => {

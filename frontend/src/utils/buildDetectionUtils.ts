@@ -77,7 +77,9 @@ export const addWorkflowFromDetection = async (
     
     // Check if the API returned an error object instead of YAML string
     if (!workflowResult || typeof workflowResult !== 'string') {
-      if (workflowResult && workflowResult.error) {
+      // `!workflowResult` also matches the empty string, so this branch is not
+      // narrowed to the error object by the outer guard alone.
+      if (typeof workflowResult === 'object' && workflowResult?.error) {
         throw new Error(`Failed to generate workflow: ${workflowResult.error}`);
       } else {
         throw new Error('Failed to generate workflow: Invalid response from server');

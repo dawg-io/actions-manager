@@ -20,13 +20,13 @@ const renderPicker = (
     environmentsError: string | null;
     requestEnvironments: () => void;
   }> = {},
-  onInsert: (text: string) => void = jest.fn()
+  onInsert: (text: string) => void = vi.fn()
 ) => {
   const value = {
     resources: RESOURCES,
     loadingEnvironments: false,
     environmentsError: null,
-    requestEnvironments: jest.fn(),
+    requestEnvironments: vi.fn(),
     ...overrides,
   };
 
@@ -98,7 +98,7 @@ describe('WorkflowResourcePicker', () => {
 
   describe('inserting the correct expression', () => {
     test('a secret inserts a secrets expression', async () => {
-      const onInsert = jest.fn();
+      const onInsert = vi.fn();
       renderPicker({}, onInsert);
       await openPicker();
 
@@ -108,7 +108,7 @@ describe('WorkflowResourcePicker', () => {
     });
 
     test('a variable inserts a vars expression, not a secrets one', async () => {
-      const onInsert = jest.fn();
+      const onInsert = vi.fn();
       renderPicker({}, onInsert);
       await openPicker();
 
@@ -118,7 +118,7 @@ describe('WorkflowResourcePicker', () => {
     });
 
     test('an environment inserts the environment job key', async () => {
-      const onInsert = jest.fn();
+      const onInsert = vi.fn();
       renderPicker({}, onInsert);
       await openPicker();
 
@@ -128,7 +128,7 @@ describe('WorkflowResourcePicker', () => {
     });
 
     test('prefix-mode names are inserted exactly as stored in GitHub', async () => {
-      const onInsert = jest.fn();
+      const onInsert = vi.fn();
       renderPicker({ resources: [{ kind: 'secret', name: 'AM_REG1_DOCKER_PASSWORD', repo: 'acme/web' }] }, onInsert);
       await openPicker();
 
@@ -206,7 +206,7 @@ describe('WorkflowResourcePicker', () => {
   });
 
   test('requests environments only once the picker is opened', async () => {
-    const requestEnvironments = jest.fn();
+    const requestEnvironments = vi.fn();
     renderPicker({ requestEnvironments });
 
     expect(requestEnvironments).not.toHaveBeenCalled();
@@ -238,7 +238,7 @@ describe('WorkflowResourcePicker', () => {
   describe('field variant', () => {
     const renderField = (
       available: WorkflowResource[] = RESOURCES,
-      onInsert: (text: string) => void = jest.fn()
+      onInsert: (text: string) => void = vi.fn()
     ) => {
       render(
         <WorkflowResourcesRawProvider
@@ -246,7 +246,7 @@ describe('WorkflowResourcePicker', () => {
             resources: available,
             loadingEnvironments: false,
             environmentsError: null,
-            requestEnvironments: jest.fn(),
+            requestEnvironments: vi.fn(),
           }}
         >
           <WorkflowResourcePicker onInsert={onInsert} variant="field" />
@@ -298,10 +298,10 @@ describe('WorkflowResourcePicker', () => {
           resources: RESOURCES,
           loadingEnvironments: false,
           environmentsError: null,
-          requestEnvironments: jest.fn(),
+          requestEnvironments: vi.fn(),
         }}
       >
-        <WorkflowResourcePicker onInsert={jest.fn()} disabled />
+        <WorkflowResourcePicker onInsert={vi.fn()} disabled />
       </WorkflowResourcesRawProvider>
     );
 

@@ -21,22 +21,22 @@ const mockWorkflows = [
 const mockProps = {
   workflows: mockWorkflows,
   selectedWorkflowIndex: 0,
-  onSelectWorkflow: jest.fn(),
+  onSelectWorkflow: vi.fn(),
   projectCode: 'TEST',
   workflowStatuses: {},
   loadingStatuses: false,
-  getWorkflowStatusDisplay: jest.fn().mockReturnValue([]),
-  getStatusIcon: jest.fn().mockReturnValue('✓'),
-  getStatusColor: jest.fn().mockReturnValue('#green'),
+  getWorkflowStatusDisplay: vi.fn().mockReturnValue([]),
+  getStatusIcon: vi.fn().mockReturnValue('✓'),
+  getStatusColor: vi.fn().mockReturnValue('#green'),
   isCollapsed: false,
-  onToggleCollapse: jest.fn()
+  onToggleCollapse: vi.fn()
 };
 
 describe('WorkflowsList', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('renders workflows list when expanded', () => {

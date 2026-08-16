@@ -1,21 +1,22 @@
 import apiClient from "./apiClient";
 import { updateEnvVars, getEnvVars, handleDeleteEnvVars, syncEnvVar, getEnvVarsCount } from "./envVars";
 
+import type { Mock, Mocked } from 'vitest';
 vi.mock("./apiClient", () => ({
   __esModule: true,
   default: {
-    post: jest.fn(),
-    delete: jest.fn(),
+    post: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 vi.mock("../utils/toast", () => ({ toast: { error: vi.fn() } }));
 
-const mockedApiClient = apiClient as jest.Mocked<typeof apiClient>;
+const mockedApiClient = apiClient as Mocked<typeof apiClient>;
 
 describe("envVars API", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    globalThis.fetch = jest.fn();
+    vi.clearAllMocks();
+    globalThis.fetch = vi.fn();
   });
 
   describe("updateEnvVars", () => {
@@ -62,7 +63,7 @@ describe("envVars API", () => {
 
   describe("getEnvVars", () => {
     it("fetches env vars via fetch and maps them with repo name", async () => {
-      (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      (globalThis.fetch as Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ env_vars: [{ env_key: "PORT", value: "3000" }] }),
       });
@@ -73,14 +74,14 @@ describe("envVars API", () => {
     });
 
     it("returns empty array on fetch error", async () => {
-      (globalThis.fetch as jest.Mock).mockRejectedValueOnce(new Error("network error"));
+      (globalThis.fetch as Mock).mockRejectedValueOnce(new Error("network error"));
 
       const result = await getEnvVars("user", "repo", "proj");
       expect(result).toEqual([]);
     });
 
     it("returns empty array when env_vars is absent from response", async () => {
-      (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      (globalThis.fetch as Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({}),
       });
@@ -102,7 +103,7 @@ describe("envVars API", () => {
 
     it("deletes env vars via apiClient", async () => {
       mockedApiClient.delete.mockResolvedValueOnce({ data: { results: "ok" } });
-      (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      (globalThis.fetch as Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ env_vars: [] }),
       });
@@ -138,7 +139,7 @@ describe("envVars API", () => {
 
   describe("getEnvVarsCount", () => {
     it("returns the count from response", async () => {
-      (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      (globalThis.fetch as Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ count: 5 }),
       });
@@ -148,7 +149,7 @@ describe("envVars API", () => {
     });
 
     it("returns 0 on error", async () => {
-      (globalThis.fetch as jest.Mock).mockRejectedValueOnce(new Error("network error"));
+      (globalThis.fetch as Mock).mockRejectedValueOnce(new Error("network error"));
 
       const result = await getEnvVarsCount("user", "proj", ["repo"]);
       expect(result).toBe(0);

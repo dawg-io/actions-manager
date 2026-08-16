@@ -79,9 +79,11 @@ const RepositoriesAndBranches: React.FC<RepositoriesAndBranchesProps> = ({
     setReposLoading(true);
     setReposError(null);
     fetchRepos(user)
-      .then((fetchedRepos: Repository[] | { error?: string }) => {
+      .then((fetchedRepos) => {
         if (Array.isArray(fetchedRepos)) {
-          setRepos(fetchedRepos);
+          // fetchRepos resolves to unknown[] - the API response shape is only
+          // known here, so this is the boundary that asserts it.
+          setRepos(fetchedRepos as Repository[]);
         } else if (fetchedRepos && typeof fetchedRepos === "object" && "error" in fetchedRepos) {
           setReposError(String(fetchedRepos.error || "Failed to load repositories"));
           setRepos([]);

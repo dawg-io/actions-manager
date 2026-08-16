@@ -16,8 +16,8 @@ import { getProjectPRStatus } from "./api/pullRequests";
 
 
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 vi.mock(
   "react-router",
@@ -25,38 +25,36 @@ vi.mock(
     useNavigate: () => mockNavigate,
     useParams: () => mockUseParams(),
     useLocation: () => ({ pathname: "/project/alice/TestProject", search: "", hash: "", state: null, key: "test" }),
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
-  updateProjectColor: jest.fn(),
-  exportProjectBackup: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
+  updateProjectColor: vi.fn(),
+  exportProjectBackup: vi.fn(),
 }));
 
 vi.mock("./api/projectDeletion", () => ({
-  deleteProjectEnhanced: jest.fn(),
+  deleteProjectEnhanced: vi.fn(),
 }));
 
 vi.mock("./api/handlers", () => ({
-  handleSaveProjectWithModal: jest.fn(),
+  handleSaveProjectWithModal: vi.fn(),
 }));
 
 vi.mock("./api/secrets", () => ({
-  getSecrets: jest.fn(),
+  getSecrets: vi.fn(),
 }));
 
 vi.mock("./api/envVars", () => ({
-  getEnvVars: jest.fn(),
+  getEnvVars: vi.fn(),
 }));
 
 vi.mock("./api/pullRequests", () => ({
-  getProjectPRStatus: jest.fn(),
+  getProjectPRStatus: vi.fn(),
 }));
 
 vi.mock("./components/Sidebar", () => ({
@@ -194,12 +192,13 @@ vi.mock("./components/WorkflowImportPanel", () => ({
 
 describe("ProjectMgmt – Workflow Import entry point", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     // Simulate loading a specific project
     mockUseParams.mockReturnValue({ user: "alice", projectName: "TestProject" });
-    fetchProjects.mockResolvedValue([]);
-    loadProject.mockResolvedValue({
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    vi.mocked(loadProject).mockResolvedValue({
       project_name: "TestProject",
+      updated_at: "2024-06-01T00:00:00Z",
       project_code: "TP",
       project_id: 42,
       pr_state: "draft",
@@ -209,10 +208,12 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
       project_type: "standard",
       account_type: "professional",
     });
-    getSecrets.mockResolvedValue([]);
-    getEnvVars.mockResolvedValue([]);
-    getProjectPRStatus.mockResolvedValue({
+    vi.mocked(getSecrets).mockResolvedValue([]);
+    vi.mocked(getEnvVars).mockResolvedValue([]);
+    vi.mocked(getProjectPRStatus).mockResolvedValue({
       project_state: "draft",
+      pull_requests: [],
+      closed_prs: 0,
       open_prs: 0,
       merged_prs: 0,
       total_prs: 0,
@@ -228,7 +229,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           account_type: "professional",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -249,7 +250,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           account_type: "professional",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -267,10 +268,11 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
 
   test("clicking 'Import Existing' still opens the modal when project_id is a string", async () => {
     const user = userEvent.setup();
-    loadProject.mockResolvedValue({
+    vi.mocked(loadProject).mockResolvedValue({
       project_name: "TestProject",
+      updated_at: "2024-06-01T00:00:00Z",
       project_code: "TP",
-      project_id: "42",
+      project_id: 42,
       pr_state: "draft",
       selected_repos: ["alice/my-repo", "alice/other-repo"],
       workflows: [],
@@ -287,7 +289,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           account_type: "professional",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -310,7 +312,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           account_type: "professional",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -343,7 +345,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           account_type: "professional",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -378,7 +380,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           account_type: "professional",
           github_account_type: "User",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 
@@ -397,8 +399,9 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
   });
 
   test("'Import Existing' button is NOT shown for read-only users", async () => {
-    loadProject.mockResolvedValue({
+    vi.mocked(loadProject).mockResolvedValue({
       project_name: "TestProject",
+      updated_at: "2024-06-01T00:00:00Z",
       project_code: "TP",
       project_id: 42,
       pr_state: "draft",
@@ -407,7 +410,6 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
       rxworkflows: [],
       project_type: "standard",
       account_type: "professional",
-      is_read_only: true,
     });
 
     render(
@@ -419,7 +421,7 @@ describe("ProjectMgmt – Workflow Import entry point", () => {
           github_account_type: "User",
           workspace_role: "read_only",
         }}
-        onLogout={jest.fn()}
+        onLogout={vi.fn()}
       />
     );
 

@@ -2,15 +2,15 @@ vi.mock('../api/notifications', async () => {
   const actual = await vi.importActual<typeof import('../api/notifications')>('../api/notifications');
   return {
     ...actual,
-    sendTestEmail: jest.fn(),
-    fetchSubscriptions: jest.fn(),
-    createSubscription: jest.fn(),
-    deleteSubscription: jest.fn(),
-    fetchDeliveries: jest.fn(),
+    sendTestEmail: vi.fn(),
+    fetchSubscriptions: vi.fn(),
+    createSubscription: vi.fn(),
+    deleteSubscription: vi.fn(),
+    fetchDeliveries: vi.fn(),
   };
 });
 vi.mock('../api/projects', () => ({
-  fetchProjects: jest.fn(),
+  fetchProjects: vi.fn(),
 }));
 
 import React from 'react';
@@ -26,16 +26,17 @@ import {
 } from '../api/notifications';
 import { fetchProjects } from '../api/projects';
 
-const mockSendTestEmail = sendTestEmail as jest.MockedFunction<typeof sendTestEmail>;
-const mockFetchSubscriptions = fetchSubscriptions as jest.MockedFunction<typeof fetchSubscriptions>;
-const mockCreateSubscription = createSubscription as jest.MockedFunction<typeof createSubscription>;
-const mockDeleteSubscription = deleteSubscription as jest.MockedFunction<typeof deleteSubscription>;
-const mockFetchDeliveries = fetchDeliveries as jest.MockedFunction<typeof fetchDeliveries>;
-const mockFetchProjects = fetchProjects as jest.MockedFunction<typeof fetchProjects>;
+import type { MockedFunction } from 'vitest';
+const mockSendTestEmail = sendTestEmail as MockedFunction<typeof sendTestEmail>;
+const mockFetchSubscriptions = fetchSubscriptions as MockedFunction<typeof fetchSubscriptions>;
+const mockCreateSubscription = createSubscription as MockedFunction<typeof createSubscription>;
+const mockDeleteSubscription = deleteSubscription as MockedFunction<typeof deleteSubscription>;
+const mockFetchDeliveries = fetchDeliveries as MockedFunction<typeof fetchDeliveries>;
+const mockFetchProjects = fetchProjects as MockedFunction<typeof fetchProjects>;
 
 describe('WorkspaceNotifications Component', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockFetchSubscriptions.mockResolvedValue([]);
     mockFetchDeliveries.mockResolvedValue([]);
     mockFetchProjects.mockResolvedValue([]);

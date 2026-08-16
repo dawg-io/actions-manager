@@ -13,7 +13,7 @@ vi.mock('../utils/copyUtils', () => ({
   CopyButton: ({ textToCopy, title }: { textToCopy: string; title: string }) => (
     <button title={title}>Copy {textToCopy}</button>
   ),
-  copyToClipboard: jest.fn(),
+  copyToClipboard: vi.fn(),
 }));
 
 vi.mock('./PrefixedInput', () => ({
@@ -43,18 +43,18 @@ const baseProps = {
   projectName: 'test-project',
   selectedRepos: ['repo1'],
   secrets: [],
-  setSecrets: jest.fn(),
+  setSecrets: vi.fn(),
   manualSecrets: [{ secret_key: '', secret_value: '' }],
-  setManualSecrets: jest.fn(),
+  setManualSecrets: vi.fn(),
   accountType: 'enterprise',
-  onAddSecret: jest.fn(),
+  onAddSecret: vi.fn(),
   projectCode: 'TEST',
   usePrefix: true,
 };
 
 describe('Secrets redesigned UI', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('renders polished header with title and write-only description', () => {
@@ -78,7 +78,7 @@ describe('Secrets redesigned UI', () => {
   });
 
   test('Add Secret button is disabled until both fields are valid', () => {
-    const setManualSecrets = jest.fn();
+    const setManualSecrets = vi.fn();
     const { rerender } = render(
       <Secrets
         {...baseProps}
@@ -144,7 +144,7 @@ describe('Secrets redesigned UI', () => {
   });
 
   test('secret value input is password-style by default and toggleable', () => {
-    const setManualSecrets = jest.fn();
+    const setManualSecrets = vi.fn();
     render(
       <Secrets
         {...baseProps}
@@ -162,7 +162,7 @@ describe('Secrets redesigned UI', () => {
   });
 
   test('clears typed secret value after a successful save', async () => {
-    const setManualSecrets = jest.fn();
+    const setManualSecrets = vi.fn();
     render(
       <Secrets
         {...baseProps}
@@ -182,9 +182,9 @@ describe('Secrets redesigned UI', () => {
   });
 
   test('surfaces backend error without leaking the secret value', async () => {
-    createSecrets.mockRejectedValueOnce(new Error('GitHub rejected the request'));
+    vi.mocked(createSecrets).mockRejectedValueOnce(new Error('GitHub rejected the request'));
 
-    const setManualSecrets = jest.fn();
+    const setManualSecrets = vi.fn();
     render(
       <Secrets
         {...baseProps}

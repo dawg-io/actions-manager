@@ -1,6 +1,6 @@
 vi.mock('../api/workspaceMembers', () => ({
-  getWorkspaceMembers: jest.fn(),
-  updateMemberRole: jest.fn(),
+  getWorkspaceMembers: vi.fn(),
+  updateMemberRole: vi.fn(),
 }));
 
 import React from 'react';
@@ -9,8 +9,9 @@ import '@testing-library/jest-dom';
 import WorkspaceMembers from './WorkspaceMembers';
 import { getWorkspaceMembers, updateMemberRole } from '../api/workspaceMembers';
 
-const mockGetMembers = getWorkspaceMembers as jest.MockedFunction<typeof getWorkspaceMembers>;
-const mockUpdateRole = updateMemberRole as jest.MockedFunction<typeof updateMemberRole>;
+import type { MockedFunction } from 'vitest';
+const mockGetMembers = getWorkspaceMembers as MockedFunction<typeof getWorkspaceMembers>;
+const mockUpdateRole = updateMemberRole as MockedFunction<typeof updateMemberRole>;
 
 const MEMBERS = [
   { user_id: 1, github_user: 'admin-user', avatar_url: 'https://example.com/a.jpg', workspace_role: 'admin' },
@@ -19,7 +20,7 @@ const MEMBERS = [
 
 describe('WorkspaceMembers Component', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockGetMembers.mockResolvedValue(MEMBERS);
   });
 

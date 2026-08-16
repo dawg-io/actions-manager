@@ -1,5 +1,6 @@
 import apiClient from "./apiClient";
 import config from "../config";
+import { BuildType } from '../types/workflow';
 
 const BACKEND_URL = config.BACKEND_URL;
 
@@ -76,7 +77,7 @@ export const detectBuildTypes = async (
   user: string,
   owner: string,
   repo: string
-): Promise<unknown> => {
+): Promise<{ detected_build_types?: BuildType[]; error?: string }> => {
   try {
     const response = await apiClient.get(`/api/repos/detect-build-type/${owner}/${repo}`, { params: { user } });
     return response.data;
@@ -91,7 +92,7 @@ export const suggestWorkflow = async (
   owner: string,
   repo: string,
   buildType: string | null = null
-): Promise<unknown> => {
+): Promise<string | { error: string }> => {
   try {
     const params = buildType ? { user, build_type: buildType } : { user };
     const response = await apiClient.get(`/api/repos/suggest-workflow/${owner}/${repo}`, { params });

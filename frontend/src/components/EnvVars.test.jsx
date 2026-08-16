@@ -17,7 +17,7 @@ vi.mock('../utils/copyUtils', () => ({
   CopyButton: ({ textToCopy, title }) => (
     <button title={title}>Copy {textToCopy}</button>
   ),
-  copyToClipboard: jest.fn(),
+  copyToClipboard: vi.fn(),
 }));
 
 // Mock PrefixedInput component
@@ -43,16 +43,16 @@ describe('EnvVars Component', () => {
     envVars: [
       { env_key: 'TEST_VAR', repo: 'repo1', value: 'test-value' }
     ],
-    setEnvVars: jest.fn(),
+    setEnvVars: vi.fn(),
     manualEnvVars: [{ key: '', value: '' }],
-    setManualEnvVars: jest.fn(),
+    setManualEnvVars: vi.fn(),
     accountType: 'premium',
-    onAddEnvVar: jest.fn(),
+    onAddEnvVar: vi.fn(),
     projectCode: 'TEST'
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('renders without crashing', () => {

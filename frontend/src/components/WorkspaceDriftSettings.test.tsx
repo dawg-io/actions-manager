@@ -2,8 +2,8 @@ vi.mock('../api/driftSettings', async () => {
   const actual = await vi.importActual<typeof import('../api/driftSettings')>('../api/driftSettings');
   return {
     ...actual,
-    fetchDriftSettings: jest.fn(),
-    saveDriftSettings: jest.fn(),
+    fetchDriftSettings: vi.fn(),
+    saveDriftSettings: vi.fn(),
   };
 });
 
@@ -13,8 +13,9 @@ import '@testing-library/jest-dom';
 import WorkspaceDriftSettings from './WorkspaceDriftSettings';
 import { fetchDriftSettings, saveDriftSettings, DriftSettings } from '../api/driftSettings';
 
-const mockFetch = fetchDriftSettings as jest.MockedFunction<typeof fetchDriftSettings>;
-const mockSave = saveDriftSettings as jest.MockedFunction<typeof saveDriftSettings>;
+import type { MockedFunction } from 'vitest';
+const mockFetch = fetchDriftSettings as MockedFunction<typeof fetchDriftSettings>;
+const mockSave = saveDriftSettings as MockedFunction<typeof saveDriftSettings>;
 
 const SETTINGS: DriftSettings = {
   sweep_enabled: true,
@@ -25,7 +26,7 @@ const SETTINGS: DriftSettings = {
 
 describe('WorkspaceDriftSettings', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockFetch.mockResolvedValue(SETTINGS);
     mockSave.mockResolvedValue({ success: true });
   });

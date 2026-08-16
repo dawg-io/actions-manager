@@ -9,11 +9,11 @@ describe('DangerZone', () => {
 
   const defaultProps = {
     projectName: 'My Test Project',
-    onDeleteProject: jest.fn(),
+    onDeleteProject: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test('renders the Danger Zone title', () => {
@@ -39,7 +39,7 @@ describe('DangerZone', () => {
   });
 
   test('clicking Delete Project button calls onDeleteProject', async () => {
-    const onDeleteProject = jest.fn();
+    const onDeleteProject = vi.fn();
     render(<DangerZone {...defaultProps} onDeleteProject={onDeleteProject} />);
     await user.click(screen.getByRole('button', { name: /Delete Project/i }));
     expect(onDeleteProject).toHaveBeenCalledTimes(1);

@@ -3,7 +3,7 @@ import { copyToClipboard } from './copyUtils';
 // Mock the clipboard API
 Object.assign(navigator, {
   clipboard: {
-    writeText: jest.fn(() => Promise.resolve()),
+    writeText: vi.fn(() => Promise.resolve()),
   },
 });
 
@@ -15,7 +15,7 @@ Object.defineProperty(window, 'isSecureContext', {
 
 describe('copyUtils', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('copyToClipboard', () => {
@@ -30,7 +30,7 @@ describe('copyUtils', () => {
     });
 
     test('should call onSuccess callback when successful', async () => {
-      const onSuccess = jest.fn();
+      const onSuccess = vi.fn();
       const text = 'test text';
       
       navigator.clipboard.writeText.mockResolvedValueOnce();
@@ -41,8 +41,8 @@ describe('copyUtils', () => {
     });
 
     test('should handle errors gracefully', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      const onError = jest.fn();
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const onError = vi.fn();
       const text = 'test text';
       
       navigator.clipboard.writeText.mockRejectedValueOnce(new Error('Clipboard error'));

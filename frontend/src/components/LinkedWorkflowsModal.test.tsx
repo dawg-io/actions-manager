@@ -4,8 +4,9 @@ import '@testing-library/jest-dom';
 import LinkedWorkflowsModal from './LinkedWorkflowsModal';
 import * as projectsApi from '../api/projects';
 
+import type { Mock } from 'vitest';
 vi.mock('../api/projects', () => ({
-  getAvailableRwxWorkflows: jest.fn(),
+  getAvailableRwxWorkflows: vi.fn(),
 }));
 
 // Minimal Dialog shim — renders children directly
@@ -72,14 +73,14 @@ const defaultProps = {
   user: 'test-user',
   projectName: 'My Project',
   alreadyLinkedIds: [],
-  onLink: jest.fn(),
-  onClose: jest.fn(),
+  onLink: vi.fn(),
+  onClose: vi.fn(),
 };
 
 describe('LinkedWorkflowsModal', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    (projectsApi.getAvailableRwxWorkflows as jest.Mock).mockResolvedValue(mockWorkflows);
+    vi.clearAllMocks();
+    (projectsApi.getAvailableRwxWorkflows as Mock).mockResolvedValue(mockWorkflows);
   });
 
   test('shows loading state initially', () => {
@@ -98,7 +99,7 @@ describe('LinkedWorkflowsModal', () => {
   });
 
   test('shows error when API fails', async () => {
-    (projectsApi.getAvailableRwxWorkflows as jest.Mock).mockRejectedValue(new Error('Network error'));
+    (projectsApi.getAvailableRwxWorkflows as Mock).mockRejectedValue(new Error('Network error'));
     render(<LinkedWorkflowsModal {...defaultProps} />);
     await waitFor(() => {
       expect(screen.getByText(/Failed to load reusable workflows/i)).toBeInTheDocument();
@@ -144,7 +145,7 @@ describe('LinkedWorkflowsModal', () => {
   });
 
   test('calls onLink with selected non-linked workflows', async () => {
-    const onLink = jest.fn().mockResolvedValue(undefined);
+    const onLink = vi.fn().mockResolvedValue(undefined);
     render(<LinkedWorkflowsModal {...defaultProps} onLink={onLink} />);
     await waitFor(() => screen.getByText('build-workflow'));
 
@@ -191,7 +192,7 @@ describe('LinkedWorkflowsModal', () => {
   });
 
   test('calls onClose when Close button is clicked', async () => {
-    const onClose = jest.fn();
+    const onClose = vi.fn();
     render(<LinkedWorkflowsModal {...defaultProps} onClose={onClose} />);
     await waitFor(() => screen.getByText('build-workflow'));
 
@@ -200,7 +201,7 @@ describe('LinkedWorkflowsModal', () => {
   });
 
   test('invalid private RWX option is disabled with a clear reason', async () => {
-    (projectsApi.getAvailableRwxWorkflows as jest.Mock).mockResolvedValue([
+    (projectsApi.getAvailableRwxWorkflows as Mock).mockResolvedValue([
       mockWorkflows[0],
       invalidPrivateWorkflow,
     ]);
@@ -215,7 +216,7 @@ describe('LinkedWorkflowsModal', () => {
   });
 
   test('connect action stays disabled when only selected option is invalid', async () => {
-    (projectsApi.getAvailableRwxWorkflows as jest.Mock).mockResolvedValue([invalidPrivateWorkflow]);
+    (projectsApi.getAvailableRwxWorkflows as Mock).mockResolvedValue([invalidPrivateWorkflow]);
     render(<LinkedWorkflowsModal {...defaultProps} />);
     await waitFor(() => screen.getByText('private-workflow'));
 
@@ -226,7 +227,7 @@ describe('LinkedWorkflowsModal', () => {
   });
 
   test('valid public RWX option remains selectable when invalid options exist', async () => {
-    (projectsApi.getAvailableRwxWorkflows as jest.Mock).mockResolvedValue([
+    (projectsApi.getAvailableRwxWorkflows as Mock).mockResolvedValue([
       mockWorkflows[0],
       invalidPrivateWorkflow,
     ]);

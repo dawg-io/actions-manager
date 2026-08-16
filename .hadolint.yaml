@@ -1,0 +1,24 @@
+# hadolint configuration
+#
+# Runs against backend/Dockerfile and frontend/Dockerfile in
+# .github/workflows/linting.yml at --failure-threshold warning, so anything
+# warning-or-above fails the build. Suppressions belong here, with a reason.
+
+ignored:
+  # DL3007 "Using latest is prone to errors ... pin to a release tag".
+  #
+  # Deliberate, not an oversight. Both Dockerfiles FROM
+  # ghcr.io/dawg-io/actions-manager/base-{backend,frontend}:latest, and that
+  # tag is mutable on purpose: base-images.yml rebuilds and republishes :latest
+  # weekly and immediately on a CVE fix, so downstream builds pick the patch up
+  # without a commit here. Pinning would strand both images on whatever digest
+  # was current when the pin was written - the opposite of what the base-image
+  # pipeline exists to do.
+  #
+  # The staleness risk hadolint is warning about is handled instead by --pull on
+  # every docker build (see docker-build-and-test.yml), which is required
+  # because pmox-runner is persistent rather than ephemeral and would otherwise
+  # reuse a locally cached base layer.
+  - DL3007
+
+failure-threshold: warning

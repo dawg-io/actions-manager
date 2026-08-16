@@ -285,9 +285,42 @@ test.describe("docs screenshots", () => {
         merged_prs: 1,
         closed_prs: 0,
       },
+      // The creation-time snapshot the card reads: which branch mode the
+      // project is on, and per target the base branch + commit, the PR that
+      // opened against it, and what branch protection was in force. Without
+      // these the card falls back to its bare form and the screenshot stops
+      // matching what the docs describe.
+      campaignExtras: {
+        branch_option: "default",
+        target_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+        base_commits: {
+          "acme-corp/payments-service on main": "9c41f7ab26d3e5108b7c4f0da2e6913d5f8a0b47",
+          "acme-corp/payments-worker on main": "4e83d0c9157fa62b8d0e391c47a5b8206fd1e93c",
+        },
+        target_pr_urls: {
+          "acme-corp/payments-service on main": "https://github.com/acme-corp/payments-service/pull/128",
+          "acme-corp/payments-worker on main": "https://github.com/acme-corp/payments-worker/pull/74",
+        },
+        branch_protection: {
+          "acme-corp/payments-service on main": {
+            status: "protected",
+            required_reviews: 2,
+            required_status_checks: ["ci/build", "ci/test"],
+            enforce_admins: true,
+          },
+          "acme-corp/payments-worker on main": { status: "none" },
+        },
+      },
     });
     await installApiMocks(page, state);
     await seedDocsUserProfile(page);
+
+    // Taller than the shared viewport: the expanded card runs well past 900px,
+    // and the parts the docs describe sit at both ends of it — header tiles and
+    // the rollback control at the top, per-repository base commits and the
+    // bulk-operation buttons at the bottom. `fullPage` cannot reach them, since
+    // the app scrolls an inner container rather than the document.
+    await page.setViewportSize({ width: 1710, height: 1500 });
 
     await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
     await page.getByRole("button", { name: "PR Campaigns" }).click();
@@ -297,7 +330,124 @@ test.describe("docs screenshots", () => {
       .waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/pr-campaigns/pr-campaign.png" });
+    // fullPage: the expanded card is taller than the viewport, and the parts
+    // the docs describe sit at both ends of it — the header tiles and rollback
+    // control at the top, the per-repository base commits and bulk-operation
+    // buttons at the bottom. A viewport shot can only ever show one end.
+    await page.screenshot({
+      path: "../docs/assets/screenshots/pr-campaigns/pr-campaign.png",
+      fullPage: true,
+    });
+  });
+
+  test("PR campaign rollback review", async ({ page }) => {
+    const project = makeProject({
+      project_name: "Payments Platform",
+      project_code: "PAY",
+      github_user: DOCS_USER,
+      last_modified_by: DOCS_USER,
+      updated_at: "2026-07-24T00:00:00Z",
+      pr_state: "open",
+      selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+      workflows: [makeWorkflow({ name: "build-and-test.yml", lastModifiedBy: DOCS_USER })],
+    });
+    // The campaign bumped the runner image everywhere. payments-service can be
+    // inverted cleanly; payments-worker was edited by hand after the merge, so it
+    // is flagged rather than clobbered — the two cases the docs describe.
+    const beforeRollback = [
+      "name: Build and Test",
+      "on:",
+      "  push:",
+      "    branches: [main]",
+      "jobs:",
+      "  build:",
+      "    runs-on: ubuntu-24.04",
+      "    steps:",
+      "      - uses: actions/checkout@v4",
+      "      - run: npm ci",
+      "      - run: npm test",
+      "",
+    ].join("\n");
+    const afterRollback = beforeRollback.replace("ubuntu-24.04", "ubuntu-latest");
+
+    const state = createMockState({
+      projects: [project],
+      prStatus: {
+        project_state: "open",
+        pull_requests: [
+          {
+            repo_name: "acme-corp/payments-service",
+            pr_number: 128,
+            pr_url: "https://github.com/acme-corp/payments-service/pull/128",
+            pr_state: "merged",
+            branch_name: "actions-manager/payments-platform",
+            target_branch: "main",
+            title: "Update build-and-test.yml",
+            author: DOCS_USER,
+            workflow_names: "build-and-test.yml",
+            created_at: "2026-07-01T00:00:00Z",
+            updated_at: "2026-07-24T00:00:00Z",
+            merged_at: "2026-07-24T00:00:00Z",
+          },
+        ],
+        total_prs: 1,
+        open_prs: 0,
+        merged_prs: 1,
+        closed_prs: 0,
+      },
+      rollbackPreview: {
+        campaign_id: 1,
+        campaign_name: "Update build-and-test.yml",
+        invertible_count: 1,
+        targets: [
+          {
+            repo_name: "acme-corp/payments-service",
+            target_branch: "main",
+            pr_number: 128,
+            pr_url: "https://github.com/acme-corp/payments-service/pull/128",
+            workflow_names: "build-and-test.yml",
+            invertible: true,
+            reason: null,
+            files: [
+              {
+                path: ".github/workflows/build-and-test.yml",
+                action: "restore",
+                before: beforeRollback,
+                after: afterRollback,
+              },
+            ],
+          },
+          {
+            repo_name: "acme-corp/payments-worker",
+            target_branch: "main",
+            pr_number: 74,
+            pr_url: "https://github.com/acme-corp/payments-worker/pull/74",
+            workflow_names: "build-and-test.yml",
+            invertible: false,
+            reason:
+              ".github/workflows/build-and-test.yml changed on main after this campaign merged — rolling back would discard that change.",
+            files: [],
+          },
+        ],
+      },
+    });
+    await installApiMocks(page, state);
+    await seedDocsUserProfile(page);
+
+    // Tall enough for the whole dialog: at 900px it cut off mid-way through the
+    // "once the rollback merges" choice, which the docs walk through as a step.
+    await page.setViewportSize({ width: 1710, height: 1200 });
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page.getByRole("button", { name: "PR Campaigns" }).click();
+    // Every PR merged, so the campaign lives in Completed and starts collapsed.
+    await page.getByRole("button", { name: /Completed Campaigns/i }).click();
+    await page.getByText("Campaign: Update build-and-test.yml").click();
+    await page.getByTestId("rollback-campaign-button").first().click();
+    await page.getByTestId("rollback-summary").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/pr-campaigns/pr-campaign-rollback.png" });
   });
 
   test("drift detection — bulk resolve", async ({ page }) => {

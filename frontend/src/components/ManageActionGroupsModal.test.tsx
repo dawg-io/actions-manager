@@ -13,16 +13,17 @@ import {
 } from '../api/actionGroups';
 import type { ActionsProject } from '../api/actionsProjects';
 
+import type { Mock } from 'vitest';
 vi.mock('../api/actionGroups', () => ({
-  createActionGroup: jest.fn(),
-  updateActionGroup: jest.fn(),
-  deleteActionGroup: jest.fn(),
-  addActionToGroup: jest.fn(),
-  removeActionFromGroup: jest.fn(),
+  createActionGroup: vi.fn(),
+  updateActionGroup: vi.fn(),
+  deleteActionGroup: vi.fn(),
+  addActionToGroup: vi.fn(),
+  removeActionFromGroup: vi.fn(),
 }));
 
 vi.mock('../utils/toast', () => ({
-  toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
 // Minimal Dialog shim — renders children directly, same pattern as LinkedWorkflowsModal.test.tsx
@@ -67,20 +68,20 @@ const defaultProps = {
   user: 'test-user',
   projects: [checkout],
   actionGroups: [] as ActionGroup[],
-  onGroupsChange: jest.fn(),
-  onClose: jest.fn(),
+  onGroupsChange: vi.fn(),
+  onClose: vi.fn(),
 };
 
 describe('ManageActionGroupsModal', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('creates a group and reports it to the parent', async () => {
-    (createActionGroup as jest.Mock).mockResolvedValue(deploymentGroup);
-    const onGroupsChange = jest.fn();
+    (createActionGroup as Mock).mockResolvedValue(deploymentGroup);
+    const onGroupsChange = vi.fn();
 
     render(<ManageActionGroupsModal {...defaultProps} onGroupsChange={onGroupsChange} />);
 
@@ -92,8 +93,8 @@ describe('ManageActionGroupsModal', () => {
   });
 
   it('renames a group inline', async () => {
-    (updateActionGroup as jest.Mock).mockResolvedValue({ ...deploymentGroup, name: 'Deploy' });
-    const onGroupsChange = jest.fn();
+    (updateActionGroup as Mock).mockResolvedValue({ ...deploymentGroup, name: 'Deploy' });
+    const onGroupsChange = vi.fn();
 
     render(<ManageActionGroupsModal {...defaultProps} actionGroups={[deploymentGroup]} onGroupsChange={onGroupsChange} />);
 
@@ -109,9 +110,9 @@ describe('ManageActionGroupsModal', () => {
   });
 
   it('deletes a group after confirmation', async () => {
-    (deleteActionGroup as jest.Mock).mockResolvedValue(undefined);
+    (deleteActionGroup as Mock).mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const onGroupsChange = jest.fn();
+    const onGroupsChange = vi.fn();
 
     render(<ManageActionGroupsModal {...defaultProps} actionGroups={[deploymentGroup]} onGroupsChange={onGroupsChange} />);
 
@@ -135,9 +136,9 @@ describe('ManageActionGroupsModal', () => {
 
   it('toggles an action into and out of the selected group', async () => {
     const updatedWithMember = { ...deploymentGroup, actions_project_ids: [1] };
-    (addActionToGroup as jest.Mock).mockResolvedValue(updatedWithMember);
-    (removeActionFromGroup as jest.Mock).mockResolvedValue(deploymentGroup);
-    const onGroupsChange = jest.fn();
+    (addActionToGroup as Mock).mockResolvedValue(updatedWithMember);
+    (removeActionFromGroup as Mock).mockResolvedValue(deploymentGroup);
+    const onGroupsChange = vi.fn();
 
     const { rerender } = render(
       <ManageActionGroupsModal {...defaultProps} actionGroups={[deploymentGroup]} onGroupsChange={onGroupsChange} />

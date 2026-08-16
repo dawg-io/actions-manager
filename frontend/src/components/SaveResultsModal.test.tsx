@@ -6,9 +6,9 @@ import SaveResultsModal from './SaveResultsModal';
 describe('SaveResultsModal Component', () => {
   const defaultProps = {
     isOpen: true,
-    onClose: jest.fn(),
-    onStayOnProject: jest.fn(),
-    onGoToMain: jest.fn(),
+    onClose: vi.fn(),
+    onStayOnProject: vi.fn(),
+    onGoToMain: vi.fn(),
     projectName: 'Test Project',
     results: [],
     isSuccess: true,
@@ -71,7 +71,7 @@ describe('SaveResultsModal Component', () => {
   });
 
   test('should call onClose when close button is clicked', () => {
-    const onClose = jest.fn();
+    const onClose = vi.fn();
     render(
       <SaveResultsModal {...defaultProps} onClose={onClose} />
     );
@@ -83,7 +83,7 @@ describe('SaveResultsModal Component', () => {
   });
 
   test('should call onGoToMain when Go to Main Screen button is clicked', () => {
-    const onGoToMain = jest.fn();
+    const onGoToMain = vi.fn();
     render(
       <SaveResultsModal {...defaultProps} onGoToMain={onGoToMain} />
     );
@@ -93,7 +93,7 @@ describe('SaveResultsModal Component', () => {
   });
 
   test('should call onStayOnProject when Stay on Project button is clicked', () => {
-    const onStayOnProject = jest.fn();
+    const onStayOnProject = vi.fn();
     render(
       <SaveResultsModal {...defaultProps} onStayOnProject={onStayOnProject} />
     );
@@ -119,9 +119,9 @@ describe('SaveResultsModal Component', () => {
   test('should handle optional props with default values', () => {
     const minimalProps = {
       isOpen: true,
-      onClose: jest.fn(),
-      onStayOnProject: jest.fn(),
-      onGoToMain: jest.fn(),
+      onClose: vi.fn(),
+      onStayOnProject: vi.fn(),
+      onGoToMain: vi.fn(),
       projectName: 'Minimal Project'
     };
     render(<SaveResultsModal {...minimalProps} />);

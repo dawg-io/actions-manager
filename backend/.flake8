@@ -15,12 +15,20 @@ exclude =
     migrations,
     static
 
-# Error codes to ignore
+# Error codes to ignore. flake8 does NOT support inline comments inside a
+# multi-line option value - it parses the trailing "# ..." as another error
+# code and dies with "Error code '#' supplied to 'ignore' option does not
+# match '^[A-Z]{1,3}[0-9]{0,3}$'", before linting a single file. Keep the
+# explanations above the list, never on the entries.
+#   E203 - whitespace before ':'
+#   E501 - line too long (handled by max-line-length)
+#   W503 - line break before binary operator
+#   W504 - line break after binary operator
 ignore =
-    E203,  # whitespace before ':'
-    E501,  # line too long (handled by max-line-length)
-    W503,  # line break before binary operator
-    W504,  # line break after binary operator
+    E203,
+    E501,
+    W503,
+    W504,
 
 # Select specific error codes
 select = E,W,F,C

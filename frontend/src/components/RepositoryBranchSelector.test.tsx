@@ -43,8 +43,8 @@ describe('RepositoryBranchSelector', () => {
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1']}
         visibilityScope="public"
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     expect(
@@ -61,8 +61,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1']}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     const row = screen.getByTestId('available-repo-whatsupdawg/test1');
@@ -75,13 +75,13 @@ describe('RepositoryBranchSelector', () => {
   });
 
   it('calls onSelectRepository when an unchecked available row is clicked', async () => {
-    const onSelect = jest.fn();
+    const onSelect = vi.fn();
     render(
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={[]}
         onSelectRepository={onSelect}
-        onRemoveRepository={jest.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     await u.click(screen.getByTestId('available-checkbox-whatsupdawg/test1'));
@@ -89,12 +89,12 @@ describe('RepositoryBranchSelector', () => {
   });
 
   it('calls onRemoveRepository when a checked available row is clicked again', async () => {
-    const onRemove = jest.fn();
+    const onRemove = vi.fn();
     render(
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1']}
-        onSelectRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
         onRemoveRepository={onRemove}
       />,
     );
@@ -103,12 +103,12 @@ describe('RepositoryBranchSelector', () => {
   });
 
   it('calls onRemoveRepository when the selected card X button is pressed', async () => {
-    const onRemove = jest.fn();
+    const onRemove = vi.fn();
     render(
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1']}
-        onSelectRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
         onRemoveRepository={onRemove}
       />,
     );
@@ -121,8 +121,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={[]}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     const search = screen.getByTestId('available-search-input');
@@ -140,8 +140,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={[]}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     expect(screen.getByTestId('selected-empty-state')).toBeInTheDocument();
@@ -153,8 +153,8 @@ describe('RepositoryBranchSelector', () => {
         availableRepositories={[]}
         selectedRepositoryNames={[]}
         loading
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     expect(screen.getByTestId('available-loading')).toHaveTextContent(
@@ -168,8 +168,8 @@ describe('RepositoryBranchSelector', () => {
         availableRepositories={[]}
         selectedRepositoryNames={[]}
         error="boom"
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     expect(screen.getByTestId('available-error')).toHaveTextContent('boom');
@@ -180,8 +180,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1', 'whatsupdawg/test2']}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
         branchConfigSlot={<div data-testid="custom-branch-slot">slot-content</div>}
       />,
     );
@@ -195,8 +195,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1']}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     expect(
@@ -205,9 +205,9 @@ describe('RepositoryBranchSelector', () => {
   });
 
   it('uses onReplaceSelection (and skips onRemove/onSelect) in singleSelect mode when provided', async () => {
-    const onReplace = jest.fn();
-    const onRemove = jest.fn();
-    const onSelect = jest.fn();
+    const onReplace = vi.fn();
+    const onRemove = vi.fn();
+    const onSelect = vi.fn();
     render(
       <RepositoryBranchSelector
         availableRepositories={REPOS}
@@ -227,8 +227,8 @@ describe('RepositoryBranchSelector', () => {
   });
 
   it('falls back to remove+select in singleSelect mode when onReplaceSelection is not provided', async () => {
-    const onRemove = jest.fn();
-    const onSelect = jest.fn();
+    const onRemove = vi.fn();
+    const onSelect = vi.fn();
     render(
       <RepositoryBranchSelector
         availableRepositories={REPOS}
@@ -250,8 +250,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={[]}
         selectedRepositoryNames={['ghost-org/ghost-repo']}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
       />,
     );
     const card = screen.getByTestId('selected-repo-ghost-org/ghost-repo');
@@ -272,8 +272,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={[]}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
         resetSearchKey="standard"
       />,
     );
@@ -289,8 +289,8 @@ describe('RepositoryBranchSelector', () => {
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={[]}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
         resetSearchKey="rwx"
       />,
     );
@@ -300,13 +300,13 @@ describe('RepositoryBranchSelector', () => {
   });
 
   it('triggers onClearSelectedRepositories when "Clear all" is pressed', async () => {
-    const onClear = jest.fn();
+    const onClear = vi.fn();
     render(
       <RepositoryBranchSelector
         availableRepositories={REPOS}
         selectedRepositoryNames={['whatsupdawg/test1']}
-        onSelectRepository={jest.fn()}
-        onRemoveRepository={jest.fn()}
+        onSelectRepository={vi.fn()}
+        onRemoveRepository={vi.fn()}
         onClearSelectedRepositories={onClear}
       />,
     );

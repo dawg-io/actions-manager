@@ -19,29 +19,29 @@ describe('WorkflowImportPanel', () => {
     projectId: 1,
     projectName: 'TestProject',
     githubUser: 'testuser',
-    onImportComplete: jest.fn(),
-    onClose: jest.fn(),
+    onImportComplete: vi.fn(),
+    onClose: vi.fn(),
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('auto-scans on mount and shows scanning state', () => {
-    discoverWorkflows.mockReturnValue(new Promise(() => {})); // never resolves
+    vi.mocked(discoverWorkflows).mockReturnValue(new Promise(() => {})); // never resolves
     render(<WorkflowImportPanel {...defaultProps} />);
     expect(screen.getByTestId('import-scanning')).toBeInTheDocument();
     expect(discoverWorkflows).toHaveBeenCalledWith(1, 'testuser', 'TestProject');
   });
 
   it('renders as a modal overlay', () => {
-    discoverWorkflows.mockReturnValue(new Promise(() => {}));
+    vi.mocked(discoverWorkflows).mockReturnValue(new Promise(() => {}));
     render(<WorkflowImportPanel {...defaultProps} />);
     expect(screen.getByTestId('workflow-import-modal')).toBeInTheDocument();
   });
 
   it('shows empty state when no workflows found', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 0,
       results: [
@@ -64,7 +64,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('only renders unmanaged workflows returned by discovery and Select All counts importable workflows', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 1,
       results: [
@@ -93,7 +93,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows the already-managed empty state when discovery returns no importable workflows', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 0,
       results: [
@@ -120,7 +120,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows discovered workflows with checkboxes, repo, branch, SHA', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 2,
       results: [
@@ -151,7 +151,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows cross-repo indicators per workflow row', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 2,
       workflows_found: 2,
       results: [
@@ -191,7 +191,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('uses unique preview test ids when duplicate filenames exist across repos', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 2,
       workflows_found: 2,
       results: [
@@ -229,7 +229,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('clears preview error when a later preview succeeds', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 1,
       results: [
@@ -245,7 +245,7 @@ describe('WorkflowImportPanel', () => {
       ],
       cross_repo_matches: [],
     });
-    previewWorkflow
+    vi.mocked(previewWorkflow)
       .mockRejectedValueOnce(new Error('Preview failed'))
       .mockResolvedValueOnce({
         repo_name: 'owner/repo1',
@@ -272,7 +272,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('disables import buttons while importing', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 1,
       results: [
@@ -290,7 +290,7 @@ describe('WorkflowImportPanel', () => {
     });
 
     // Make import take a while
-    importWorkflows.mockImplementation(
+    vi.mocked(importWorkflows).mockImplementation(
       () => new Promise((resolve) => setTimeout(() => resolve({ message: 'Done', import_mode: 'save_local_only', results: [], pr_state: 'draft', pr_results: null }), 100))
     );
 
@@ -315,7 +315,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows success message after import', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 1,
       results: [
@@ -332,7 +332,7 @@ describe('WorkflowImportPanel', () => {
       cross_repo_matches: [],
     });
 
-    importWorkflows.mockResolvedValue({
+    vi.mocked(importWorkflows).mockResolvedValue({
       message: 'Imported 1 workflow(s) locally.',
       import_mode: 'save_local_only',
       results: [{ workflow_path: '.github/workflows/ci.yml', source_repo: 'owner/repo1', status: 'success', message: 'ok' }],
@@ -363,7 +363,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows an error when PR campaign creation returns an explicit error payload', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 1,
       results: [
@@ -380,7 +380,7 @@ describe('WorkflowImportPanel', () => {
       cross_repo_matches: [],
     });
 
-    importWorkflows.mockResolvedValue({
+    vi.mocked(importWorkflows).mockResolvedValue({
       message: 'Imported 1 workflow(s) and created PR Campaign.',
       import_mode: 'save_and_create_pr_campaign',
       results: [{ workflow_path: '.github/workflows/ci.yml', source_repo: 'owner/repo1', status: 'success', message: 'ok' }],
@@ -406,7 +406,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows an error when PR campaign creation reports zero PRs created', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 1,
       workflows_found: 1,
       results: [
@@ -423,7 +423,7 @@ describe('WorkflowImportPanel', () => {
       cross_repo_matches: [],
     });
 
-    importWorkflows.mockResolvedValue({
+    vi.mocked(importWorkflows).mockResolvedValue({
       message: 'Imported 1 workflow(s) and created PR Campaign.',
       import_mode: 'save_and_create_pr_campaign',
       results: [{ workflow_path: '.github/workflows/ci.yml', source_repo: 'owner/repo1', status: 'success', message: 'ok' }],
@@ -449,7 +449,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('shows error on discovery failure', async () => {
-    discoverWorkflows.mockRejectedValue(new Error('Network error'));
+    vi.mocked(discoverWorkflows).mockRejectedValue(new Error('Network error'));
 
     render(<WorkflowImportPanel {...defaultProps} />);
 
@@ -459,7 +459,7 @@ describe('WorkflowImportPanel', () => {
   });
 
   it('calls onClose when close button is clicked', async () => {
-    discoverWorkflows.mockResolvedValue({
+    vi.mocked(discoverWorkflows).mockResolvedValue({
       repositories_scanned: 0,
       workflows_found: 0,
       results: [],

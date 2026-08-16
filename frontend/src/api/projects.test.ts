@@ -2,25 +2,26 @@ import apiClient from "./apiClient";
 import { saveProject, updateProjectColor, updateProjectName } from "./projects";
 import config from "../config";
 
+import type { Mocked } from 'vitest';
 vi.mock("./apiClient", () => ({
   __esModule: true,
   default: {
-    post: jest.fn(),
-    put: jest.fn(),
-    patch: jest.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    patch: vi.fn(),
   },
 }));
 
-const mockedApiClient = apiClient as jest.Mocked<typeof apiClient>;
+const mockedApiClient = apiClient as Mocked<typeof apiClient>;
 
 describe("projects API", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.clearAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   const baseProjectData = {

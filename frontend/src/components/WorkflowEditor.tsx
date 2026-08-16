@@ -255,6 +255,13 @@ const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                 workflow={guiWorkflow}
                 onChange={handleGUIWorkflowChange}
                 onValidationChange={handleValidationChange}
+                // GUIWorkflowEditor requires these; this component never
+                // received them, so they were silently undefined at runtime.
+                // Empty is correct here - WorkflowEditor has no action data to
+                // pass. NOTE: this component is not rendered anywhere (only its
+                // own test imports it); UnifiedWorkflowEditor superseded it.
+                importedActions={[]}
+                actionGroups={[]}
               />
             ) : (
               <div className="yaml-editor-container">

@@ -6,7 +6,7 @@ describe('ToastService', () => {
 
   beforeEach(() => {
     service = new ToastService();
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {

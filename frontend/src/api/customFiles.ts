@@ -48,11 +48,11 @@ export const validateFilePath = (path: string): string | null => {
   if (!path?.trim()) return "File path is required";
   const p = path.trim();
   if (p.startsWith("/")) return "Absolute paths are not allowed";
-  const parts = p.replace(/\\/g, "/").split("/");
+  const parts = p.replaceAll("\\", "/").split("/");
   if (parts.includes("..")) return "Path traversal (..) is not allowed";
   if (parts[0] === ".git" || parts.slice(1).includes(".git"))
     return ".git/ paths are not allowed";
-  const basename = parts[parts.length - 1].toLowerCase();
+  const basename = (parts.at(-1) ?? "").toLowerCase();
   if (basename === ".env" || basename.startsWith(".env."))
     return ".env files are not allowed";
   const blocked = [".pem", ".key", ".p12", ".pfx", ".crt", ".cert", ".jks"];

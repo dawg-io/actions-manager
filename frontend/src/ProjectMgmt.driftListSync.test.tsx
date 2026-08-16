@@ -21,8 +21,8 @@ import React from "react";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
-const mockNavigate = jest.fn();
-const mockUseParams = jest.fn();
+const mockNavigate = vi.fn();
+const mockUseParams = vi.fn();
 
 // Capture DriftDetection's onDriftLoaded so tests can simulate a drift check completing
 let capturedOnDriftLoaded: ((details: unknown[]) => void) | null = null;
@@ -40,43 +40,41 @@ vi.mock(
       state: null,
       key: "test",
     }),
-  }),
-  { virtual: true }
-);
+  }));
 
 vi.mock("./api/projects", () => ({
   __esModule: true,
-  fetchProjects: jest.fn(),
-  loadProject: jest.fn(),
-  updateProjectName: jest.fn(),
-  updateProjectColor: jest.fn(),
-  exportProjectBackup: jest.fn(),
-  linkReusableWorkflow: jest.fn(),
-  unlinkReusableWorkflow: jest.fn(),
+  fetchProjects: vi.fn(),
+  loadProject: vi.fn(),
+  updateProjectName: vi.fn(),
+  updateProjectColor: vi.fn(),
+  exportProjectBackup: vi.fn(),
+  linkReusableWorkflow: vi.fn(),
+  unlinkReusableWorkflow: vi.fn(),
 }));
 
 vi.mock("./api/projectDeletion", () => ({
-  deleteProjectEnhanced: jest.fn(),
+  deleteProjectEnhanced: vi.fn(),
 }));
 
 vi.mock("./api/handlers", () => ({
-  handleSaveProjectWithModal: jest.fn(),
+  handleSaveProjectWithModal: vi.fn(),
 }));
 
 vi.mock("./api/secrets", () => ({
-  getSecrets: jest.fn(),
+  getSecrets: vi.fn(),
 }));
 
 vi.mock("./api/envVars", () => ({
-  getEnvVars: jest.fn(),
+  getEnvVars: vi.fn(),
 }));
 
 vi.mock("./api/pullRequests", () => ({
-  getProjectPRStatus: jest.fn(),
+  getProjectPRStatus: vi.fn(),
 }));
 
 vi.mock("./api/codeowners", () => ({
-  getProjectCodeownersStatuses: jest.fn().mockResolvedValue({ statuses: [] }),
+  getProjectCodeownersStatuses: vi.fn().mockResolvedValue({ statuses: [] }),
 }));
 
 vi.mock("./components/Sidebar", () => ({
@@ -237,6 +235,7 @@ import { getSecrets } from "./api/secrets";
 import { getEnvVars } from "./api/envVars";
 import { getProjectPRStatus } from "./api/pullRequests";
 
+import type { Mock } from 'vitest';
 const userDetails = {
   avatar_url: "https://example.com/avatar.png",
   github_user: "alice",
@@ -269,23 +268,23 @@ const fakeDriftDetail = {
 };
 
 function renderWithProject() {
-  return render(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+  return render(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
 }
 
 describe("ProjectMgmt – drift status syncs to project list (stale-list regression)", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     capturedOnDriftLoaded = null;
     capturedDriftedWorkflowNames = null;
     capturedSeededDriftNames = null;
 
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
 
-    (fetchProjects as jest.Mock)
+    (fetchProjects as Mock)
       .mockResolvedValueOnce([{ ...baseProject, drift_status: "clean" }])
       .mockResolvedValue([{ ...baseProject, drift_status: "drifted", drift_count: 1 }]);
 
-    (loadProject as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({
       project_name: "proj-a",
       project_id: 42,
       project_code: "PROJA",
@@ -300,9 +299,9 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
       project_type: "standard",
       pr_state: "new",
     });
-    (getSecrets as jest.Mock).mockResolvedValue([]);
-    (getEnvVars as jest.Mock).mockResolvedValue([]);
-    (getProjectPRStatus as jest.Mock).mockResolvedValue({
+    (getSecrets as Mock).mockResolvedValue([]);
+    (getEnvVars as Mock).mockResolvedValue([]);
+    (getProjectPRStatus as Mock).mockResolvedValue({
       project_state: "new",
       open_prs: 0,
       merged_prs: 0,
@@ -325,7 +324,7 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
 
     // Navigate into the project's detail page - mounts <DriftDetection>.
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
-    rerender(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    rerender(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
 
     await waitFor(() => expect(capturedOnDriftLoaded).not.toBeNull());
 
@@ -340,7 +339,7 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
     await waitFor(() => expect(fetchProjects).toHaveBeenCalledTimes(2));
 
     mockUseParams.mockReturnValue({ user: "alice", projectName: undefined });
-    rerender(<ProjectMgmt userDetails={userDetails} onLogout={jest.fn()} />);
+    rerender(<ProjectMgmt userDetails={userDetails} onLogout={vi.fn()} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("project-drift-in-list")).toHaveTextContent("drifted")
@@ -363,7 +362,7 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
 
   test("drift badge is seeded from the persisted project-load response before the live check resolves", async () => {
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
-    (loadProject as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({
       project_name: "proj-a",
       project_id: 42,
       project_code: "PROJA",
@@ -393,7 +392,7 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
 
   test("persisted drift names are passed to DriftDetection so the banner renders on first paint", async () => {
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
-    (loadProject as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({
       project_name: "proj-a",
       project_id: 42,
       project_code: "PROJA",
@@ -421,7 +420,7 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
 
   test("seeded drift names survive the live check overwriting driftDetails", async () => {
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
-    (loadProject as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({
       project_name: "proj-a",
       project_id: 42,
       project_code: "PROJA",
@@ -453,7 +452,7 @@ describe("ProjectMgmt – drift status syncs to project list (stale-list regress
 
   test("live check result still fully replaces the seeded state once it resolves", async () => {
     mockUseParams.mockReturnValue({ user: "alice", projectName: "proj-a" });
-    (loadProject as jest.Mock).mockResolvedValue({
+    (loadProject as Mock).mockResolvedValue({
       project_name: "proj-a",
       project_id: 42,
       project_code: "PROJA",

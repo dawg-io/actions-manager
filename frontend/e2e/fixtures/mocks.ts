@@ -224,6 +224,21 @@ export interface MockState {
   actionsProjects: ActionsProjectStub[];
   actionGroups: { action_group_id: number; name: string; description: string | null; actions_project_ids: number[] }[];
   actionsProjectPreview: typeof SAMPLE_ACTIONS_PREVIEW;
+  /** Response for /api/campaign-rollback-preview; null when no test needs it. */
+  rollbackPreview: any | null;
+  /**
+   * Body of the last POST /api/campaign-rollback. The choice a user makes in
+   * the dialog only leaves the browser in this request, so asserting it is the
+   * only way to prove the choice was actually carried.
+   */
+  lastRollbackRequest?: Record<string, any>;
+  /**
+   * Extra fields merged onto the built campaign — the creation-time snapshot
+   * (`target_repos`, `base_commits`, `branch_protection`, …) and
+   * `branch_option`. Omitted by default so tests that don't care keep the
+   * plain campaign shape.
+   */
+  campaignExtras?: Record<string, unknown>;
   failNextSave?: boolean;
   failProjectsList?: boolean;
 }
@@ -242,6 +257,8 @@ export function createMockState(initial: Partial<MockState> = {}): MockState {
     actionsProjects: initial.actionsProjects ?? [],
     actionGroups: initial.actionGroups ?? [],
     actionsProjectPreview: initial.actionsProjectPreview ?? SAMPLE_ACTIONS_PREVIEW,
+    rollbackPreview: initial.rollbackPreview ?? null,
+    campaignExtras: initial.campaignExtras,
     failNextSave: initial.failNextSave ?? false,
     failProjectsList: initial.failProjectsList ?? false,
   };
@@ -350,6 +367,7 @@ function buildCampaignsResponse(state: MockState) {
     failed_count: 0,
     completion_percentage: total ? Math.round(((merged + closed) / total) * 100) : 0,
     pull_requests: prs,
+    ...(state.campaignExtras ?? {}),
   }];
   return {
     campaigns,
@@ -510,6 +528,39 @@ export async function installApiMocks(
   await page.route(
     apiPath((p) => p === "/api/project-pr-history"),
     (route) => jsonResponse(route, { history: [] }),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/campaign-rollback-preview"),
+    (route) =>
+      jsonResponse(
+        route,
+        state.rollbackPreview ?? { campaign_id: 1, campaign_name: "", targets: [], invertible_count: 0 },
+      ),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/campaign-rollback"),
+    (route) => {
+      try {
+        state.lastRollbackRequest = JSON.parse(route.request().postData() ?? "{}");
+      } catch {
+        state.lastRollbackRequest = {};
+      }
+      const invertible = (state.rollbackPreview?.targets ?? []).filter((t: any) => t.invertible);
+      return jsonResponse(route, {
+        campaign_id: 2,
+        prs_created: invertible.length,
+        results: Object.fromEntries(
+          invertible.map((t: any) => [`${t.repo_name} on ${t.target_branch}`, { status: "pr_created" }]),
+        ),
+        skipped: (state.rollbackPreview?.targets ?? [])
+          .filter((t: any) => !t.invertible)
+          .map((t: any) => ({
+            repo_name: t.repo_name,
+            target_branch: t.target_branch,
+            reason: t.reason ?? "not invertible",
+          })),
+      });
+    },
   );
 
   // Create / merge / close PRs
