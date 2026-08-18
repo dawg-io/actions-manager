@@ -72,6 +72,8 @@ Do **not** place a personal PAT in the Docker command line or shell history. Sta
 
 ## Step 4: Create Your First Project
 
+> **First time signing in?** ActionsManager shows a short welcome screen before the dashboard, offering a guided tour that walks you through creating a project, adding a workflow, and delivering it as a pull request. Choose **Show me around** to take it, or **Not now** to go straight to the dashboard. You can start it again later from **Restart tour** in the user menu.
+
 1. Click **New Project** in the dashboard
 2. Choose a project type:
    - **Caller Workflow Project** — manages repositories that call reusable workflows

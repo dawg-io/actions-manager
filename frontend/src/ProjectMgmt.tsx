@@ -47,6 +47,7 @@ import "./styles/projectMgmt.css";
 import "./styles/driftDetection.css";
 import "./styles/prTracking.css";
 import { toast } from './utils/toast';
+import { tour } from './utils/tour';
 import ConfirmDialog from './components/ConfirmDialog';
 
 // Constant empty array to prevent unnecessary re-renders
@@ -1242,6 +1243,9 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       
       // Clear manual input fields after successful save
       if (result.success) {
+        // "Commit Locally" is this same save with updateGitHub false, which is
+        // the step the tour is waiting on.
+        if (!shouldUpdateGitHub) tour.completed("commit-workflow");
         setManualEnvVars([{ env_key: "", value: "", repo: "" }]);
         setManualSecrets([{ name: "", value: "", repo: "" }]);
         setManualEnvironments([{ name: "" }]);
@@ -1398,12 +1402,18 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     }
     // Safety: opening a PR pushes local content to GitHub, which would silently
     // overwrite drifted workflows.  Confirm before proceeding.
-    ifNotDrifted('Create Pull Requests', () => setShowCreatePRModal(true));
+    ifNotDrifted('Create Pull Requests', () => {
+      setShowCreatePRModal(true);
+      // Fired here, not on the button, so it only counts once the modal is
+      // really open — the drift guard can cancel this.
+      tour.completed("create-campaign");
+    });
   };
 
   // Function to handle successful PR creation
   const handlePRCreationSuccess = (selectedWorkflowNames: string[], selectedReusableWorkflowNames: string[], selectedCustomFileIds: number[], selectedCodeownersRepos: string[] = []): void => {
     console.log("✅ PRs created successfully");
+    tour.completed("confirm-campaign");
     // Reload PR status
     if (projectName) {
       loadPRStatus(projectName);
@@ -1496,9 +1506,17 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   }, []);
 
   // Function to open the PR Campaigns workspace
+  // Every section change goes through here, so the tour sees the PR Campaigns
+  // view being opened however the user got there — sidebar or the campaign
+  // banner's Manage button.
+  const handleSectionChange = (section: string): void => {
+    setActiveSection(section);
+    if (section === 'pr-history') tour.completed("open-campaigns");
+  };
+
   const handleTogglePRStatusPanel = (): void => {
     setShowPRStatusPanel(false);
-    setActiveSection('pr-history');
+    handleSectionChange('pr-history');
   };
 
   // Function to render the content based on active section
@@ -2250,7 +2268,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       {projectName && (
         <Sidebar 
           activeSection={REPO_CONFIG_SECTION_KEYS.includes(activeSection) ? scrollActiveSection : activeSection}
-          onSectionChange={setActiveSection}
+          onSectionChange={handleSectionChange}
           projectName={projectName}
           onProjectNameSave={handleProjectNameSave}
           projectCode={projectCode}
@@ -2489,6 +2507,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                 {/* Create Pull Requests button - show for workflows/rxworkflows; disabled when no local commits are ready */}
                 {shouldShowPRButton && (
                   <button 
+                    data-testid="create-pull-requests-button"
                     className="action-button primary" 
                     onClick={isProjectReadOnly ? undefined : handleOpenCreatePRModal}
                     disabled={isProjectReadOnly || isPRButtonDisabled}

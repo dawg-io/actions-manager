@@ -5,7 +5,7 @@ import {
   makeProject,
   seedAuthenticatedSession,
 } from "../e2e/fixtures/mocks";
-import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
+import { DOCS_USER, seedDocsRepos, seedDocsUserProfile } from "./docs-fixtures";
 
 /**
  * Regenerates the "First Workflow Walkthrough" screenshots
@@ -14,9 +14,14 @@ import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
  * changes. Run with `npm run docs:screenshots`.
  *
  * Not every walkthrough image is regenerated here — 01/02 (login screen) and
- * 04/05/06/09/14 aren't driven by this suite; add a test for them the same
+ * 04/06/09/14 aren't driven by this suite; add a test for them the same
  * way if they ever need a refresh. 13-save-draft-confirmation.png is no
  * longer referenced by the walkthrough doc and is left alone.
+ *
+ * The 03a/03b/05a images cover the first-login welcome screen and guided
+ * tour. They seed onboarding state explicitly; every other test here leaves
+ * it out so the tour never intrudes on a screenshot documenting something
+ * else.
  */
 
 test.describe("docs screenshots — walkthrough", () => {
@@ -111,6 +116,55 @@ test.describe("docs screenshots — walkthrough", () => {
 
     await page.screenshot({
       path: "../docs/assets/screenshots/walkthrough/12-workflow-editor-unsaved.png",
+    });
+  });
+
+  test("first-login welcome screen", async ({ page }) => {
+    await installApiMocks(page, createMockState({ projects: [] }));
+    await seedDocsUserProfile(page, { completed: false, completed_at: null, step: null });
+
+    await page.goto(`/project/${DOCS_USER}`);
+    await page.getByTestId("onboarding-welcome").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/walkthrough/03a-welcome-screen.png",
+    });
+  });
+
+  test("guided tour pointing at New Project", async ({ page }) => {
+    await installApiMocks(page, createMockState({ projects: [] }));
+    await seedDocsUserProfile(page, {
+      completed: false,
+      completed_at: null,
+      step: "open-wizard",
+    });
+
+    await page.goto(`/project/${DOCS_USER}`);
+    await page.getByTestId("tour-callout").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/walkthrough/03b-tour-new-project.png",
+    });
+  });
+
+  test("create a demo repository during the tour", async ({ page }) => {
+    await installApiMocks(page, createMockState({ projects: [] }));
+    await seedDocsUserProfile(page, {
+      completed: false,
+      completed_at: null,
+      step: "pick-repos",
+    });
+    await seedDocsRepos(page);
+
+    await page.goto(`/project/${DOCS_USER}/new`);
+    await page.getByTestId("wizard-continue").click();
+    await page.getByTestId("create-demo-repo-button").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/walkthrough/05a-create-demo-repository.png",
     });
   });
 });

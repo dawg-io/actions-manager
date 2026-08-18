@@ -219,6 +219,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           {/* PR Campaigns – rollout management and audit */}
           <button
+            data-testid="pr-campaigns-nav"
             className={`sidebar-item ${activeSection === 'pr-history' ? 'active' : ''}`}
             aria-label="PR Campaigns"
             onClick={() => handleSectionChange('pr-history')}

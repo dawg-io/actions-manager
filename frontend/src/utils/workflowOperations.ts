@@ -7,6 +7,7 @@ import { RwxWorkflow } from '../api/projects';
 import { normalizeWorkflowStem, setWorkflowYamlName } from './workflowFilename';
 import { toast } from './toast';
 import { WorkflowGUI } from './workflowGuiConversion';
+import { tour } from './tour';
 
 // Save Draft functionality
 export const saveDraftWorkflow = async (
@@ -76,6 +77,9 @@ export const saveDraftWorkflow = async (
     if (markWorkflowAsSaved) {
       markWorkflowAsSaved(index, type, newWorkflowStatus);
     }
+    // This is the "Commit Locally" the tour points at — the editor's primary
+    // action routes here, not through ProjectMgmt's toolbar save.
+    tour.completed('commit-workflow');
     toast.success(`Workflow '${stem}.yml' saved as draft.`);
     
     // Update count for free accounts

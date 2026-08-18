@@ -107,6 +107,12 @@ class Account(Base):
     github_pat_checked_at = Column(DateTime, nullable=True)  # Last PAT validation timestamp
     github_pat_updated_at = Column(DateTime, nullable=True)  # Last PAT save / replace timestamp
 
+    # First-login onboarding (welcome screen + guided tour).
+    # Set on finish AND on dismiss, so NULL means "never shown" rather than
+    # "not finished" — otherwise a user who skips the tour is prompted forever.
+    onboarding_completed_at = Column(DateTime, nullable=True)
+    onboarding_step = Column(String(40), nullable=True)  # Furthest tour step reached, for resume
+
     projects = relationship("Project", back_populates="user")
     workspace_membership = relationship("WorkspaceMember", back_populates="user", uselist=False)
     actions_projects = relationship("ActionsProject", back_populates="user")

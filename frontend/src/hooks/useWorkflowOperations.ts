@@ -4,6 +4,7 @@ import { Workflow, RXWorkflow, DetectedBuildResult, BuildType, WorkflowTemplate 
 import { RwxWorkflow, unlinkReusableWorkflow } from '../api/projects';
 import { saveDraftWorkflow, commitAndUpdatePRWorkflow, commitAndUpdatePRLinkedWorkflow, saveDraftLinkedWorkflow, deleteWorkflow, createBlankWorkflow } from '../utils/workflowOperations';
 import { detectBuildTypesForRepos, addWorkflowFromDetection, generateTemplates, selectTemplate } from '../utils/buildDetectionUtils';
+import { tour } from '../utils/tour';
 
 export interface UseWorkflowOperationsProps {
   workflows: Workflow[];
@@ -177,12 +178,16 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
       template, isReusable, projectName, workflows, setWorkflows, 
       setRXWorkflows, setSelectedWorkflowId, setShowTemplateModal, pendingWorkflowName
     );
+    // The template path only really creates the workflow here, not when the
+    // dialog closes, so this is the honest completion point for both routes.
+    tour.completed('start-workflow');
     setPendingWorkflowName(null);
   }, [projectName, workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId, setShowTemplateModal, pendingWorkflowName]);
 
   // Create blank workflow wrapper
   const handleCreateBlankWorkflow = useCallback((type: 'regular' | 'reusable', workflowName: string): void => {
     createBlankWorkflow(type, workflowName, workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId);
+    tour.completed('start-workflow');
     setShowWorkflowCreationDialog(false);
     setWorkflowCreationType(null);
   }, [workflows, setWorkflows, setRXWorkflows, setSelectedWorkflowId, setShowWorkflowCreationDialog, setWorkflowCreationType]);
@@ -191,10 +196,14 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
   const openWorkflowCreationDialog = useCallback(() => {
     setShowWorkflowCreationDialog(true);
     setWorkflowCreationType(null);
+    // Opening the dialog is what "Add a workflow" asked for; the choices
+    // inside it are the next two steps.
+    tour.completed('add-workflow');
   }, [setShowWorkflowCreationDialog, setWorkflowCreationType]);
 
   const selectWorkflowType = useCallback((type: 'regular' | 'reusable') => {
     setWorkflowCreationType(type);
+    tour.completed('choose-workflow-type');
   }, [setWorkflowCreationType]);
 
   const handleCreateFromTemplates = useCallback((type: 'regular' | 'reusable', workflowName: string) => {

@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import PRHistoryPanel from './PRHistoryPanel';
 import { createCampaignRollback, getPRCampaigns, mergePullRequest, previewCampaignRollback, type PRCampaign } from '../api/pullRequests';
+import { tour } from '../utils/tour';
+import { TOUR_STEPS } from './OnboardingTour';
 
 import type { Mock } from 'vitest';
 vi.mock('../api/pullRequests', () => ({
@@ -464,6 +466,59 @@ describe('PRHistoryPanel as PR Campaigns', () => {
     await userEvent.click(screen.getByRole('button', { name: /Completed Campaigns/i }));
     expect(await screen.findByText(/Status:/)).toHaveTextContent('Completed');
     expect(screen.queryByText('Merge Open PRs')).not.toBeInTheDocument();
+  });
+
+  test('reports the guided tour step when a PR is merged here', async () => {
+    // This panel is where merging actually happens. The signal used to live in
+    // PRStatusPanel, which nothing ever opens, so the tour's last step could
+    // never complete and its closing screen was unreachable.
+    const completed = vi.spyOn(tour, 'completed');
+    mockMergePullRequest.mockResolvedValue({ merged: true });
+    mockGetPRCampaigns.mockResolvedValue({
+      ...baseResponse,
+      campaigns: [{
+        campaign_id: 'campaign-1',
+        campaign_name: 'Update okok.yml',
+        campaign_status: 'open',
+        project_name: 'history_project',
+        project_code: 'HPS',
+        created_by: 'aireland1010',
+        created_at: '2026-05-21T06:00:00+00:00',
+        updated_at: '2026-05-21T06:05:00+00:00',
+        completed_at: null,
+        target_branches: ['main'],
+        workflow_names: ['okok.yml'],
+        repositories: ['org/repo'],
+        open_count: 1,
+        merged_count: 0,
+        closed_count: 0,
+        failed_count: 0,
+        completion_percentage: 0,
+        pull_requests: [openPR],
+      }],
+      pull_requests: [openPR],
+      total_campaigns: 1,
+      active_campaigns: 1,
+      open_prs: 1,
+      repositories_affected: 1,
+    });
+
+    render(<PRHistoryPanel user="historyuser" projectName="history_project" />);
+
+    await screen.findByText('Campaign: Update okok.yml');
+    await userEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Merge Open PRs' }).pop()!);
+
+    await waitFor(() => expect(completed).toHaveBeenCalledWith('resolve-pr'));
+    completed.mockRestore();
+  });
+
+  test('the merge button carries the tour anchor', () => {
+    // Pinned because the anchor previously sat on a component that never
+    // mounts, which is not visible from any behavioural test.
+    expect(
+      TOUR_STEPS.find((step) => step.id === 'resolve-pr')?.targetTestId,
+    ).toBe('pr-merge-button');
   });
 
   test('refresh failure after successful mutation shows the requested warning', async () => {

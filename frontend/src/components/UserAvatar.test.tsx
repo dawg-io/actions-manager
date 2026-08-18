@@ -59,8 +59,10 @@ vi.mock('./ui', () => {
       const { open } = React.useContext(MenuContext);
       return open ? <div role="menu" className={className}>{children}</div> : null;
     },
-    DropdownMenuItem: ({ children, onClick, className }: any) => (
-      <button type="button" role="menuitem" onClick={onClick} className={className}>
+    // Forwards the rest of the props: dropping them silently made a
+    // data-testid assertion pass for the wrong reason.
+    DropdownMenuItem: ({ children, onClick, className, ...rest }: any) => (
+      <button type="button" role="menuitem" onClick={onClick} className={className} {...rest}>
         {children}
       </button>
     ),
@@ -82,6 +84,7 @@ import { render, fireEvent, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import UserAvatar from './UserAvatar';
 import { ThemeProvider } from './ThemeContext';
+import { tour } from '../utils/tour';
 
 vi.mock('../api/user', () => ({
   getGitHubTokenStatus: vi.fn(),
@@ -583,5 +586,39 @@ describe('UserAvatar Component', () => {
 
     const accountNames = screen.getAllByTitle(longUsername);
     expect(accountNames.some((accountName) => accountName.className.includes('truncate'))).toBe(true);
+  });
+
+  describe('Restart tour', () => {
+    const openMenu = () => openUserMenu('User menu for testuser');
+
+    test('asks the tour to start over and returns to the dashboard', () => {
+      const requested = vi.fn();
+      const unsubscribe = tour.onRestartRequested(requested);
+      try {
+        renderWithTheme(
+          <UserAvatar accountType="pro" avatarUrl={null} username="testuser" workspaceRole="admin" />,
+        );
+        openMenu();
+
+        fireEvent.click(screen.getByTestId('restart-tour'));
+
+        expect(requested).toHaveBeenCalledTimes(1);
+        // Step one points at New Project, which is on the projects dashboard.
+        expect(mockNavigate).toHaveBeenCalledWith('/project/testuser');
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    test('is not offered to read-only members', () => {
+      // They cannot create a project, and the write that records tour progress
+      // is rejected for them — same reason the welcome screen skips them.
+      renderWithTheme(
+        <UserAvatar accountType="pro" avatarUrl={null} username="testuser" workspaceRole="read_only" />,
+      );
+      openMenu();
+
+      expect(screen.queryByTestId('restart-tour')).not.toBeInTheDocument();
+    });
   });
 });

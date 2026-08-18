@@ -62,6 +62,29 @@ def setup_database():
 
 
 @pytest.fixture(autouse=True)
+def shared_db_overrides():
+    """Re-assert the shared get_db overrides before every test.
+
+    `auth.get_db`, `codeowners.get_db` and `database.get_db` are all the same
+    function object, so a module that installs "its own" override and then
+    pops it in teardown deletes the process-wide override installed above.
+    Every auth-dependent test that ran afterwards resolved against the real
+    app database instead and got a 401 — which only stayed hidden because the
+    modules that do this sort alphabetically after the tests they broke.
+
+    Re-asserting per test is cheaper than trusting each module's teardown, and
+    it keeps working when the next module does the same thing.
+
+    setdefault, not assignment: plenty of modules deliberately point get_db at
+    their own database at import time, and those must keep winning. This only
+    fills the override back in when something has removed it entirely.
+    """
+    app.dependency_overrides.setdefault(get_db, override_get_db)
+    app.dependency_overrides.setdefault(auth_get_db, override_get_db)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def cleanup_database():
     """Clean up database after each test"""
     yield

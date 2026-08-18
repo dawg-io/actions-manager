@@ -1129,7 +1129,7 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
           ) : (
             <>
               <Button onClick={onClose} variant="secondary" disabled={creating}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={creating || !canCreate}>
+              <Button data-testid="confirm-create-prs" onClick={handleCreate} disabled={creating || !canCreate}>
                 {createButtonText(creating, preflightConfigured, totalPRTargetRepos.size, totalSelectedWorkflows, selectedCustomFileIds.size + (selectedCodeownersRepos.size > 0 ? 1 : 0))}
               </Button>
             </>

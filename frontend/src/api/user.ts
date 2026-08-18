@@ -27,7 +27,17 @@ export interface UserDetails {
   rate_limit?: RateLimitInfo;
   workspace_role?: string;
   github_token?: GitHubTokenStatus;
+  onboarding?: OnboardingState;
   [key: string]: any;
+}
+
+// First-login onboarding state (welcome screen + guided tour).
+// `completed` is true once the user has either finished or dismissed
+// onboarding, so a false value means it has never been shown.
+export interface OnboardingState {
+  completed: boolean;
+  completed_at: string | null;
+  step: string | null;
 }
 
 export interface GitHubTokenStatus {
@@ -217,6 +227,38 @@ export const loginWithGitHubToken = async (token: string): Promise<LoginWithGitH
     throw new Error(data?.detail || `GitHub token login failed: ${response.status}`);
   }
   return data as LoginWithGitHubTokenResult;
+};
+
+/**
+ * Record onboarding progress or completion for the signed-in user.
+ *
+ * Read-only workspace members cannot call this — WriteProtectionMiddleware
+ * rejects every /api/* write for them — so callers must not offer onboarding
+ * to a read_only user in the first place.
+ */
+export const updateOnboardingState = async (
+  username: string,
+  state: { step?: string; completed?: boolean },
+): Promise<OnboardingState | null> => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/user/${username}/onboarding`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to update onboarding state: ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    // Best-effort: failing to record the dismissal only means the welcome
+    // screen is offered again next login, which must not break the app.
+    console.error("❌ Error updating onboarding state:", error);
+    return null;
+  }
 };
 
 export const logout = async (): Promise<boolean> => {

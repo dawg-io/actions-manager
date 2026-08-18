@@ -52,17 +52,18 @@ Cloud/SaaS, Marketplace billing, and paid licensing documents may remain in this
 After starting the container and opening `http://localhost:8080`, follow these steps for the first-time beta user happy path:
 
 1. **Sign in with a PAT** — choose **Sign in with Personal Access Token** and paste a fine-grained or classic GitHub PAT.
-2. **Saved Projects dashboard** — after login you land here. Click **New Project**.
-3. **Create a Caller Workflow Project** — enter a project name, choose **Caller Workflow Project**, and pick a color.
-4. **Select repositories** — choose public or private visibility, then select one or more repositories to manage.
-5. **Review resource naming** — keep **Prefix Mode** enabled unless you intentionally want unmanaged filenames. Review the summary and create the project.
-6. **Project workspace** — the empty workspace shows **Import Existing**, **Create Pull Requests**, and **Add Workflow**. Click **Add Workflow**.
-7. **Choose workflow type** — select **Regular Workflow**.
-8. **Configure the workflow** — enter a name and choose **Open Blank Workflow**, **Detect Build Types**, or **Generate Templates**.
-9. **Review the YAML editor** — the editor shows the prefixed filename, selected repository, and **Unsaved** state.
-10. **Save as a local draft** — click **Commit Locally**, confirm in the modal.
-11. **New Local status** — the editor shows the **New Local** badge and a toast confirms the draft is saved.
-12. **Create pull requests when ready** — return to the workspace and click **Create Pull Requests** to propose the workflow to GitHub. PR-based delivery is recommended for beta testing.
+2. **Welcome screen** — on a first sign-in ActionsManager introduces itself and offers a guided tour of the steps below. Choose **Show me around** to take it, or **Not now** to skip. The tour highlights the control you need next and waits for you to perform each action — it never clicks anything for you. Restart it any time from **Restart tour** in the user menu.
+3. **Saved Projects dashboard** — after login you land here. Click **New Project**.
+4. **Create a Caller Workflow Project** — enter a project name, choose **Caller Workflow Project**, and pick a color.
+5. **Select repositories** — choose public or private visibility, then select one or more repositories to manage.
+6. **Review resource naming** — keep **Prefix Mode** enabled unless you intentionally want unmanaged filenames. Review the summary and create the project.
+7. **Project workspace** — the empty workspace shows **Import Existing**, **Create Pull Requests**, and **Add Workflow**. Click **Add Workflow**.
+8. **Choose workflow type** — select **Regular Workflow**.
+9. **Configure the workflow** — enter a name and choose **Open Blank Workflow**, **Detect Build Types**, or **Generate Templates**.
+10. **Review the YAML editor** — the editor shows the prefixed filename, selected repository, and **Unsaved** state.
+11. **Save as a local draft** — click **Commit Locally**, confirm in the modal.
+12. **New Local status** — the editor shows the **New Local** badge and a toast confirms the draft is saved.
+13. **Create pull requests when ready** — return to the workspace and click **Create Pull Requests** to propose the workflow to GitHub. PR-based delivery is recommended for beta testing.
 
 > **Saving a draft does not push to GitHub.** A saved draft exists only in ActionsManager until you create pull requests or use direct commit mode.
 

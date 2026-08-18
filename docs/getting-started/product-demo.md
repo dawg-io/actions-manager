@@ -42,7 +42,7 @@ Can't load the embedded player above? Watch it directly on YouTube instead:
 
 The demo walks through a complete rollout to a multi-repository Maven project:
 
-1. **Authenticate using a GitHub PAT** — sign in with a fine-grained or classic personal access token.
+1. **Authenticate using a GitHub PAT** — sign in with a fine-grained or classic personal access token. On a first sign-in, a welcome screen offers a guided tour of everything below.
 2. **Create the `MavenBuilds` Caller Workflow Project** — set up a project to manage a group of repositories.
 3. **Add three repositories** — bring the target repos under management.
 4. **Detect the Maven build type** — ActionsManager inspects each repository and identifies its build type.

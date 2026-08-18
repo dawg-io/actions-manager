@@ -30,13 +30,28 @@ export const fetchRepos = async (
   }
 };
 
+/**
+ * Create a GitHub repository for the signed-in user.
+ *
+ * Omitting `options.name` keeps the historical behaviour of creating the
+ * `am-reuseable-workflow` repository, which is what the reusable-workflow flow
+ * relies on. `visibility` is now actually honoured — the backend previously
+ * hardcoded private regardless of what was passed.
+ */
 export const createGitHubRepo = async (
   user: string | undefined,
   visibility: string,
-  owner?: string
+  owner?: string,
+  options?: { name?: string; description?: string }
 ): Promise<unknown> => {
   try {
-    const payload: Record<string, unknown> = { user, visibility };
+    const payload: Record<string, unknown> = {
+      user,
+      visibility,
+      private: visibility !== "public",
+    };
+    if (options?.name) payload.name = options.name;
+    if (options?.description) payload.description = options.description;
     if (owner && owner !== user) payload.owner = owner;
     const response = await apiClient.post(`${BACKEND_URL}/api/create-repo`, payload);
     return response.data;
