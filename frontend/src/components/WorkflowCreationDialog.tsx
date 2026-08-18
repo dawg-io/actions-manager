@@ -10,6 +10,9 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Button } from './ui/button';
+import { tour } from '../utils/tour';
+
+const DEMO_WORKFLOW_NAME = 'demo-workflow';
 
 interface WorkflowCreationDialogProps {
   showWorkflowCreationDialog: boolean;
@@ -68,6 +71,13 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
   useEffect(() => {
     if (!showWorkflowCreationDialog) {
       setWorkflowName('');
+      return;
+    }
+    // The tour fills forms in so the user only has to press buttons; without a
+    // name the "Open Blank Workflow" button stays disabled and the step for it
+    // would be pointing at a control that cannot be clicked.
+    if (tour.isActive()) {
+      setWorkflowName((current) => current || DEMO_WORKFLOW_NAME);
     }
   }, [showWorkflowCreationDialog]);
 
@@ -151,6 +161,7 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
             
             <div className="grid gap-4">
               <button
+                data-testid="workflow-type-regular"
                 className="border-2 border-slate-200 rounded-lg p-4 hover:border-blue-500 transition-all text-left dark:border-slate-700 dark:hover:border-blue-400"
                 onClick={() => selectWorkflowType('regular')}
               >
@@ -340,6 +351,7 @@ const WorkflowCreationDialog: React.FC<WorkflowCreationDialogProps> = ({
             
             <div className="grid gap-3">
               <button
+                data-testid="workflow-start-blank"
                 className="border border-slate-200 rounded-lg p-4 hover:border-blue-500 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed dark:border-slate-700 dark:hover:border-blue-400"
                 onClick={() => createBlankWorkflow(workflowCreationType, normalizedWorkflowName)}
                 disabled={!isWorkflowNameValid}

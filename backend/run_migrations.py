@@ -61,6 +61,7 @@ MIGRATION_SCRIPTS = [
     "migrate_revoke_seed_workspace_membership.py", # Takes workspace admin off the seed account and restores it to the installer
     "migrate_add_campaign_snapshot.py",            # Adds target_repos/base_commits/policy_version snapshot columns to project_pr_campaigns
     "migrate_add_campaign_rollback.py",            # Adds rollback_of_campaign_id/rollback_am_action to project_pr_campaigns
+    "migrate_add_onboarding_state.py",             # Adds onboarding_completed_at/onboarding_step to accounts (first-login welcome + tour)
     # Must stay last: purges rows orphaned while SQLite foreign keys were
     # disabled, so every table it cleans has to exist by the time it runs.
     "migrate_add_project_workflow_unique.py",      # Enforces one project per workflow (drift hardening PR 4)

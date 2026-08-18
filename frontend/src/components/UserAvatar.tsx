@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useTheme } from './ThemeContext';
-import { ChevronDown, Sun, Moon, LogOut } from 'lucide-react';
+import { ChevronDown, Sun, Moon, LogOut, Compass } from 'lucide-react';
 import { getGitHubTokenStatus, removeGitHubToken, saveGitHubToken, testGitHubToken } from '../api/user';
 import type { GitHubTokenStatus } from '../api/user';
 import {
@@ -18,6 +18,7 @@ import {
   Input,
 } from './ui';
 import { getDocsUrl } from '../help/helpLinks';
+import { tour } from '../utils/tour';
 
 // Define the props interface for the UserAvatar component
 interface RateLimitInfo {
@@ -70,6 +71,12 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
     setTokenStatus(githubToken);
     setTokenFeedback(githubToken?.message ?? null);
   }, [githubToken]);
+
+  const handleRestartTour = (): void => {
+    tour.requestRestart();
+    // Step one points at New Project, which lives on the dashboard.
+    if (username) navigate(`/project/${username}`);
+  };
 
   const handleThemeToggle = (): void => {
     toggleTheme();
@@ -506,6 +513,20 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
           <span className="mr-2">💾</span>
           <span>Backup</span>
         </DropdownMenuItem>
+
+        {/* Restart the guided tour. Hidden for read-only members for the same
+            reason the welcome screen is: they cannot create a project, and the
+            write that records progress is rejected for them. */}
+        {workspaceRole !== 'read_only' && (
+          <DropdownMenuItem
+            className="cursor-pointer"
+            data-testid="restart-tour"
+            onClick={handleRestartTour}
+          >
+            <Compass className="mr-2 h-4 w-4" />
+            <span>Restart tour</span>
+          </DropdownMenuItem>
+        )}
 
         {/* Theme Toggle */}
         <DropdownMenuItem 

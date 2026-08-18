@@ -464,7 +464,7 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
                 onClick={primaryAction.onClick}
                 disabled={primaryAction.disabled}
                 title={primaryAction.title}
-                data-testid={isUnlockedPR ? "update-pr-button" : undefined}
+                data-testid={isUnlockedPR ? "update-pr-button" : "commit-locally-button"}
               >
                 {primaryAction.text}
               </button>
@@ -1079,7 +1079,7 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
           {(addWorkflowFn || onImportExisting) && (
             <div className="empty-state-actions">
               {!isReadOnly && addWorkflowFn && (
-                <Button onClick={addWorkflowFn}>
+                <Button data-testid="add-workflow-button" onClick={addWorkflowFn}>
                   <FilePlus2 className="h-4 w-4" aria-hidden="true" />
                   Add Workflow
                 </Button>

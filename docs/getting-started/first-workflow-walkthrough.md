@@ -28,18 +28,19 @@ This walkthrough covers the end-to-end happy path for a first-time self-hosted b
 
 1. Open the login screen
 2. Enter your Personal Access Token and sign in
-3. View the empty Saved Projects dashboard
-4. Create a new project — Project Basics
-5. Create a new project — Select Repositories
-6. Create a new project — Review and confirm
-7. View the updated dashboard with your new project
-8. Open the project workspace
-9. Add your first workflow from the workspace
-10. Choose the workflow type
-11. Configure Regular Workflow options
-12. Review and edit workflow YAML in the editor
-13. Confirm the save-draft prompt
-14. View the saved draft state
+3. Meet the welcome screen and choose whether to take the guided tour
+4. View the empty Saved Projects dashboard
+5. Create a new project — Project Basics
+6. Create a new project — Select Repositories
+7. Create a new project — Review and confirm
+8. View the updated dashboard with your new project
+9. Open the project workspace
+10. Add your first workflow from the workspace
+11. Choose the workflow type
+12. Configure Regular Workflow options
+13. Review and edit workflow YAML in the editor
+14. Confirm the save-draft prompt
+15. View the saved draft state
 
 **Important:** Saving a draft does **not** push any changes to GitHub. A saved draft exists only in ActionsManager until you create pull requests. PR-based delivery is the recommended path during beta testing.
 
@@ -68,7 +69,36 @@ Click **Sign In** to authenticate.
 
 ---
 
-## Step 3 — Saved Projects Dashboard
+## Step 3 — Welcome Screen and the Guided Tour
+
+The first time you sign in, ActionsManager introduces itself before you reach the dashboard. The welcome screen explains what the product does in three points: projects group repositories, changes are delivered as pull requests, and drift detection tells you when a repository has diverged from the workflow you expect.
+
+![First-login welcome screen introducing ActionsManager, with Not now and Show me around buttons](../assets/screenshots/walkthrough/03a-welcome-screen.png)
+
+You have two choices:
+
+- **Not now** — dismisses the welcome screen and takes you straight to the dashboard. It will not appear again.
+- **Show me around** — starts a guided tour that walks you through this entire walkthrough inside the product.
+
+Either way you can carry on with the steps below. The rest of this page documents the flow without the tour running.
+
+### What the guided tour does
+
+The tour highlights the control you need next and explains the choice in front of you, one step at a time. It waits for you to actually perform each action — it never clicks anything on your behalf, because from the pull request step onward those are real changes to your repositories.
+
+![Guided tour highlighting the New Project button with an explanation beside it](../assets/screenshots/walkthrough/03b-tour-new-project.png)
+
+While the tour runs it also fills in the Create Project form for you — a demo project name, a colour, and Prefix Mode — so you can read each explanation rather than inventing values. You can change any of them.
+
+The tour is not modal: the rest of the app stays usable while it is on screen. Press **Skip tour**, or the Escape key, to end it at any point without losing work.
+
+You can start it again later from **Restart tour** in the user menu (top right).
+
+> **Note:** the welcome screen and tour are only offered to members who can create projects. If your workspace administrator has given you read-only access, you will go straight to the dashboard.
+
+---
+
+## Step 4 — Saved Projects Dashboard
 
 After signing in you land on the **Saved Projects** dashboard. The header shows beta usage limits (for example, 4 Caller Workflow Projects and 2 Reusable Workflow Projects in the Self-Hosted Beta). The project list is empty until you create your first project.
 
@@ -78,7 +108,7 @@ Click **New Project** to begin.
 
 ---
 
-## Step 4 — Create Project: Project Basics
+## Step 5 — Create Project: Project Basics
 
 The **Create Project** wizard opens on the **Project Basics** step. Enter a project name, choose the project type, and pick an identity color.
 
@@ -93,7 +123,7 @@ Choose **Caller Workflow Project** for a typical first project and click **Next*
 
 ---
 
-## Step 5 — Create Project: Select Repositories
+## Step 6 — Create Project: Select Repositories
 
 Select whether the project covers **public** or **private** repositories, then pick one or more repositories from the list. A summary of selected repositories is shown before you continue.
 
@@ -101,9 +131,17 @@ Select whether the project covers **public** or **private** repositories, then p
 
 Click **Next** when all target repositories are selected.
 
+### Trying it on a throwaway repository
+
+If you would rather not point your first project at a repository you care about — the walkthrough ends with a real pull request — use **Create a demo repository**. It creates a repository named `actionsmanager-demo` under your account and selects it for you.
+
+![Repository step with the Create a demo repository option above the repository list](../assets/screenshots/walkthrough/05a-create-demo-repository.png)
+
+This option appears while the guided tour is running.
+
 ---
 
-## Step 6 — Create Project: Review and Confirm
+## Step 7 — Create Project: Review and Confirm
 
 Review the project summary before creation. This step also shows the **Prefix Mode** option.
 
@@ -116,7 +154,7 @@ Confirm the project name, type, repositories, and prefix setting, then click **C
 
 ---
 
-## Step 7 — Projects Dashboard After Creation
+## Step 8 — Projects Dashboard After Creation
 
 After creating the project, you are returned to the **Saved Projects** dashboard. Your new project now appears in the project list with its identity color and type badge.
 
@@ -126,7 +164,7 @@ Click the project card to open the project workspace.
 
 ---
 
-## Step 8 — Project Workspace: Overview
+## Step 9 — Project Workspace: Overview
 
 The project workspace opens with an empty workflow state. The left sidebar shows the project and its repositories.
 
@@ -134,7 +172,7 @@ The project workspace opens with an empty workflow state. The left sidebar shows
 
 ---
 
-## Step 9 — Project Workspace: Add Your First Workflow
+## Step 10 — Project Workspace: Add Your First Workflow
 
 The main area shows three action buttons: **Import Existing**, **Create Pull Requests**, and **Add Workflow**.
 
@@ -144,7 +182,7 @@ Click **Add Workflow** to create your first workflow.
 
 ---
 
-## Step 10 — Create New Workflow: Choose Type
+## Step 11 — Create New Workflow: Choose Type
 
 The **Create New Workflow** modal presents three workflow type options:
 
@@ -160,7 +198,7 @@ Choose **Regular Workflow** for a first workflow and click **Next**.
 
 ---
 
-## Step 11 — Regular Workflow Options
+## Step 12 — Regular Workflow Options
 
 Enter a workflow name and choose how to create the initial YAML content:
 
@@ -176,7 +214,7 @@ Enter a workflow name, choose an option, and click **Create**.
 
 ---
 
-## Step 12 — Workflow Editor
+## Step 13 — Workflow Editor
 
 The workflow editor opens with the new workflow file. The header shows the generated filename (with prefix if Prefix Mode is enabled), the selected repository, and the current save state (**Unsaved**).
 
@@ -186,7 +224,7 @@ Review and edit the YAML as needed. When the workflow is ready to save locally, 
 
 ---
 
-## Step 13 — Saved Draft State
+## Step 14 — Saved Draft State
 
 After clicking **Commit Locally**, the workflow is saved immediately. The editor shows the **New Local** status badge and a toast notification confirms the workflow was saved as a draft.
 

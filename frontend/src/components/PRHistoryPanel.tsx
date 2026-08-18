@@ -15,6 +15,7 @@ import RollbackCampaignModal from "./RollbackCampaignModal";
 import { Button } from "./ui/button";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "./ui/accordion";
 import { toast } from "../utils/toast";
+import { tour } from "../utils/tour";
 import { usePagedList, PAGE_SIZE_OPTIONS, UsePagedListResult } from "../hooks/usePagedList";
 
 interface PRCampaignsPanelProps {
@@ -144,6 +145,7 @@ const PRRow: React.FC<PRRowProps> = ({ pr, includeActions, processingKey, setPen
                 <span className="pr-campaign-muted">Close unavailable: {pr.close_block_reason}</span>
               )}
               <Button
+                data-testid="pr-merge-button"
                 size="sm"
                 variant="merge"
                 disabled={mergeDisabled}
@@ -379,6 +381,10 @@ const PRHistoryPanel: React.FC<PRCampaignsPanelProps> = ({ user, projectName, on
           await closePullRequest(user, projectName, pr.repo_name, pr.pr_number);
         }
       }
+      // Every route to resolving a PR — merge, close, and the whole-campaign
+      // variants — comes through this loop, so this is the one honest place to
+      // report the step done.
+      tour.completed("resolve-pr");
       const verb = action.type === "merge" || action.type === "mergeCampaign" ? "merged" : "closed";
       try {
         await refreshProjectCampaignState(false);

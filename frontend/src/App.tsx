@@ -1,5 +1,5 @@
 /* eslint-disable no-restricted-syntax -- Legacy: TODO migrate inline styles to Tailwind CSS classes */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { BrowserRouter as Router, Routes, Route, useParams, Navigate, Link} from "react-router";
 import ProjectMgmt from "./ProjectMgmt";
 import NewProject from "./NewProject";
@@ -14,7 +14,11 @@ import WorkspaceBackup from "./components/WorkspaceBackup";
 import WorkspaceDriftSettings from "./components/WorkspaceDriftSettings";
 import FirstBootRestore from "./components/FirstBootRestore";
 import { ThemeProvider } from "./components/ThemeContext";
-import { checkGitHubPermissions, getUserDetails, loginWithGitHubToken, logout, PermissionValidationResult, UserDetails } from "./api/user";
+import { checkGitHubPermissions, getUserDetails, loginWithGitHubToken, logout, updateOnboardingState, OnboardingState, PermissionValidationResult, UserDetails } from "./api/user";
+import OnboardingWelcome, { shouldShowWelcome } from "./components/OnboardingWelcome";
+import OnboardingTour, { TOUR_STEPS } from "./components/OnboardingTour";
+import { tour } from "./utils/tour";
+import type { TourStepId } from "./utils/tour";
 import config from "./config";
 import { isUninitialized } from "./api/setup";
 import PermissionAlert from "./components/PermissionAlert";
@@ -205,6 +209,33 @@ function App(): React.ReactElement {
     }
   }, [user]);
 
+  // Updates userDetails from the response rather than refetching, so the UI
+  // moves immediately without a second request. Applies the change locally even
+  // when the write failed: being unable to record progress must not trap the
+  // user behind the dialog, it just means it is offered again next login.
+  const handleOnboardingChange = useCallback(async (
+    state: { step?: TourStepId; completed?: boolean },
+  ): Promise<void> => {
+    if (!user) return;
+    const saved = await updateOnboardingState(user, state);
+    setUserDetails((previous) => {
+      if (!previous) return previous;
+      const fallback: OnboardingState = {
+        completed: state.completed ?? false,
+        completed_at: null,
+        step: state.step ?? previous.onboarding?.step ?? null,
+      };
+      return { ...previous, onboarding: saved ?? fallback };
+    });
+  }, [user]);
+
+  // Restarting clears completed_at and the recorded step server-side, which
+  // puts shouldShowWelcome back to true and offers the tour again.
+  useEffect(
+    () => tour.onRestartRequested(() => { void handleOnboardingChange({ completed: false }); }),
+    [handleOnboardingChange],
+  );
+
   const [canRestore, setCanRestore] = useState(false);
   const [showRestore, setShowRestore] = useState(false);
   // Bumped when a restore finishes. `user` is still null at that point, so
@@ -231,6 +262,16 @@ function App(): React.ReactElement {
         <div className="flex items-center justify-center min-h-screen w-full flex-col" style={{ padding: user ? "0" : "1.5rem" }}>
           {user ? (
             <>
+              <OnboardingWelcome
+                open={shouldShowWelcome(userDetails)}
+                onDismiss={() => handleOnboardingChange({ completed: true })}
+                onStartTour={() => handleOnboardingChange({ step: TOUR_STEPS[0].id })}
+              />
+              <OnboardingTour
+                onAdvance={handleOnboardingChange}
+                user={user}
+                userDetails={userDetails}
+              />
               {/* Permission Alert - shown across all routes when there are permission issues or warnings */}
               {permissionStatus && (!permissionStatus.valid || (permissionStatus.warnings?.length ?? 0) > 0) && !permissionAlertDismissed && (
                 <div className="w-full max-w-7xl px-4 pt-4">
@@ -248,7 +289,7 @@ function App(): React.ReactElement {
                 />
                 <Route
                   path="/project/:user/new"
-                  element={<NewProjectWrapper />}
+                  element={<NewProjectWrapper tourStep={userDetails?.onboarding?.step ?? null} />}
                 />
                 <Route
                   path="/project/:user"
@@ -419,9 +460,9 @@ function ProjectMgmtWrapper({ userDetails, onLogout }: ProjectMgmtWrapperProps):
 }
 
 // Wrapper to pass URL parameters to NewProject
-function NewProjectWrapper(): React.ReactElement {
+function NewProjectWrapper({ tourStep }: { readonly tourStep: string | null }): React.ReactElement {
   const { user } = useParams<{ user: string }>();
-  return <NewProject user={user || ""} />;
+  return <NewProject user={user || ""} tourStep={tourStep} />;
 }
 
 // Shared header for the standalone Actions Projects pages (list/add/detail).

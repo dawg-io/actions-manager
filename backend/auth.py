@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 import config
@@ -276,6 +276,16 @@ def _user_pat_status_payload(user: Account) -> dict:
         "token_type": _normalize_saved_token_type(user.github_pat_token_type),
         "checked_at": user.github_pat_checked_at.isoformat() if user.github_pat_checked_at else None,
         "updated_at": user.github_pat_updated_at.isoformat() if user.github_pat_updated_at else None,
+    }
+
+
+def _user_onboarding_payload(user: Account) -> dict:
+    """First-login onboarding state for the welcome screen and guided tour."""
+    completed_at = user.onboarding_completed_at
+    return {
+        "completed": completed_at is not None,
+        "completed_at": completed_at.isoformat() if completed_at else None,
+        "step": user.onboarding_step,
     }
 
 
@@ -771,6 +781,14 @@ def debug_log(message):
 
 class GitHubTokenRequest(BaseModel):
     token: str
+
+
+class OnboardingStateRequest(BaseModel):
+    # Pattern-matched rather than checked against a fixed list of step names:
+    # later phases add steps, and a whitelist here would make every one of them
+    # edit this file. The column is VARCHAR(40), so the bound is enforced too.
+    step: Optional[str] = Field(default=None, max_length=40, pattern=r"^[a-z0-9-]+$")
+    completed: Optional[bool] = None
 
 
 def _validate_github_token_format(token: str) -> str:
@@ -1322,7 +1340,34 @@ def get_user_details(username: str, request: Request, db: Annotated[Session, Dep
         "rate_limit": rate_limit_status,
         "workspace_role": workspace_role,
         "github_token": _user_pat_status_payload(user),
+        "onboarding": _user_onboarding_payload(user),
     }
+
+
+@router.put("/api/user/{username}/onboarding", responses=_responses(401, 403))
+def update_onboarding_state(
+    username: str,
+    payload: OnboardingStateRequest,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Record how far the caller has got through first-login onboarding."""
+    user = _ensure_request_user(request, username, db)
+
+    if payload.completed is not None:
+        if payload.completed:
+            user.onboarding_completed_at = datetime.now(timezone.utc)
+        else:
+            # Replaying the tour restarts it from the beginning, so the stored
+            # resume point has to go with the completion timestamp.
+            user.onboarding_completed_at = None
+            user.onboarding_step = None
+
+    if payload.step is not None:
+        user.onboarding_step = payload.step
+
+    db.commit()
+    return _user_onboarding_payload(user)
 
 
 @router.get("/api/user/{username}/github-token", responses=_responses(401, 403))

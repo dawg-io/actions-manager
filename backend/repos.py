@@ -1,3 +1,4 @@
+import re
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, Depends, Query
@@ -18,6 +19,7 @@ router = APIRouter()
 # appear in the OpenAPI schema (and so generated clients know about them).
 # Codes raised inside shared helpers count too - the rule tracks the call.
 _ERROR_RESPONSES = {
+    400: {"description": "Invalid request"},
     401: {"description": "Not authenticated"},
     403: {"description": "Access denied"},
     404: {"description": "Not found"},
@@ -252,12 +254,35 @@ def get_branches(user: str, owner: str, repo: str, request: Request, db: Annotat
     return response.json()
 
 
-@router.post("/api/create-repo")
+DEFAULT_NEW_REPO_NAME = "am-reuseable-workflow"
+# GitHub's own rule for repository names. Enforced here because the value is
+# sent to the GitHub API on the caller's behalf, so it is a trust boundary.
+_REPO_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+
+
+def _validated_repo_name(name: Optional[str]) -> str:
+    """Return a safe repository name, falling back to the historical default."""
+    if name is None or name == "":
+        return DEFAULT_NEW_REPO_NAME
+    if not isinstance(name, str) or not _REPO_NAME_PATTERN.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Repository name may only contain letters, numbers, '.', '-' and '_' (max 100 characters).",
+        )
+    return name
+
+
+@router.post("/api/create-repo", responses=_responses(400))
 async def create_github_repo(request: Request, db: Annotated[Session, Depends(get_db)]):
-    """Creates a GitHub repository named 'am-reuseable-workflow'.
+    """Creates a GitHub repository, by default 'am-reuseable-workflow'.
 
     Accepts an optional ``owner`` field in the JSON body to create the repo
     under a specific user or organization. Defaults to the authenticated user.
+
+    ``name``, ``description`` and ``private`` are also optional and default to
+    the reusable-workflow repository this endpoint originally created, so the
+    existing caller is unaffected. The onboarding tour uses them to make a
+    throwaway demo repository instead.
     """
     try:
         data = await request.json()
@@ -271,11 +296,11 @@ async def create_github_repo(request: Request, db: Annotated[Session, Depends(ge
             "Accept": GITHUB_JSON_ACCEPT,
             "X-GitHub-Api-Version": "2022-11-28"
         }
-        repo_name = "am-reuseable-workflow"
+        repo_name = _validated_repo_name(data.get("name"))
         payload = {
             "name": repo_name,
-            "description": "A repository for reusable workflows",
-            "private": True,
+            "description": data.get("description") or "A repository for reusable workflows",
+            "private": data.get("private", True) is not False,
             "auto_init": True  # Creates an initial commit with a README
         }
 
@@ -306,6 +331,11 @@ async def create_github_repo(request: Request, db: Annotated[Session, Depends(ge
             else:
                 return {"error": response_data, "status": response.status_code}
 
+    except HTTPException:
+        # Validation failures must stay real HTTP errors. The catch-all below
+        # would otherwise turn a rejected repository name into a 200 response
+        # carrying an error string, which no caller checks for.
+        raise
     except Exception as e:
         return {"error": str(e)}
 

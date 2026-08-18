@@ -1294,3 +1294,57 @@ export async function mockBuildMetricsResponse(
     },
   );
 }
+
+export interface OnboardingStub {
+  completed: boolean;
+  completed_at: string | null;
+  step: string | null;
+}
+
+/**
+ * Override the onboarding state (and optionally the workspace role) the app
+ * reads on login, and capture what the tour writes back.
+ *
+ * Must be called AFTER `installApiMocks` so these handlers win (LIFO order).
+ * The returned array records every PUT body the tour sent, which is how a test
+ * asserts that a step was recorded rather than just that a callout moved.
+ */
+export async function overrideOnboardingState(
+  page: Page,
+  onboarding: OnboardingStub | null,
+  options: { workspaceRole?: string; user?: string } = {},
+): Promise<Array<Record<string, unknown>>> {
+  const user = options.user ?? TEST_USER;
+  const writes: Array<Record<string, unknown>> = [];
+  let current = onboarding;
+
+  await page.route(
+    apiPath((p) => /^\/api\/user\/[^/]+\/onboarding$/.test(p)),
+    (route) => {
+      const body = route.request().postDataJSON() ?? {};
+      writes.push(body);
+      current = {
+        completed: body.completed ?? false,
+        completed_at: body.completed ? new Date().toISOString() : null,
+        // Clearing completion clears the resume point too, matching the
+        // backend's replay behaviour.
+        step: body.completed === false ? null : (body.step ?? current?.step ?? null),
+      };
+      return jsonResponse(route, current);
+    },
+  );
+
+  await page.route(
+    apiPath((p) => /^\/api\/user\/[^/]+$/.test(p)),
+    (route) =>
+      jsonResponse(route, {
+        ...TEST_USER_DETAILS,
+        github_user: user,
+        username: user,
+        ...(options.workspaceRole ? { workspace_role: options.workspaceRole } : {}),
+        ...(current ? { onboarding: current } : {}),
+      }),
+  );
+
+  return writes;
+}
