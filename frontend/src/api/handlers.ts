@@ -67,6 +67,8 @@ export interface SaveProjectResponse {
   project_code: string;
   project_id: string;
   pr_state?: string;
+  pending_delivery_repos?: string[];
+  pending_delivery_known?: boolean;
 }
 
 export interface SaveProjectResult {
@@ -76,6 +78,10 @@ export interface SaveProjectResult {
   projectCode?: string;
   message?: string;
   prState?: string;
+  /** Repos still waiting for the project's workflows, as of this save. */
+  pendingDeliveryRepos?: string[];
+  /** False when the server could not tell — see `pending_delivery_known`. */
+  pendingDeliveryKnown?: boolean;
 }
 
 export interface SelectedItems {
@@ -135,6 +141,10 @@ export interface UpdateResult {
   projectId?: string;
   projectCode?: string;
   prState?: string;
+  /** Repos still waiting for the project's workflows, as of this save. */
+  pendingDeliveryRepos?: string[];
+  /** False when the server could not tell — see `pending_delivery_known`. */
+  pendingDeliveryKnown?: boolean;
 }
 
 export interface SaveProjectWithModalParams {
@@ -312,6 +322,8 @@ export const handleSaveProject = async (
             projectId: response.project_id,
             projectCode: projectCode,
             prState: response.pr_state,
+            pendingDeliveryRepos: response.pending_delivery_repos,
+            pendingDeliveryKnown: response.pending_delivery_known,
             message: "Project saved successfully"
         };
 
@@ -444,7 +456,9 @@ export const handleSaveProjectWithModal = async (
             githubUpdatePerformed: updateGitHub,
             projectId: saveResult.projectId,
             projectCode: saveResult.projectCode,
-            prState: saveResult.prState
+            prState: saveResult.prState,
+            pendingDeliveryRepos: saveResult.pendingDeliveryRepos,
+            pendingDeliveryKnown: saveResult.pendingDeliveryKnown
         };
 
     } catch (error) {

@@ -66,6 +66,57 @@ Within a project you can:
 - **Remove repositories** — take a repository out of scope without deleting its workflows
 - **Configure per-repository settings** — specify branches, labels, and delivery preferences
 
+### Adding a Repository to a Project That Already Has Workflows
+
+Adding a repository does not push anything to it. The repository joins the project's scope, but
+the project's existing workflows are not in it yet — and because nothing has ever been delivered
+there, it is [not reported as drift]({% link features/drift-detection.md %}#what-counts-as-drift)
+either. Without a prompt, a newly added repository could sit empty indefinitely with nothing
+saying so.
+
+So when you press **Save** in **Repositories & Branches** having added one or more repositories,
+ActionsManager asks how to apply the project's workflows to them:
+
+| Choice | What happens |
+|--------|--------------|
+| **Save locally only** | Nothing is pushed. The repository stays in the project, and no drift is reported. Deliver whenever you're ready from the Workflows section. |
+| **Create pull requests** | Opens a [PR campaign]({% link features/pr-campaigns.md %}) limited to the repositories you just added. Every workflow in the project is pre-selected, because the new repository has none of them. |
+
+Dismissing the prompt is the same as choosing **Save locally only** — the repository was already
+saved before the prompt appeared, so nothing is lost either way.
+
+![Prompt asking whether to deliver the project's workflows to a newly added repository, offering Save locally only or Create pull requests](../assets/screenshots/projects/new-repo-delivery-prompt.png)
+
+### Keeping Track of What's Still Waiting
+
+Choosing **Save locally only** is not the end of the story, so ActionsManager keeps a standing
+reminder until the workflows land. It appears in three places, each a different level of detail:
+
+- **A count beside Repositories & Branches** in the sidebar, so the reminder is reachable from
+  anywhere in the project.
+- **A note at the top of the project**, next to the drift status row, naming the repositories and
+  offering to open the pull requests.
+- **A "Not delivered yet" badge** on each waiting repository in the Selected Repositories list.
+
+None of it is styled as a warning, because nothing is wrong — the repository simply hasn't received
+the files yet. All three clear themselves: opening a pull request pauses the reminder while it is in
+review, and merging it removes the repository from the list for good.
+
+The reminder only appears for repositories ActionsManager has genuinely never delivered to. It stays
+quiet on a project that has never been [drift-checked]({% link features/drift-detection.md %}),
+because until the first check there is no evidence either way, and guessing would mean telling you
+that repositories you delivered to months ago are still waiting.
+
+Two things the campaign does *not* carry:
+
+- **Custom files that are already synced elsewhere.** A campaign only offers custom files with
+  pending changes, so a file already delivered to the project's other repositories is not
+  automatically copied to the new one. Edit it to include it in a campaign.
+- **Reusable workflow definitions.** Those live in the producer repository, not in the caller
+  repositories, so a new caller repository does not need them pushed to it.
+
+Removing a repository never prompts — there is nothing to deliver.
+
 ## Branch Configuration
 
 **Repositories & Branches** decides which branches a project writes to. The same answer is used for

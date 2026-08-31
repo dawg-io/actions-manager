@@ -20,6 +20,7 @@ import { ActionGroup } from '../api/actionGroups';
 import {
   normalizeWorkflowStem,
   validateWorkflowName,
+  workflowDisplayFilename,
 } from '../utils/workflowFilename';
 import { getDocsUrl } from '../help/helpLinks';
 
@@ -109,6 +110,23 @@ function buildGithubRepoUrl(repo: string): string | null {
     return null;
   }
   return `https://github.com/${repo}`;
+}
+
+/**
+ * The on-GitHub filename to show for a workflow row.
+ *
+ * Linked reusable workflows are named by the project that owns them, so the
+ * consumer's prefix never applies to one. Lives at module scope rather than
+ * inline in the editor: that component is already at the cognitive-complexity
+ * budget (S3776, 15), and one more inline condition pushed it to 16.
+ */
+function displayFilenameFor(
+  workflow: { name: string; type?: string },
+  projectCode: string | undefined | null,
+  usePrefix: boolean,
+): string {
+  const linked = workflow.type === 'linked';
+  return workflowDisplayFilename(workflow.name, projectCode, usePrefix && !linked);
 }
 
 interface UnifiedWorkflowEditorProps {
@@ -1187,7 +1205,7 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
 
       <ExpandedEditorDialog
         open={isExpanded}
-        title={selectedWorkflow.name}
+        title={displayFilenameFor(selectedWorkflow, projectCode, usePrefix)}
         onRequestCollapse={requestCollapse}
         showResourcePicker={showResourcePicker}
         onInsertResource={handleInsertResource}
@@ -1211,6 +1229,7 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
           user={user}
           projectName={projectName}
           workflowName={selectedWorkflow.name}
+          displayName={displayFilenameFor(selectedWorkflow, projectCode, usePrefix)}
           currentContent={selectedWorkflow.content || ''}
           onClose={handleCloseVersionHistory}
           onRestore={handleRestoreVersion}
@@ -1254,7 +1273,10 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
       {pendingDelete && (
         <ConfirmDialog
           open={true}
-          title={`Delete workflow "${pendingDelete.name}"?`}
+          // The delete control is rendered only for a workflow this project
+          // owns (linked ones offer Unlink instead), so the project's prefix
+          // always applies to the file this removes.
+          title={`Delete workflow "${displayFilenameFor({ name: pendingDelete.name }, projectCode, usePrefix)}"?`}
           description="This will remove the workflow from your project and all GitHub repositories. This action cannot be undone."
           confirmLabel="Delete workflow"
           destructive

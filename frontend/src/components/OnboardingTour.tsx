@@ -124,6 +124,20 @@ export function resolveActiveStep(onboarding: OnboardingState | undefined): numb
   return TOUR_STEPS.findIndex((step) => step.id === onboarding.step);
 }
 
+/**
+ * The tour step a screen should pre-fill for, or null when no tour is running.
+ *
+ * `onboarding.step` on its own is not that answer. The backend keeps it as a
+ * resume point and clears it only on restart, so it stays set long after a tour
+ * has been completed or dismissed — which is what left every later visit to the
+ * Create Project wizard pre-filled with the tour's demo values. Routing both
+ * the tour and its pre-fill through resolveActiveStep keeps the two from
+ * disagreeing about whether a tour is running.
+ */
+export function runningTourStep(onboarding: OnboardingState | undefined): string | null {
+  return resolveActiveStep(onboarding) >= 0 ? (onboarding?.step ?? null) : null;
+}
+
 export interface OnboardingTourProps {
   user: string;
   userDetails: UserDetails | undefined;

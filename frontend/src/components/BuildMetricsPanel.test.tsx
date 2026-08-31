@@ -66,7 +66,8 @@ function mockRun(overrides: Partial<RecentRun> = {}): RecentRun {
   return {
     github_run_id: 4242,
     run_number: 42,
-    workflow_name: "ci",
+    workflow_name: "CI",
+    workflow_filename: "AM_ACME_ci.yml",
     repo: "acme/api",
     branch: "main",
     event: "push",
@@ -212,7 +213,8 @@ describe("BuildMetricsPanel links out to GitHub", () => {
 
     render(<BuildMetricsPanel projectId={1} user="alice" />);
 
-    const link = await screen.findByRole("link", { name: /ci, run 42, acme\/api, main, failure/i });
+    // Runs are named by the file they ran from, in the label as on screen.
+    const link = await screen.findByRole("link", { name: /AM_ACME_ci\.yml, run 42, acme\/api, main, failure/i });
     expect(link).toHaveAttribute("href", "https://github.com/acme/api/actions/runs/4242");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -234,7 +236,7 @@ describe("BuildMetricsPanel links out to GitHub", () => {
 
     render(<BuildMetricsPanel projectId={1} user="alice" />);
 
-    expect(await screen.findByRole("link", { name: /^ci — open in GitHub$/i })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: /^ci\.yml — open in GitHub$/i })).toHaveAttribute(
       "href",
       "https://github.com/acme/api/actions/workflows/ci.yml",
     );
@@ -295,7 +297,7 @@ describe("BuildMetricsPanel scoping to one workflow", () => {
 
     const select = await screen.findByTestId("build-metrics-workflow-filter");
     expect(Array.from(select.querySelectorAll("option")).map((o) => o.textContent))
-      .toEqual(["All workflows", "ci", "release"]);
+      .toEqual(["All workflows", "ci.yml", "release.yml"]);
   });
 
   test("choosing a workflow refetches scoped to it", async () => {
@@ -313,7 +315,7 @@ describe("BuildMetricsPanel scoping to one workflow", () => {
     ));
     expect(await screen.findByText("75%")).toBeInTheDocument();
     // The header must say which workflow the numbers now describe.
-    expect(screen.getByText(/Last 30 days · ci ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Last 30 days · ci\.yml ·/)).toBeInTheDocument();
   });
 
   test("clicking a breakdown row scopes to that workflow", async () => {
@@ -373,7 +375,7 @@ describe("BuildMetricsPanel scoping to one workflow", () => {
     await userEvent.selectOptions(screen.getByTestId("build-metrics-workflow-filter"), "release.yml");
 
     expect(await screen.findByTestId("build-metrics-empty")).toHaveTextContent(
-      "No runs for release in the last 30 days.",
+      "No runs for release.yml in the last 30 days.",
     );
     // The regression this guards: an empty scope must not hide the switcher.
     expect(screen.getByTestId("build-metrics-workflow-filter")).toBeInTheDocument();

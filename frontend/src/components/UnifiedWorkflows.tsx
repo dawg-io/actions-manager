@@ -235,7 +235,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
   // Initialize workflows count for free accounts
   useEffect(() => {
     operations.fetchWorkflowsCount();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Initialize GUI state when a workflow is selected
@@ -246,7 +245,6 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
       handleSelectWorkflow(state.selectedWorkflowId);
     }
     // Only run when selectedWorkflowId changes, not on every render
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.selectedWorkflowId]);
 
   return (

@@ -307,7 +307,7 @@ SonarQube scanning runs automatically in CI on pushes to `copilot/*` and `feat/*
 
 **To run SonarQube locally:**
 
-1. Ensure a SonarQube server is reachable (e.g., `https://sonarqube.local.updawg.xyz` or a local Docker instance).
+1. Ensure a SonarQube server is reachable (e.g., `https://sonarqube.example.com` or a local Docker instance).
 2. Generate a user token in SonarQube → **My Account → Security**.
 3. From the repository root, run:
 

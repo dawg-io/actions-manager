@@ -382,6 +382,18 @@ class TestRemoveProjectMember:
         assert resp.status_code == 404
 
 
+def _auth_headers(user):
+    """Headers for a caller who is genuinely signed in as *user*.
+
+    X-GitHub-User alone is no longer identity: WriteProtectionMiddleware
+    overwrites it with whoever the session token actually belongs to.
+    """
+    return {
+        "X-GitHub-User": user.github_user,
+        "Authorization": f"Bearer {user.session_token}",
+    }
+
+
 # ──────────────────────────────────────────────
 # Tests: Project Access Filtering (GET /api/projects/)
 # ──────────────────────────────────────────────
@@ -393,7 +405,7 @@ class TestProjectAccessFiltering:
     def test_admin_sees_all_projects(self, admin_user, sample_project, second_project):
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "admin-user"},
+            headers=_auth_headers(admin_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
@@ -401,7 +413,7 @@ class TestProjectAccessFiltering:
     def test_second_admin_sees_all_projects(self, admin_user, second_admin_user, sample_project, second_project):
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "second-admin-user"},
+            headers=_auth_headers(second_admin_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
@@ -418,7 +430,7 @@ class TestProjectAccessFiltering:
 
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -428,18 +440,22 @@ class TestProjectAccessFiltering:
     def test_readonly_with_no_assignments_sees_nothing(self, admin_user, readonly_user, sample_project, second_project):
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 0
 
-    def test_no_header_sees_all_projects(self, admin_user, sample_project, second_project):
-        """Without X-GitHub-User header, no filtering is applied (backward compat)."""
+    def test_anonymous_request_sees_nothing(self, admin_user, sample_project, second_project):
+        """An unauthenticated caller gets 401, not the whole workspace.
+
+        This used to return every project in the workspace: reads skipped the
+        middleware entirely and the handler treated "no X-GitHub-User header"
+        as "privileged caller".
+        """
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
         )
-        assert resp.status_code == 200
-        assert len(resp.json()) == 2
+        assert resp.status_code == 401
 
     def test_readonly_own_url_sees_assigned_projects(self, admin_user, readonly_user, sample_project, second_project, test_db):
         """Read-only user calling with their own username sees assigned projects (real-world flow)."""
@@ -454,7 +470,7 @@ class TestProjectAccessFiltering:
         # The real-world call: github_user is the read_only user's own name (from their URL)
         resp = client.get(
             f"/api/projects/?github_user={readonly_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -465,7 +481,7 @@ class TestProjectAccessFiltering:
         """Read-only user with no assignments sees empty list using their own URL."""
         resp = client.get(
             f"/api/projects/?github_user={readonly_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 0
@@ -482,7 +498,7 @@ class TestSingleProjectAccess:
     def test_admin_can_access_any_project(self, admin_user, sample_project):
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "admin-user"},
+            headers=_auth_headers(admin_user),
         )
         assert resp.status_code == 200
         assert resp.json()["caller_project_role"] == "project_admin"
@@ -498,7 +514,7 @@ class TestSingleProjectAccess:
 
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 200
         assert resp.json()["caller_project_role"] == "project_editor"
@@ -506,7 +522,7 @@ class TestSingleProjectAccess:
     def test_readonly_without_assignment_denied(self, admin_user, readonly_user, sample_project):
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 403
 
@@ -523,7 +539,7 @@ class TestSingleProjectAccess:
         # The real-world call: github_user is the read_only user's own name
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={readonly_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 200
         assert resp.json()["caller_project_role"] == "project_editor"
@@ -533,7 +549,7 @@ class TestSingleProjectAccess:
         """Read-only user without membership gets 404 (project not revealed)."""
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={readonly_user.github_user}",
-            headers={"X-GitHub-User": "readonly-user"},
+            headers=_auth_headers(readonly_user),
         )
         assert resp.status_code == 404
 
@@ -625,7 +641,7 @@ class TestMemberRole:
 
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "member-user"},
+            headers=_auth_headers(member_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 1
@@ -635,7 +651,7 @@ class TestMemberRole:
         """Member without any ProjectMembership should see no projects."""
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "member-user"},
+            headers=_auth_headers(member_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 0
@@ -657,7 +673,7 @@ class TestMemberRole:
 
         resp = client.get(
             f"/api/projects/?github_user={member_user.github_user}",
-            headers={"X-GitHub-User": "member-user"},
+            headers=_auth_headers(member_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
@@ -673,7 +689,7 @@ class TestMemberRole:
 
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "member-user"},
+            headers=_auth_headers(member_user),
         )
         assert resp.status_code == 200
 
@@ -681,7 +697,7 @@ class TestMemberRole:
         """Member without membership cannot load a specific project."""
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "member-user"},
+            headers=_auth_headers(member_user),
         )
         assert resp.status_code == 403
 
@@ -698,7 +714,7 @@ class TestPrivilegedUserOwnUrl:
         """Admin navigating with their own URL still sees all projects."""
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
-            headers={"X-GitHub-User": "admin-user"},
+            headers=_auth_headers(admin_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
@@ -707,7 +723,7 @@ class TestPrivilegedUserOwnUrl:
         """Second admin navigating with their own username still sees all projects."""
         resp = client.get(
             f"/api/projects/?github_user={second_admin_user.github_user}",
-            headers={"X-GitHub-User": "second-admin-user"},
+            headers=_auth_headers(second_admin_user),
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
@@ -716,7 +732,7 @@ class TestPrivilegedUserOwnUrl:
         """Second admin can load a project even when github_user doesn't match project owner."""
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={second_admin_user.github_user}",
-            headers={"X-GitHub-User": "second-admin-user"},
+            headers=_auth_headers(second_admin_user),
         )
         assert resp.status_code == 200
         assert resp.json()["project_name"] == "Test Project"

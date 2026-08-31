@@ -54,6 +54,10 @@ MIGRATION_SCRIPTS = [
     "migrate_add_drift_state_branch.py",           # Keys drift state by branch as well as repo (drift hardening PR 5)
     "migrate_add_workflow_tree_cache.py",          # Caches tree listings + ETags so unchanged branches cost no rate limit
     "migrate_add_drift_state_display_fields.py",   # Lets the drift panel render from stored state without calling GitHub
+    # After the display fields, whose github_sha it reads to backfill, and
+    # after the PR history fields, whose merged_at/workflow_names tell it
+    # which workflow actually reached which (repo, branch).
+    "migrate_add_drift_confirmed_present.py",      # Records whether a file was ever really seen on a branch, so a pending PR is not a deletion (issue #1981)
     "migrate_add_drift_check_failure_count.py",    # Adds a consecutive-failure counter to projects, for sweep backoff
     "migrate_add_workflow_runs.py",                # Stores GitHub Actions runs for build metrics (issue #689)
     "migrate_add_drift_configuration.py",          # Moves drift sweep config out of env vars: global settings + per-project interval
@@ -101,6 +105,53 @@ def run_migration_script(script_path):
         print(f"❌ Error running {script_name}: {e}")
         return False
 
+def ensure_base_schema():
+    """
+    Create the ORM-managed tables before any migration runs.
+
+    Migrations below add columns to, and create tables with foreign keys into,
+    the tables declared in models.py. database.py does call create_all() when
+    imported, but ``Base`` is declared there while models.py is what registers
+    the tables on it - so a migration importing only ``database`` finds an empty
+    metadata and creates nothing.
+
+    On a fresh database that left the first FK-bearing migration with nothing to
+    reference. SQLite accepts a foreign key to a table that does not exist yet,
+    so self-hosted installs never noticed; PostgreSQL rejects it at CREATE TABLE,
+    so a fresh cloud database could not bootstrap at all - and each failure
+    cascaded, since later migrations reference tables the failed ones own.
+    """
+    import models  # noqa: F401 - registers the ORM tables on Base.metadata
+    from database import Base, engine
+
+    Base.metadata.create_all(engine)
+
+
+def collect_migration_scripts(backend_dir):
+    """Return the configured migrations present on disk, naming any that are not.
+
+    Split out of main() to keep its cognitive complexity within the project
+    limit; a missing script is reported rather than fatal, since the list spans
+    releases and an older checkout legitimately lacks the newer ones.
+    """
+    existing = []
+    missing = []
+
+    for script_name in MIGRATION_SCRIPTS:
+        script_path = backend_dir / script_name
+        if script_path.exists():
+            existing.append(script_path)
+        else:
+            missing.append(script_name)
+
+    if missing:
+        print("\n⚠️  Warning: Some migration scripts are missing:")
+        for script_name in missing:
+            print(f"   - {script_name}")
+
+    return existing
+
+
 def main():
     """Run all necessary database migrations in order."""
     print("="*60)
@@ -109,28 +160,20 @@ def main():
     
     db_type = get_database_type()
     print(f"\n📊 Detected database type: {db_type.upper()}")
+
+    print("\n🧱 Ensuring ORM base tables exist before migrations...")
+    try:
+        ensure_base_schema()
+    except Exception as exc:  # noqa: BLE001 - report and stop; migrations cannot run
+        print(f"❌ Could not create the base schema: {exc}")
+        return 1
+    print("✅ Base schema present")
     
     # Get the backend directory
     backend_dir = Path(__file__).parent
-    
-    migration_scripts = MIGRATION_SCRIPTS
-    
-    # Check which migrations exist
-    existing_migrations = []
-    missing_migrations = []
-    
-    for script_name in migration_scripts:
-        script_path = backend_dir / script_name
-        if script_path.exists():
-            existing_migrations.append(script_path)
-        else:
-            missing_migrations.append(script_name)
-    
-    if missing_migrations:
-        print("\n⚠️  Warning: Some migration scripts are missing:")
-        for script in missing_migrations:
-            print(f"   - {script}")
-    
+
+    existing_migrations = collect_migration_scripts(backend_dir)
+
     if not existing_migrations:
         print("\n❌ No migration scripts found to run")
         return 1

@@ -30,7 +30,7 @@ def override_get_db():
 
 class TestValidationPreflight:
     @pytest.fixture(autouse=True)
-    def setup_database(self):
+    def setup_database(self, authenticate_client):
         app.dependency_overrides[projects_get_db] = override_get_db
         app.dependency_overrides[workflows_get_db] = override_get_db
         Base.metadata.create_all(bind=engine)
@@ -41,14 +41,13 @@ class TestValidationPreflight:
         finally:
             db.close()
         user_tokens.clear()
+        self.client = TestClient(app)
+        authenticate_client(self.client, "preflightuser", TestingSessionLocal)
         yield
         user_tokens.clear()
         Base.metadata.drop_all(bind=engine)
         app.dependency_overrides.pop(projects_get_db, None)
         app.dependency_overrides.pop(workflows_get_db, None)
-
-    def setup_method(self):
-        self.client = TestClient(app)
 
     def _payload(self, **overrides):
         body = {

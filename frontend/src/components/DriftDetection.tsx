@@ -890,7 +890,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
 
       setConfirmDeleteEverywhere(null);
       setOpenDiffKey(null);
-      setSuccess(`'${detail.workflow_name}' removed from ActionsManager and ${repos.length} repositor${repos.length === 1 ? "y" : "ies"}.`);
+      setSuccess(`'${detail.workflow_filename}' removed from ActionsManager and ${repos.length} repositor${repos.length === 1 ? "y" : "ies"}.`);
       await loadDrift();
     } catch (err: unknown) {
       setError(driftErrorMessage(err, "Failed to delete the workflow"));
@@ -1281,7 +1281,7 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
         title="Delete this workflow everywhere?"
         description={
           confirmDeleteEverywhere
-            ? `'${confirmDeleteEverywhere.workflow_name}' will be deleted from `
+            ? `'${confirmDeleteEverywhere.workflow_filename}' will be deleted from `
               + `${Array.from(new Set([confirmDeleteEverywhere.repo, ...(confirmDeleteEverywhere.affected_repos ?? [])])).join(", ")} `
               + `and removed from ActionsManager, including its version history. `
               + `This cannot be undone.`

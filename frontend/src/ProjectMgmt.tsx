@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectDriftConfig, updateProjectName, updateProjectOrder, exportProjectBackup } from "./api/projects";
 import { fetchDriftSettings, formatDriftInterval, DriftSettings, DEFAULT_DRIFT_SETTINGS, DRIFT_INTERVAL_OPTIONS } from "./api/driftSettings";
 import { deleteProjectEnhanced } from "./api/projectDeletion";
-import { handleSaveProjectWithModal } from "./api/handlers";
+import { handleSaveProjectWithModal, type UpdateResult } from "./api/handlers";
 import { getSecrets } from "./api/secrets";
 import { getEnvVars } from "./api/envVars";
 import { Button } from "./components/ui/button";
@@ -49,6 +49,7 @@ import "./styles/prTracking.css";
 import { toast } from './utils/toast';
 import { tour } from './utils/tour';
 import ConfirmDialog from './components/ConfirmDialog';
+import PendingDeliveryNotice from './components/PendingDeliveryNotice';
 
 // Constant empty array to prevent unnecessary re-renders
 const EMPTY_BUILD_TYPES: any[] = [];
@@ -94,6 +95,21 @@ const inlineSaveMessage = (state: InlineSaveState, error: string | null, fallbac
   if (state === "saving") return "Saving…";
   if (state === "saved") return "✅ Saved";
   return `❌ ${error || fallback}`;
+};
+
+/**
+ * Repositories present in `current` that the last save didn't know about.
+ *
+ * Additions only: a removal needs no delivery, and a repo removed then re-added
+ * before saving is still in the snapshot, so it is correctly not "new".
+ */
+export const reposAddedSinceSnapshot = (
+  current: string[],
+  snapshot: { selectedRepos: string[] } | null,
+): string[] => {
+  if (!snapshot) return [];
+  const saved = new Set(snapshot.selectedRepos);
+  return current.filter((repo) => !saved.has(repo));
 };
 
 // TypeScript interfaces for data structures
@@ -221,10 +237,20 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   // banner needs the persisted seed to survive until that check resolves.
   const [seededDriftNames, setSeededDriftNames] = useState<string[]>([]);
   const [driftRefreshSignal, setDriftRefreshSignal] = useState<number>(0);
+  // Project repos that have never received any of the project's workflows,
+  // from the server so the reminder survives a reload.
+  const [pendingDeliveryRepos, setPendingDeliveryRepos] = useState<string[]>([]);
+
   const driftedWorkflowNames = useMemo(
     () => new Set(driftDetails.map(d => d.workflow_name)),
     [driftDetails],
   );
+  // The server's list, narrowed to repos still in the local selection: a repo
+  // removed but not yet saved must stop claiming it is waiting for delivery.
+  const visiblePendingDeliveryRepos = useMemo(() => {
+    const selected = new Set(selectedRepos);
+    return pendingDeliveryRepos.filter((repo) => selected.has(repo));
+  }, [pendingDeliveryRepos, selectedRepos]);
 
   const [codeownersStatuses, setCodeownersStatuses] = useState<Record<string, string>>({});
 
@@ -270,7 +296,16 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     preflightRequired: boolean;
   };
   const [savedRepoBranchSnapshot, setSavedRepoBranchSnapshot] = useState<RepoBranchSnapshot | null>(null);
-  
+
+  // Repos added by the save that just succeeded, awaiting the user's answer on
+  // how to deliver the project's existing workflows to them. Null = no prompt.
+  const [newRepoDeliveryPrompt, setNewRepoDeliveryPrompt] = useState<string[] | null>(null);
+  // Narrows the PR campaign modal to specific repos. Null = every project repo.
+  const [prModalRepoScope, setPrModalRepoScope] = useState<string[] | null>(null);
+  // Bumped after a save so the branch-override panel refetches. It cannot key
+  // off selectedRepos alone: that changes when a repo is ticked, before the save.
+  const [repoConfigRefreshSignal, setRepoConfigRefreshSignal] = useState<number>(0);
+
   // Reusable workflows enabled flag (used for RWX projects)
   const [reusableWorkflowsEnabled, setReusableWorkflowsEnabled] = useState<boolean>(false);
 
@@ -320,6 +355,14 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   
   // New state for sidebar navigation
   const [activeSection, setActiveSection] = useState<string>('workflows');
+  // Bumped on every sidebar navigation, including one that re-selects the
+  // section already held in `activeSection`. Repository Configs share a single
+  // scrolling page, so the sidebar highlights whichever section the reader has
+  // scrolled to rather than the one they last clicked — which means clicking a
+  // section that is not highlighted can still be a React state no-op. Without
+  // this counter the scroll effect below never re-runs for those clicks and the
+  // control does nothing at all.
+  const [sectionNavRequest, setSectionNavRequest] = useState<number>(0);
   // Tracks which repo-config section is scrolled into view (drives sidebar highlight)
   const [scrollActiveSection, setScrollActiveSection] = useState<string>('workflows');
 
@@ -773,6 +816,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         // still runs unconditionally and fully replaces this with authoritative
         // data via handleDriftLoaded/setDriftDetails below.
         setSeededDriftNames(response.drifted_workflow_names ?? []);
+        setPendingDeliveryRepos(response.pending_delivery_repos ?? []);
         setDriftDetails(
           (response.drifted_workflow_names ?? []).map((name): WorkflowDriftDetail => ({
             workflow_id: 0,
@@ -984,7 +1028,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       }, REPO_CONFIG_SCROLL_DELAY_MS);
       return () => clearTimeout(timer);
     }
-  }, [activeSection]);
+  }, [activeSection, sectionNavRequest]);
 
   // Scrollspy: update the sidebar highlight as the user scrolls through repo config sections
   useEffect(() => {
@@ -1178,6 +1222,41 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     return null;
   };
 
+  // Post-save state for the workflows save, split out of doSaveProject to keep
+  // its cognitive complexity inside the SonarQube limit (typescript:S3776).
+  const applyProjectSaveResult = (result: UpdateResult, pushedToGitHub: boolean): void => {
+    // "Commit Locally" is this same save with updateGitHub false, which is the
+    // step the tour is waiting on.
+    if (!pushedToGitHub) tour.completed("commit-workflow");
+    setManualEnvVars([{ env_key: "", value: "", repo: "" }]);
+    setManualSecrets([{ name: "", value: "", repo: "" }]);
+    setManualEnvironments([{ name: "" }]);
+
+    if (clearWorkflowModifiedStatesFn) {
+      clearWorkflowModifiedStatesFn();
+    }
+
+    // Immediately reflect the updated PR state so the button re-enables without a page refresh
+    if (result.prState) {
+      setProjectPRState(normalizeProjectPRState(result.prState));
+    }
+    // Same rule as the local save: this action can change which repos are
+    // waiting (adding a project's first workflow makes every repo wait), so it
+    // has to land without a refresh. The save computes that list *before* any
+    // GitHub push, so on a push the repos just delivered to are cleared instead
+    // of replayed as still waiting; the next load corrects a partial push,
+    // exactly as it does after a campaign.
+    //
+    // `pushedToGitHub` is unreachable today: this handler only runs from the
+    // header save button, which renders only in a workflow section, where the
+    // push flag is always false. If that button ever becomes reachable
+    // elsewhere, revisit the clear — handleWorkflowsUpdate only pushes
+    // workflows whose isModified is set, so a secrets- or env-vars-only save
+    // would deliver nothing while still clearing every reminder.
+    setPendingDeliveryRepos(pushedToGitHub ? [] : (result.pendingDeliveryRepos ?? []));
+    setRepoConfigRefreshSignal((prev) => prev + 1);
+  };
+
   const doSaveProject = async (): Promise<void> => {
     // Log project state for debugging
     console.log("📌 Starting save with project state:", {
@@ -1243,21 +1322,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       
       // Clear manual input fields after successful save
       if (result.success) {
-        // "Commit Locally" is this same save with updateGitHub false, which is
-        // the step the tour is waiting on.
-        if (!shouldUpdateGitHub) tour.completed("commit-workflow");
-        setManualEnvVars([{ env_key: "", value: "", repo: "" }]);
-        setManualSecrets([{ name: "", value: "", repo: "" }]);
-        setManualEnvironments([{ name: "" }]);
-        
-        if (clearWorkflowModifiedStatesFn) {
-          clearWorkflowModifiedStatesFn();
-        }
-
-        // Immediately reflect the updated PR state so the button re-enables without a page refresh
-        if (result.prState) {
-          setProjectPRState(normalizeProjectPRState(result.prState));
-        }
+        applyProjectSaveResult(result, shouldUpdateGitHub);
       }
       
       setSaveResults((result.results as any) ?? []);
@@ -1410,9 +1475,37 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     });
   };
 
+  // Open the campaign modal narrowed to `repos` — the repositories a save just
+  // added, which hold none of the project's workflows yet. Goes through the same
+  // drift guard as the header button, since it pushes local content to GitHub.
+  const openCreatePRModalForRepos = (repos: string[]): void => {
+    ifNotDrifted('Create Pull Requests', () => {
+      setPrModalRepoScope(repos);
+      setShowCreatePRModal(true);
+    });
+  };
+
+  // Widens the campaign modal back to every project repo. Without this a scoped
+  // campaign leaves the next header-launched one silently narrowed.
+  const closeCreatePRModal = (): void => {
+    setShowCreatePRModal(false);
+    setPrModalRepoScope(null);
+  };
+
   // Function to handle successful PR creation
-  const handlePRCreationSuccess = (selectedWorkflowNames: string[], selectedReusableWorkflowNames: string[], selectedCustomFileIds: number[], selectedCodeownersRepos: string[] = []): void => {
+  const handlePRCreationSuccess = (selectedWorkflowNames: string[], selectedReusableWorkflowNames: string[], selectedCustomFileIds: number[], selectedCodeownersRepos: string[] = [], targetedRepos: string[] = []): void => {
     console.log("✅ PRs created successfully");
+    // The campaign now has an open PR for every repo it targeted, so those stop
+    // being "waiting for delivery" (the server applies the same rule). Keyed on
+    // what the user left ticked, not on what the modal was offered: a repo they
+    // unticked gets no PR, and clearing it would drop its badge and count while
+    // it is genuinely still waiting.
+    const campaignRepos = new Set(targetedRepos);
+    setPendingDeliveryRepos((prev) => prev.filter((repo) => !campaignRepos.has(repo)));
+    // Belt-and-braces alongside closeCreatePRModal: the campaign is delivered,
+    // so nothing downstream should still be narrowed to one repo. Safe while the
+    // modal is open — it shows results, not the repo picker, from here on.
+    setPrModalRepoScope(null);
     tour.completed("confirm-campaign");
     // Reload PR status
     if (projectName) {
@@ -1511,6 +1604,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
   // banner's Manage button.
   const handleSectionChange = (section: string): void => {
     setActiveSection(section);
+    setSectionNavRequest((request) => request + 1);
     if (section === 'pr-history') tour.completed("open-campaigns");
   };
 
@@ -1672,6 +1766,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                 setRepos={setRepos as any}
                 selectedRepos={selectedRepos}
                 setSelectedRepos={setSelectedRepos}
+                pendingDeliveryRepos={visiblePendingDeliveryRepos}
+                repoConfigRefreshSignal={repoConfigRefreshSignal}
                 setRegexPattern={setRegexPattern}
                 regexPattern={regexPattern}
                 branchOption={branchOption as any}
@@ -1814,6 +1910,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
             setRepos={setRepos as any}
             selectedRepos={selectedRepos}
             setSelectedRepos={setSelectedRepos}
+            pendingDeliveryRepos={visiblePendingDeliveryRepos}
+            repoConfigRefreshSignal={repoConfigRefreshSignal}
             setRegexPattern={setRegexPattern}
             regexPattern={regexPattern}
             branchOption={branchOption as any}
@@ -2147,6 +2245,67 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     );
   }, [savedRepoBranchSnapshot, selectedRepos, regexPattern, branchOption, branchMaxAgeDays, validationRepo, preflightRequired]);
 
+  // Reset the dirty indicator and take whatever metadata the save returned.
+  // Split out of handleLocalSaveRepoConfig to keep its cognitive complexity
+  // inside the SonarQube limit (typescript:S3776).
+  const applyLocalSaveResult = (result: UpdateResult): void => {
+    setSavedRepoBranchSnapshot({
+      selectedRepos: [...selectedRepos],
+      regexPattern,
+      branchOption,
+      branchMaxAgeDays,
+      validationRepo,
+      preflightRequired,
+    });
+    if (result.projectId && !projectId) {
+      setProjectId(result.projectId);
+    }
+    if (result.projectCode && !projectCode) {
+      setProjectCode(result.projectCode);
+    }
+    if (result.prState) {
+      setProjectPRState(normalizeProjectPRState(result.prState));
+    }
+    // The save is what creates this state, so it has to land now: waiting for
+    // the next project load would mean the reminder only showed up after a
+    // manual refresh. The server recomputes it, so this cannot drift from what
+    // the next load will say.
+    setPendingDeliveryRepos(result.pendingDeliveryRepos ?? []);
+    // The repos are persisted now, so the branch-override panel can finally see
+    // them — its own refetch already ran, too early, when they were ticked.
+    setRepoConfigRefreshSignal((prev) => prev + 1);
+    if (localSaveToastTimerRef.current) {
+      clearTimeout(localSaveToastTimerRef.current);
+    }
+    setLocalSaveToastVisible(true);
+    localSaveToastTimerRef.current = setTimeout(() => {
+      setLocalSaveToastVisible(false);
+    }, 3000);
+  };
+
+  // The repos now exist server-side, so a campaign can target them. Ask how to
+  // deliver the workflows they don't have yet.
+  //
+  // "Just added" is not the same as "waiting": removing a repo leaves its
+  // delivery history behind, so a re-added repo can already hold the workflows.
+  // Narrow to what the server actually reports as waiting — otherwise the prompt
+  // offers a campaign for a repo the reminder on the same screen calls delivered.
+  // Only when the server *could* tell: an unchecked project answers [] either
+  // way, and treating that as "nothing waiting" would silence the prompt for
+  // every project that has never been drift-checked.
+  const maybePromptForNewRepoDelivery = (
+    newlyAddedRepos: string[],
+    result: UpdateResult,
+  ): void => {
+    if (projectType === "rwx" || !workflows.some((w) => !w.isReusable)) return;
+    const waiting = result.pendingDeliveryKnown
+      ? newlyAddedRepos.filter((repo) => (result.pendingDeliveryRepos ?? []).includes(repo))
+      : newlyAddedRepos;
+    if (waiting.length > 0) {
+      setNewRepoDeliveryPrompt(waiting);
+    }
+  };
+
   // Local save handler: saves repos & branches config to the database only (no GitHub update)
   const handleLocalSaveRepoConfig = async (): Promise<void> => {
     if (!projectName || !user) return;
@@ -2155,6 +2314,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       toast.error("Please select at least one repository before saving.");
       return;
     }
+    // Captured before the save overwrites the snapshot below.
+    const newlyAddedRepos = reposAddedSinceSnapshot(selectedRepos, savedRepoBranchSnapshot);
     setIsLocalSaving(true);
     try {
       const result = await handleSaveProjectWithModal({
@@ -2183,33 +2344,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         preflightRequired,
       });
       if (result.success) {
-        // Update snapshot so dirty indicator resets
-        setSavedRepoBranchSnapshot({
-          selectedRepos: [...selectedRepos],
-          regexPattern,
-          branchOption,
-          branchMaxAgeDays,
-          validationRepo,
-          preflightRequired,
-        });
-        // Update project metadata from result if available
-        if (result.projectId && !projectId) {
-          setProjectId(result.projectId);
-        }
-        if (result.projectCode && !projectCode) {
-          setProjectCode(result.projectCode);
-        }
-        if (result.prState) {
-          setProjectPRState(normalizeProjectPRState(result.prState));
-        }
-        // Show "Changes saved" toast
-        if (localSaveToastTimerRef.current) {
-          clearTimeout(localSaveToastTimerRef.current);
-        }
-        setLocalSaveToastVisible(true);
-        localSaveToastTimerRef.current = setTimeout(() => {
-          setLocalSaveToastVisible(false);
-        }, 3000);
+        applyLocalSaveResult(result);
+        maybePromptForNewRepoDelivery(newlyAddedRepos, result);
       } else {
         // result.results[0] already contains a formatted error message from handleSaveProjectWithModal
         toast.error(result.results?.[0] ?? 'Save failed: Unknown error');
@@ -2268,6 +2404,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       {projectName && (
         <Sidebar 
           activeSection={REPO_CONFIG_SECTION_KEYS.includes(activeSection) ? scrollActiveSection : activeSection}
+          pendingDeliveryCount={projectType === "rwx" ? 0 : visiblePendingDeliveryRepos.length}
           onSectionChange={handleSectionChange}
           projectName={projectName}
           onProjectNameSave={handleProjectNameSave}
@@ -2580,7 +2717,19 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               seededDriftNames={seededDriftNames}
               onWorkflowStatusesChanged={handleDriftWorkflowStatusesChanged}
             />
-            
+
+            {/* Repositories that joined the project but have no workflows yet */}
+            {projectType !== "rwx" && (
+              <PendingDeliveryNotice
+                repos={visiblePendingDeliveryRepos}
+                onCreatePullRequests={
+                  isProjectReadOnly
+                    ? undefined
+                    : () => openCreatePRModalForRepos(visiblePendingDeliveryRepos)
+                }
+              />
+            )}
+
             {/* Progress bar for save operations */}
             {isSaving && (
               <div style={{
@@ -2671,6 +2820,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         onConfirmDelete={handleConfirmDeleteProject}
         projectName={projectName}
         githubUser={user!}
+        projectCode={projectCode}
+        usePrefix={usePrefix}
       />
       
       {/* Legacy PR status drawer (campaign page is the primary entry point) */}
@@ -2690,8 +2841,13 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         <CreatePRModal
           user={user}
           projectName={projectName}
-          repositories={selectedRepos.map((r: string) => ({ name: r }))}
+          repositories={(prModalRepoScope ?? selectedRepos).map((r: string) => ({ name: r }))}
           workflows={workflows.filter((w) => !w.isReusable).map((w) => ({ name: w.name, status: w.workflowStatus }))}
+          // A newly added repo holds none of the project's workflows, so the
+          // "changed only" default would under-deliver on a mixed-status project.
+          preselectAllWorkflows={prModalRepoScope !== null}
+          projectCode={projectCode}
+          usePrefix={usePrefix}
           customFiles={customFiles}
           reusableWorkflows={[
             // RWX project's own workflows use the first selected repo as source
@@ -2700,11 +2856,14 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
               status: w.workflowStatus,
               sourceRepo: selectedRepos.length > 0 ? selectedRepos[0] : undefined
             })),
-            // Linked workflows have their own source repo
+            // Linked workflows have their own source repo, and are already named
+            // by the project that owns them - in that project's naming mode, which
+            // may differ from this one's. This project's prefix must not be added.
             ...linkedWorkflows.map((w) => ({
               name: w.workflow_name,
               status: w.workflowStatus,
-              sourceRepo: w.rwx_repo
+              sourceRepo: w.rwx_repo,
+              isLinked: true,
             })),
           ]}
           validationRepo={validationRepo}
@@ -2714,8 +2873,10 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           preflightError={lastPreflightError}
           preflightPrUrl={lastPreflightPrUrl}
           onPreflightStatusChange={handlePreflightStatusChange}
-          codeownersRepos={codeownersWithChanges}
-          onClose={() => setShowCreatePRModal(false)}
+          codeownersRepos={prModalRepoScope
+            ? codeownersWithChanges.filter((r) => prModalRepoScope.includes(r))
+            : codeownersWithChanges}
+          onClose={closeCreatePRModal}
           onSuccess={handlePRCreationSuccess}
         />
       )}
@@ -2748,6 +2909,24 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           onLink={handleLinkWorkflow}
           filterProjectId={manageFilterProjectId}
           onClose={handleCloseLinkedWorkflowsModal}
+        />
+      )}
+
+      {newRepoDeliveryPrompt && (
+        <ConfirmDialog
+          open={true}
+          title={newRepoDeliveryPrompt.length === 1
+            ? "Deliver this project's workflows to the new repository?"
+            : "Deliver this project's workflows to the new repositories?"}
+          description={`${newRepoDeliveryPrompt.join(", ")} ${newRepoDeliveryPrompt.length === 1 ? "was" : "were"} added and saved, but this project's workflows have not been delivered there yet. Open a pull request campaign for ${newRepoDeliveryPrompt.length === 1 ? "it" : "them"} now, or keep the change local and deliver later from the Workflows section.`}
+          confirmLabel="Create pull requests"
+          cancelLabel="Save locally only"
+          onConfirm={() => {
+            const repos = newRepoDeliveryPrompt;
+            setNewRepoDeliveryPrompt(null);
+            openCreatePRModalForRepos(repos);
+          }}
+          onCancel={() => setNewRepoDeliveryPrompt(null)}
         />
       )}
 

@@ -78,7 +78,13 @@ to share definitions.
 
 **Prefix mode affects only the GitHub filename.** With prefixing on, project `ABC` pushes
 `AM_ABC_ci.yml` so two projects' files never collide in a shared repository. It does not change the
-name ActionsManager stores, which is always the bare `ci`.
+name ActionsManager stores, which is always the bare `ci`: renaming a workflow edits that stem, and
+the prefix is applied for you.
+
+Project Files lists each workflow under the name it will carry on GitHub, so a project in prefix
+mode shows `AM_ABC_ci.yml` rather than `ci.yml`, with the prefix dimmed so the part you chose stays
+easy to scan. Workflows linked from a Reusable Workflow Project are named by the project that owns
+them and never take the consuming project's prefix.
 
 ## Delivery Modes
 

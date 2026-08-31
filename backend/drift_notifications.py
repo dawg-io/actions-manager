@@ -100,6 +100,12 @@ def record_drift_transitions(db: Session, project: Project, details: List) -> No
         state.content_hash = content_hash
         # Kept so the drift panel can render this row without calling GitHub.
         state.github_sha = detail.github_sha
+        # A SHA only comes back when the file was actually found on the branch,
+        # which is the one moment delivery can be confirmed. Stamped once and
+        # never cleared: github_sha above is nulled by the check that reports a
+        # deletion, so it cannot be the thing that remembers (issue #1981).
+        if detail.github_sha is not None and state.confirmed_present_at is None:
+            state.confirmed_present_at = now
         state.deleted_in_github = bool(getattr(detail, "deleted_in_github", False))
         state.last_checked_at = now
 
@@ -135,6 +141,23 @@ def recompute_project_drift_summary(db: Session, project: Project) -> None:
     db.commit()
 
 
+def _confirm_delivery(db: Session, project_id: int, workflow_id: int, repo_id: int,
+                      branch: str, now: datetime) -> None:
+    """Record that the managed file is now on this (repo, branch).
+
+    Every caller of clear_workflow_drift that names both has just put it there —
+    committing it, restoring it, adopting GitHub's copy, or merging a fix PR —
+    and that is the one delivery a drift check never witnesses. Without stamping
+    it here, a file deleted on GitHub before the next check leaves no confirmed
+    row, and _delivery_confirmed_on_branch reads that as "never delivered" and
+    suppresses the deletion for good: the file is gone, so no later check can
+    ever supply the evidence (issue #1981).
+    """
+    state = _get_or_create_state(db, project_id, workflow_id, repo_id, branch)
+    if state.confirmed_present_at is None:
+        state.confirmed_present_at = now
+
+
 def clear_workflow_drift(db: Session, project: Project, workflow_id: int,
                          repo_name: Optional[str] = None,
                          branch: Optional[str] = None) -> int:
@@ -159,6 +182,7 @@ def clear_workflow_drift(db: Session, project: Project, workflow_id: int,
             WorkflowDriftState.has_drift.is_(True),
         )
     )
+    repo = None
     if repo_name:
         repo = db.query(Repo).filter(Repo.repo_name == repo_name.strip()).first()
         if repo is None:
@@ -171,18 +195,22 @@ def clear_workflow_drift(db: Session, project: Project, workflow_id: int,
         states = states.filter(WorkflowDriftState.branch == branch)
     states = states.all()
 
+    now = datetime.now(timezone.utc)
+    if repo is not None and branch:
+        _confirm_delivery(db, project.project_id, workflow_id, repo.repo_id, branch, now)
+
     if not states:
         # Still recompute: a caller may have deleted rows (cascade) rather than
         # flipping them, which changes the project's count.
+        db.flush()
         recompute_project_drift_summary(db, project)
         return 0
 
     workflow = db.query(Workflow).filter(Workflow.workflow_id == workflow_id).first()
     workflow_name = workflow.workflow_name if workflow else str(workflow_id)
-    now = datetime.now(timezone.utc)
 
     for state in states:
-        repo = db.query(Repo).filter(Repo.repo_id == state.repo_id).first()
+        state_repo = db.query(Repo).filter(Repo.repo_id == state.repo_id).first()
         # Same dedup shape as record_drift_transitions so a resolution recorded
         # here can't double-notify with one recorded by a later live check.
         dedup_key = (
@@ -191,7 +219,7 @@ def clear_workflow_drift(db: Session, project: Project, workflow_id: int,
         )
         emit_notification_event(db, project.project_id, "drift.resolved", dedup_key, {
             "project_name": project.project_name,
-            "repo": repo.repo_name if repo else "",
+            "repo": state_repo.repo_name if state_repo else "",
             "branch": state.branch or "",
             "workflow_name": workflow_name,
         })

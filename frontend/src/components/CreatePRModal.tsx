@@ -11,14 +11,22 @@ import { deployCodeowners } from "../api/codeowners";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { getDocsUrl } from "../help/helpLinks";
-import { normalizeWorkflowFilename } from "../utils/workflowFilename";
+import { normalizeWorkflowFilename, workflowDisplayFilename } from "../utils/workflowFilename";
 
 interface CreatePRModalProps {
   user: string;
   projectName: string;
   repositories: Array<{ name: string; full_name?: string }>;
   workflows: Array<{ name: string; status?: string }>;
-  reusableWorkflows?: Array<{ name: string; status?: string; sourceRepo?: string }>;
+  /**
+   * Seed the selection with every workflow, not just the changed ones. For a
+   * repository that holds none of them, "changed only" would under-deliver.
+   */
+  preselectAllWorkflows?: boolean;
+  reusableWorkflows?: Array<{ name: string; status?: string; sourceRepo?: string; isLinked?: boolean }>;
+  /** Project code and naming mode, so rows name the file that lands on GitHub. */
+  projectCode?: string;
+  usePrefix?: boolean;
   customFiles?: Array<{ id: number; file_path: string; file_status: string; pending_delete: boolean }>;
   /** Repos available for CODEOWNERS inclusion in this campaign. */
   codeownersRepos?: string[];
@@ -35,7 +43,8 @@ interface CreatePRModalProps {
     prUrl?: string | null;
   }) => void;
   onClose: () => void;
-  onSuccess: (selectedWorkflowNames: string[], selectedReusableWorkflowNames: string[], selectedCustomFileIds: number[], selectedCodeownersRepos: string[]) => void;
+  /** `targetedRepos` is what the user left ticked, not what the modal offered. */
+  onSuccess: (selectedWorkflowNames: string[], selectedReusableWorkflowNames: string[], selectedCustomFileIds: number[], selectedCodeownersRepos: string[], targetedRepos: string[]) => void;
 }
 
 // ─── Pure helpers (no component state) ──────────────────────────────────────
@@ -158,13 +167,11 @@ function usePreflightValidation(
       getPreflightValidationStatus(user, projectName, true).then(applyRefresh).catch(() => {});
     }, 8000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, refreshing, running, closing, merging, user, projectName, applyRefresh]);
 
   useEffect(() => {
     if (!validationRepo || !prUrl || prState !== null || refreshing || running || closing || merging) return;
     getPreflightValidationStatus(user, projectName, true).then(applyRefresh).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validationRepo, prUrl, prState, user, projectName, applyRefresh]);
 
   const handleRun = useCallback(async (selectedWorkflowNames: string[]) => {
@@ -277,7 +284,7 @@ interface CreatePRCampaignParams {
   selectedWorkflows: Set<string>;
   selectedReusableWorkflows: Set<string>;
   selectedCustomFileIds: Set<number>;
-  onSuccess: (workflowNames: string[], reusableNames: string[], customFileIds: number[], codeownersRepos: string[]) => void;
+  onSuccess: (workflowNames: string[], reusableNames: string[], customFileIds: number[], codeownersRepos: string[], targetedRepos: string[]) => void;
   selectedCodeownersRepos: Set<string>;
   campaignName: string;
   campaignDescription: string;
@@ -358,7 +365,7 @@ function useCreatePRCampaign({
                 );
                 setCreating(false);
                 setResults({ message: "Pull requests created successfully", results: statusResponse.results, prs_created: statusResponse.prs_created });
-                onSuccess(Array.from(selectedWorkflows), Array.from(selectedReusableWorkflows), Array.from(selectedCustomFileIds), succeeded);
+                onSuccess(Array.from(selectedWorkflows), Array.from(selectedReusableWorkflows), Array.from(selectedCustomFileIds), succeeded, Array.from(selectedRepos));
               } else {
                 setCreating(false);
                 setError(statusResponse.error || "An error occurred during PR creation.");
@@ -372,7 +379,7 @@ function useCreatePRCampaign({
         const { succeeded } = await deployCodeownersRepos(response.campaign_id, response.codeowners_merged_repos || []);
         setResults(response);
         setCreating(false);
-        onSuccess(Array.from(selectedWorkflows), Array.from(selectedReusableWorkflows), Array.from(selectedCustomFileIds), succeeded);
+        onSuccess(Array.from(selectedWorkflows), Array.from(selectedReusableWorkflows), Array.from(selectedCustomFileIds), succeeded, Array.from(selectedRepos));
       }
     } catch (err: any) {
       console.error("Error creating pull requests:", err);
@@ -526,7 +533,10 @@ const PRCreationResults: React.FC<{ results: any }> = ({ results }) => (
 );
 
 interface WorkflowItemProps {
+  /** Stored stem — the selection key, never the label. */
   name: string;
+  /** The on-GitHub filename to show. Falls back to the bare filename. */
+  displayName?: string;
   selected: boolean;
   disabled: boolean;
   onToggle: (name: string) => void;
@@ -534,7 +544,7 @@ interface WorkflowItemProps {
   badge?: React.ReactNode;
 }
 
-const WorkflowItem: React.FC<WorkflowItemProps> = ({ name, selected, disabled, onToggle, extraClass, badge }) => (
+const WorkflowItem: React.FC<WorkflowItemProps> = ({ name, displayName, selected, disabled, onToggle, extraClass, badge }) => (
   <label className={`repo-item ${selected ? "selected" : ""} ${extraClass || ""}`}>
     <input
       type="checkbox"
@@ -542,7 +552,7 @@ const WorkflowItem: React.FC<WorkflowItemProps> = ({ name, selected, disabled, o
       onChange={() => onToggle(name)}
       disabled={disabled}
     />
-    <span className="repo-name">{normalizeWorkflowFilename(name)}</span>
+    <span className="repo-name">{displayName || normalizeWorkflowFilename(name)}</span>
     {badge}
   </label>
 );
@@ -646,9 +656,9 @@ const PreflightSection: React.FC<PreflightSectionProps> = ({
 };
 
 interface WorkflowSectionProps {
-  workflows: Array<{ name: string; status?: string }>;
-  changed: Array<{ name: string; status?: string }>;
-  unchanged: Array<{ name: string; status?: string }>;
+  workflows: Array<{ name: string; status?: string; displayName?: string }>;
+  changed: Array<{ name: string; status?: string; displayName?: string }>;
+  unchanged: Array<{ name: string; status?: string; displayName?: string }>;
   selected: Set<string>;
   showUnchanged: boolean;
   setShowUnchanged: (v: boolean) => void;
@@ -677,13 +687,13 @@ const WorkflowSection: React.FC<WorkflowSectionProps> = ({
     )}
     <div className="repo-list">
       {changed.map((wf) => (
-        <WorkflowItem key={wf.name} name={wf.name} selected={selected.has(wf.name)} disabled={creating} onToggle={onToggle} badge={workflowBadge(wf.status)} />
+        <WorkflowItem key={wf.name} name={wf.name} displayName={wf.displayName} selected={selected.has(wf.name)} disabled={creating} onToggle={onToggle} badge={workflowBadge(wf.status)} />
       ))}
       {showUnchanged && unchanged.map((wf) => (
-        <WorkflowItem key={wf.name} name={wf.name} selected={selected.has(wf.name)} disabled={creating} onToggle={onToggle} extraClass="unchanged-workflow" badge={<span className="workflow-status-badge synced">Synced</span>} />
+        <WorkflowItem key={wf.name} name={wf.name} displayName={wf.displayName} selected={selected.has(wf.name)} disabled={creating} onToggle={onToggle} extraClass="unchanged-workflow" badge={<span className="workflow-status-badge synced">Synced</span>} />
       ))}
       {changed.length === 0 && workflows.map((wf) => (
-        <WorkflowItem key={wf.name} name={wf.name} selected={selected.has(wf.name)} disabled={creating} onToggle={onToggle} />
+        <WorkflowItem key={wf.name} name={wf.name} displayName={wf.displayName} selected={selected.has(wf.name)} disabled={creating} onToggle={onToggle} />
       ))}
     </div>
   </div>
@@ -704,12 +714,12 @@ interface PRCreationFormProps {
   validationActionInProgress: boolean;
   selectedWorkflows: Set<string>;
   selectedReusableWorkflows: Set<string>;
-  changedWorkflows: Array<{ name: string; status?: string }>;
-  unchangedWorkflows: Array<{ name: string; status?: string }>;
-  changedReusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string }>;
-  unchangedReusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string }>;
-  workflows: Array<{ name: string; status?: string }>;
-  reusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string }>;
+  changedWorkflows: Array<{ name: string; status?: string; displayName?: string }>;
+  unchangedWorkflows: Array<{ name: string; status?: string; displayName?: string }>;
+  changedReusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string }>;
+  unchangedReusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string }>;
+  workflows: Array<{ name: string; status?: string; displayName?: string }>;
+  reusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string }>;
   changedCustomFiles: Array<{ id: number; file_path: string; file_status: string; pending_delete: boolean }>;
   selectedCustomFileIds: Set<number>;
   onToggleCustomFile: (id: number) => void;
@@ -926,8 +936,11 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
   user,
   projectName,
   repositories,
-  workflows,
-  reusableWorkflows = [],
+  workflows: workflowsProp,
+  preselectAllWorkflows = false,
+  reusableWorkflows: reusableWorkflowsProp = [],
+  projectCode,
+  usePrefix,
   customFiles = [],
   codeownersRepos = [],
   validationRepo = null,
@@ -940,6 +953,24 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  // Selection is keyed on the stored stem, so the prefix is attached as a
+  // separate display field rather than by rewriting `name`. Decorating here
+  // means the changed/unchanged splits below inherit it for free.
+  const workflows = useMemo(
+    () => workflowsProp.map((w) => ({ ...w, displayName: workflowDisplayFilename(w.name, projectCode, usePrefix) })),
+    [workflowsProp, projectCode, usePrefix],
+  );
+  const reusableWorkflows = useMemo(
+    () =>
+      reusableWorkflowsProp.map((w) => ({
+        ...w,
+        // A linked workflow already carries its owning project's name; adding
+        // this project's prefix would name a file the campaign never pushes.
+        displayName: workflowDisplayFilename(w.name, projectCode, usePrefix && !w.isLinked),
+      })),
+    [reusableWorkflowsProp, projectCode, usePrefix],
+  );
+
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(
     new Set(repositories.map((r) => r.full_name || r.name))
   );
@@ -949,7 +980,7 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
   const changedReusableWorkflows = useMemo(() => reusableWorkflows.filter((w) => w.status !== "synced_with_github"), [reusableWorkflows]);
   const unchangedReusableWorkflows = useMemo(() => reusableWorkflows.filter((w) => w.status === "synced_with_github"), [reusableWorkflows]);
   const [selectedWorkflows, setSelectedWorkflows] = useState<Set<string>>(
-    new Set((changedWorkflows.length > 0 ? changedWorkflows : workflows).map((w) => w.name))
+    new Set((!preselectAllWorkflows && changedWorkflows.length > 0 ? changedWorkflows : workflows).map((w) => w.name))
   );
   const [selectedReusableWorkflows, setSelectedReusableWorkflows] = useState<Set<string>>(
     new Set(changedReusableWorkflows.map((w) => w.name))

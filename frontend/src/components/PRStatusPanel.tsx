@@ -53,7 +53,6 @@ const PRStatusPanel: React.FC<PRStatusPanelProps> = ({ user, projectName, onClos
   useEffect(() => {
     // Load from GitHub so lifecycle action buttons reflect current mergeability.
     loadPRStatus(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, projectName]);
 
   const handleRefresh = async () => {

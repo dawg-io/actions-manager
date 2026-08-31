@@ -56,6 +56,58 @@ describe('RepositoryBranchSelector', () => {
     );
   });
 
+  describe('pending delivery badge', () => {
+    it('badges only the repositories that are still waiting', () => {
+      render(
+        <RepositoryBranchSelector
+          availableRepositories={REPOS}
+          selectedRepositoryNames={['whatsupdawg/test1', 'whatsupdawg/test2']}
+          pendingDeliveryRepos={['whatsupdawg/test2']}
+          onSelectRepository={vi.fn()}
+          onRemoveRepository={vi.fn()}
+        />,
+      );
+
+      const badges = screen.getAllByTestId('pending-delivery-badge');
+      expect(badges).toHaveLength(1);
+      expect(
+        badges[0].closest('li')?.textContent,
+      ).toContain('whatsupdawg/test2');
+    });
+
+    it('shows no badge when nothing is waiting', () => {
+      render(
+        <RepositoryBranchSelector
+          availableRepositories={REPOS}
+          selectedRepositoryNames={['whatsupdawg/test1']}
+          onSelectRepository={vi.fn()}
+          onRemoveRepository={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId('pending-delivery-badge')).not.toBeInTheDocument();
+    });
+
+    it('still badges a repo whose metadata could not be fetched', () => {
+      // The badge comes from the server, not from the repository listing, so a
+      // failed /api/repos fetch must not silently drop the reminder.
+      render(
+        <RepositoryBranchSelector
+          availableRepositories={[]}
+          selectedRepositoryNames={['whatsupdawg/test2']}
+          pendingDeliveryRepos={['whatsupdawg/test2']}
+          onSelectRepository={vi.fn()}
+          onRemoveRepository={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId('pending-delivery-badge')).toBeInTheDocument();
+      expect(
+        screen.getByTestId('selected-repo-unknown-whatsupdawg/test2'),
+      ).toBeInTheDocument();
+    });
+  });
+
   it('marks the available row as selected when its full_name is in the selection', () => {
     render(
       <RepositoryBranchSelector

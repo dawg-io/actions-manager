@@ -862,7 +862,7 @@ def generate_user_rows_html(users: list[Account]) -> str:
                         <td style="text-align: center;"><strong>{user_data['api_calls_today']:,}</strong></td>
                         <td>{user_data['last_login']}</td>
                         <td style="text-align: center;">
-                            <button class="action-btn" onclick="openModal({user_data['user_id']}, '{user_data['account_type']}')" title="Edit Account Type">
+                            <button class="action-btn js-edit-account-type" data-user-id="{user_data['user_id']}" data-account-type="{user_data['account_type']}" title="Edit Account Type">
                                 ⚙️
                             </button>
                             <a href="/admin/users/{user_data['user_id']}/subscription" class="action-btn" style="text-decoration: none; display: inline-block;" title="View Subscription">
@@ -957,6 +957,17 @@ def generate_html_footer(page: int, per_page: int, sort_by: str, sort_order: str
                 document.getElementById('errorMessage').classList.remove('show');
             }}
             
+            // Bound here rather than via an inline onclick: an attribute value is
+            // HTML-entity-decoded before it is parsed as JavaScript, so an escaped
+            // quote in the account type would still close the string literal and
+            // run as code. Read through dataset, it stays a string.
+            document.addEventListener('click', function (event) {{
+                const button = event.target.closest('.js-edit-account-type');
+                if (button) {{
+                    openModal(button.dataset.userId, button.dataset.accountType);
+                }}
+            }});
+
             function closeModal() {{
                 document.getElementById('accountTypeModal').classList.remove('show');
                 currentUserId = null;

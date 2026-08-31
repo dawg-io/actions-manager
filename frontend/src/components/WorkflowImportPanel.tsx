@@ -113,7 +113,6 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
   // Auto-scan on modal open
   useEffect(() => {
     handleDiscover();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Preview a workflow

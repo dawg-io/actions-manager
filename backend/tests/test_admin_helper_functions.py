@@ -286,6 +286,35 @@ class TestGenerateUserRowsHtml:
         assert 'testuser' in html
         assert 'test@example.com' in html
 
+    def test_account_type_cannot_break_out_into_javascript(self):
+        """A quote in account_type must not become executable JavaScript.
+
+        The edit button used to render as
+        ``onclick="openModal(1, '<account_type>')"``. An HTML attribute is
+        entity-decoded *before* its contents are parsed as JavaScript, so
+        html.escape()'s ``&#x27;`` turned back into a real quote and closed
+        the string literal. The value now travels in a data attribute and is
+        read via dataset, where it stays a string.
+        """
+        user = Account(
+            user_id=1,
+            github_user="testuser",
+            github_email="test@example.com",
+            account_type="free'); alert(document.cookie); ('",
+            github_account_type="User",
+            avatar_url=None,
+            last_login_at=None,
+            last_login_ip=None,
+            github_api_calls=0,
+            github_api_calls_today=0
+        )
+
+        html = generate_user_rows_html([user])
+
+        assert "onclick=" not in html
+        assert "'); alert(document.cookie); ('" not in html
+        assert 'data-account-type="free&#x27;); alert(document.cookie); (&#x27;"' in html
+
 
 class TestGenerateHtmlHeader:
     """Test HTML header generation"""

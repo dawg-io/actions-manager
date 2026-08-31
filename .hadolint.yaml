@@ -16,7 +16,7 @@ ignored:
   # pipeline exists to do.
   #
   # The staleness risk hadolint is warning about is handled instead by --pull on
-  # every docker build (see docker-build-and-test.yml), which is required
+  # every docker build (see docker-images.yml), which is required
   # because pmox-runner is persistent rather than ephemeral and would otherwise
   # reuse a locally cached base layer.
   - DL3007

@@ -1,6 +1,11 @@
 import { useTheme } from './ThemeContext';
 
-const DarkModeToggle = ({ className = 'fixed' }) => {
+interface DarkModeToggleProps {
+  /** 'fixed' pins the toggle to the viewport corner; anything else renders it inline. */
+  className?: string;
+}
+
+const DarkModeToggle = ({ className = 'fixed' }: DarkModeToggleProps) => {
   const { isDarkMode, toggleTheme } = useTheme();
 
   // Tailwind classes for the toggle button

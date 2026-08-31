@@ -308,3 +308,43 @@ class TestAdoptGithubVersionHeaderSecurity:
             },
         )
         assert response.status_code != 401
+
+
+class TestReadPathIdentitySecurity:
+    """Reads used to be exempt from authentication entirely.
+
+    WriteProtectionMiddleware returned early for safe methods, so GET handlers
+    took the caller from the client-supplied X-GitHub-User header or a
+    github_user query parameter with nothing to check either against.
+    """
+
+    def test_project_list_rejects_anonymous_reader(self):
+        """This returned every project in the workspace to an unauthenticated caller."""
+        response = client.get("/api/projects/", params={"github_user": "headeruser"})
+        assert response.status_code == 401
+
+    def test_project_list_ignores_spoofed_header(self):
+        """A forged X-GitHub-User is replaced by the session's user, not honoured."""
+        response = client.get(
+            "/api/projects/",
+            params={"github_user": "headeruser"},
+            headers=auth_headers({"X-GitHub-User": "someone-else"}),
+        )
+        assert response.status_code == 403
+
+    def test_project_list_accepts_the_session_owner(self):
+        response = client.get(
+            "/api/projects/",
+            params={"github_user": "headeruser"},
+            headers=auth_headers(),
+        )
+        assert response.status_code == 200
+
+    def test_query_param_caller_must_match_the_session(self):
+        """Routes taking the caller as ?github_user= check it against the session."""
+        response = client.get(
+            "/api/project-pr-history",
+            params={"github_user": "victim", "project_name": "SecurityProject"},
+            headers=auth_headers(),
+        )
+        assert response.status_code == 403

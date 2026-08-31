@@ -75,7 +75,7 @@ const TrendBars: React.FC<{ trend: TrendPoint[]; successRate: number | null }> =
 const RunRow: React.FC<{ run: RecentRun }> = ({ run }) => {
   const outcome = run.conclusion ?? run.status ?? "unknown";
   const label = [
-    run.workflow_name,
+    run.workflow_filename,
     run.run_number ? `run ${run.run_number}` : null,
     run.repo,
     run.branch,
@@ -85,7 +85,7 @@ const RunRow: React.FC<{ run: RecentRun }> = ({ run }) => {
   const detail = (
     <>
       <span aria-hidden="true">{getStatusIcon(outcome)}</span>
-      <span className="font-medium">{run.workflow_name}</span>
+      <span className="font-medium">{run.workflow_filename}</span>
       {run.run_number && <span className="text-text-secondary dark:text-text-secondary-dark">#{run.run_number}</span>}
       <span className="truncate text-text-secondary dark:text-text-secondary-dark">
         {run.repo} · {run.branch}
@@ -171,8 +171,7 @@ const BuildMetricsPanel: React.FC<BuildMetricsPanelProps> = ({ projectId, user }
     : `${summary.success_rate}%`;
 
   const scopedLabel = summary?.selected_workflow
-    ? summary.workflows.find((w) => w.workflow_filename === summary.selected_workflow)?.workflow_name
-      ?? summary.selected_workflow
+    ? summary.selected_workflow
     : null;
   // A workflow that has left the project keeps its option, so the control never
   // silently displays "All workflows" while the numbers below are scoped.
@@ -210,7 +209,7 @@ const BuildMetricsPanel: React.FC<BuildMetricsPanelProps> = ({ projectId, user }
               <option value="">All workflows</option>
               {summary.workflows.map((item) => (
                 <option key={item.workflow_filename} value={item.workflow_filename}>
-                  {item.workflow_name}
+                  {item.workflow_filename}
                 </option>
               ))}
               {scopeMissingFromList && <option value={workflow}>{workflow}</option>}
@@ -295,12 +294,12 @@ const BuildMetricsPanel: React.FC<BuildMetricsPanelProps> = ({ projectId, user }
                     aria-current={isSelected}
                     aria-label={
                       isSelected
-                        ? `Stop scoping to ${item.workflow_name}`
-                        : `Scope metrics to ${item.workflow_name}`
+                        ? `Stop scoping to ${item.workflow_filename}`
+                        : `Scope metrics to ${item.workflow_filename}`
                     }
                     data-testid={`build-metrics-workflow-row-${item.workflow_filename}`}
                   >
-                    {item.workflow_name}
+                    {item.workflow_filename}
                   </button>
                   <span className="ml-auto shrink-0 text-text-secondary dark:text-text-secondary-dark">
                     {item.total} run{item.total === 1 ? "" : "s"} ·{" "}
@@ -315,7 +314,7 @@ const BuildMetricsPanel: React.FC<BuildMetricsPanelProps> = ({ projectId, user }
                       href={item.actions_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      aria-label={`${item.workflow_name} — open in GitHub`}
+                      aria-label={`${item.workflow_filename} — open in GitHub`}
                     >
                       →
                     </a>

@@ -1,281 +1,221 @@
-# Staging Cloud Deployment via Cloudflare Tunnel
+# Public HTTPS for a Self-Hosted Install via Cloudflare Tunnel
 
-This guide explains how to expose the in-cluster Actions Manager deployment
-(built by `.github/workflows/docker-build-and-test.yml` and rolled out by Flux) at a
-stable public HTTPS URL — for example `https://staging.example.com` — without
-opening any inbound ports on your firewall or assigning a public IP to the
-cluster.
+This guide puts your self-hosted ActionsManager behind a stable public HTTPS
+hostname — for example `https://actions.example.com` — without opening an
+inbound firewall port, forwarding anything on your router, or giving the host a
+public IP. `cloudflared` makes an outbound connection to Cloudflare, and traffic
+comes back down it.
 
-The goal: after every push to `develop` (or `main`), the freshly built image is
-deployed by Flux and immediately reachable at the same staging URL, so the
-cloud deployment can be smoke-tested end-to-end (including GitHub OAuth and
-Marketplace webhooks) on every code change.
+It is one of the reverse-proxy options in
+[SELF_HOSTED_INSTALL.md → Using HTTPS with Reverse Proxy](../SELF_HOSTED_INSTALL.md#using-https-with-reverse-proxy),
+alongside Caddy, Traefik and Nginx. Pick this one when the host sits behind NAT
+or a firewall you would rather not touch; pick Caddy when the host already has
+port 443 reachable from the internet, since it is less moving parts.
 
-## Why Cloudflare Tunnel
+Do not expose ActionsManager over plain HTTP beyond localhost. PATs and API
+credentials would cross the network in the clear. Everything below exists to
+get you off `ALLOW_INSECURE_HTTP`.
 
-- **Outbound only.** `cloudflared` runs as a pod in the cluster and dials out to
-  Cloudflare's edge. Nothing needs to be exposed inbound.
-- **Free.** A Cloudflare account and a domain you control are sufficient; no
-  paid plan is required for a single tunnel.
-- **Real HTTPS URL.** Cloudflare terminates TLS on a hostname you own, which is
-  what GitHub OAuth callbacks and Marketplace webhooks need.
-- **Reuses the existing pipeline.** No changes to the build/deploy pipeline are
-  required; the tunnel just fronts whatever the cluster is currently serving.
+Two things this buys you beyond encryption:
+
+- **GitHub OAuth login**, which needs a fixed callback URL GitHub can reach.
+- **Webhook delivery**, so a merged pull request updates its status immediately
+  instead of on the next poll. If that is *all* you want, you do not need this
+  guide — expose the single `POST /webhooks/github` path instead, per
+  [Exposing the Webhook Endpoint](WEBHOOK_ENDPOINT.md).
+
+## What you are pointing the tunnel at
+
+The self-hosted image is a single container serving the dashboard, the API and
+the WebSocket on **one port, 8080**:
+
+```bash
+docker run -d \
+  --name actions-manager \
+  -p 8080:8080 \
+  -v actions-manager-data:/app/data \
+  -e INSTALLATION_MODE=self-hosted \
+  -e SECRET_KEY=<your_generated_key> \
+  ghcr.io/dawg-io/actions-manager:latest
+```
+
+or, with `docker-compose.self-hosted.yml`, the `app` service publishing
+`${PORT:-8080}:8080`. (No `ALLOW_INSECURE_HTTP` above because nothing but
+`localhost` reaches it yet — see
+[INSTALLATION.md](../../INSTALLATION.md) for the full first-run command.)
+
+One port means one hostname and one ingress rule — there is no separate API or
+frontend origin to route.
 
 ## Prerequisites
 
-- A Cloudflare account.
-- A domain (or subdomain) managed in Cloudflare DNS — e.g. `example.com`, with
-  `staging.example.com` available to point at the tunnel.
-- `cloudflared` CLI installed locally for the one-time tunnel creation
-  (<https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/>).
-- `kubectl` access to the cluster that already runs the Actions Manager
-  backend and frontend (the same cluster Flux deploys to).
-- Knowledge of the in-cluster Service that fronts the application — typically
-  the ingress controller Service, or directly the `frontend` and `backend`
-  Services in the Actions Manager namespace.
+- A working self-hosted install, reachable on the host at
+  `http://localhost:8080`. Confirm with `curl -f http://localhost:8080/healthz`.
+- A Cloudflare account with a zone you control (`example.com` below).
+- `cloudflared` installed on the host, or Docker to run it as a container.
 
 ## One-time Cloudflare setup
 
-1. **Log in and create the tunnel.** From a workstation:
-
-   ```bash
-   cloudflared tunnel login
-   cloudflared tunnel create actions-manager-staging
-   ```
-
-   The `create` command prints a tunnel UUID and writes a credentials JSON
-   file (e.g. `~/.cloudflared/<UUID>.json`). Keep this file — it is the
-   tunnel's secret and will be loaded into the cluster as a Kubernetes
-   Secret.
-
-2. **Create the DNS route.** Map the chosen hostname to the tunnel:
-
-   ```bash
-   cloudflared tunnel route dns actions-manager-staging staging.example.com
-   ```
-
-   Cloudflare will create a proxied CNAME record automatically.
-
-3. **Decide what the tunnel should point at inside the cluster.** Two common
-   options:
-
-   - **Front the existing ingress controller** (recommended if you already use
-     ingress for hostname/path routing). Point the tunnel at the ingress
-     controller's `Service` (e.g. `ingress-nginx-controller.ingress-nginx`)
-     and let your existing `Ingress` resources route `staging.example.com` to
-     the right backend.
-   - **Point directly at the app Services.** Skip ingress entirely and route
-     `/` to the frontend Service and `/api` (and any other backend paths) to
-     the backend Service. This is simpler for a pure staging setup.
-
-## Deploy `cloudflared` to the cluster
-
-The tunnel runs as a small Deployment in the same cluster as Actions Manager.
-You will need:
-
-- The tunnel UUID and credentials JSON from step 1 above.
-- A `config.yaml` describing the ingress rules (what hostname maps to what
-  in-cluster Service).
-
-### 1. Store the tunnel credentials as a Secret
-
-Create the Secret from the credentials JSON Cloudflare generated for you:
-
 ```bash
-kubectl create namespace cloudflared
+# Authenticate and create a named tunnel
+cloudflared tunnel login
+cloudflared tunnel create actionsmanager
 
-kubectl -n cloudflared create secret generic tunnel-credentials \
-  --from-file=credentials.json=$HOME/.cloudflared/<TUNNEL_UUID>.json
+# Note the tunnel UUID and the credentials file it wrote, e.g.
+# ~/.cloudflared/<tunnel-id>.json
+
+# Point the hostname at it
+cloudflared tunnel route dns actionsmanager actions.example.com
 ```
 
-### 2. Provide the tunnel config as a ConfigMap
+That last command creates the CNAME in your Cloudflare zone. Nothing is
+reachable yet — the tunnel has to be running for it to resolve to anything.
 
-The config tells `cloudflared` which tunnel to run and how to map hostnames to
-in-cluster Services.
+## Tunnel configuration
 
-**Option A — front your existing ingress controller:**
+`~/.cloudflared/config.yml`:
 
 ```yaml
-# cloudflared-config.yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cloudflared-config
-  namespace: cloudflared
-data:
-  config.yaml: |
-    tunnel: <TUNNEL_UUID>
-    credentials-file: /etc/cloudflared/creds/credentials.json
-    no-autoupdate: true
-    ingress:
-      - hostname: staging.example.com
-        service: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
-      - service: http_status:404
+tunnel: <tunnel-id>
+credentials-file: /root/.cloudflared/<tunnel-id>.json
+
+ingress:
+  - hostname: actions.example.com
+    service: http://localhost:8080
+  # Anything else is refused rather than silently routed
+  - service: http_status:404
 ```
 
-**Option B — point directly at the app Services** (replace the namespace and
-Service names with whatever your Flux deployment uses):
+WebSocket traffic needs no special configuration — Cloudflare Tunnel proxies
+the `Upgrade` handshake as-is, so ActionsManager's `/ws` endpoint works over
+the same hostname. That matters here: live workflow status, drift updates and
+PR state all arrive over that socket, so a proxy that drops upgrades leaves the
+UI looking frozen rather than broken.
 
-```yaml
-# cloudflared-config.yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cloudflared-config
-  namespace: cloudflared
-data:
-  config.yaml: |
-    tunnel: <TUNNEL_UUID>
-    credentials-file: /etc/cloudflared/creds/credentials.json
-    no-autoupdate: true
-    ingress:
-      - hostname: staging.example.com
-        path: ^/(api|docs|openapi.json|ws)(/|$)
-        service: http://backend.actions-manager.svc.cluster.local:8000
-      - hostname: staging.example.com
-        service: http://frontend.actions-manager.svc.cluster.local:80
-      - service: http_status:404
-```
+## Run it
 
-Apply it:
+**On the host**, as a service that survives reboots. `cloudflared service
+install` reads its configuration from `/etc/cloudflared/`, so put the file
+there rather than under `~`:
 
 ```bash
-kubectl apply -f cloudflared-config.yaml
+sudo mkdir -p /etc/cloudflared
+sudo cp ~/.cloudflared/config.yml /etc/cloudflared/config.yml
+sudo cp ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
 ```
 
-### 3. Deploy `cloudflared`
-
-```yaml
-# cloudflared-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: cloudflared
-  namespace: cloudflared
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: cloudflared
-  template:
-    metadata:
-      labels:
-        app: cloudflared
-    spec:
-      containers:
-        - name: cloudflared
-          image: cloudflare/cloudflared:2025.11.1
-          args:
-            - tunnel
-            - --config
-            - /etc/cloudflared/config/config.yaml
-            - run
-          livenessProbe:
-            httpGet:
-              path: /ready
-              port: 2000
-            initialDelaySeconds: 10
-            periodSeconds: 10
-          volumeMounts:
-            - name: config
-              mountPath: /etc/cloudflared/config
-              readOnly: true
-            - name: creds
-              mountPath: /etc/cloudflared/creds
-              readOnly: true
-      volumes:
-        - name: config
-          configMap:
-            name: cloudflared-config
-        - name: creds
-          secret:
-            secretName: tunnel-credentials
-```
-
-Apply:
+**Or as a container**, if you would rather not install anything on the host. On
+a Linux host, `--network host` lets it reach the published port the same way
+you just did with `curl`:
 
 ```bash
-kubectl apply -f cloudflared-deployment.yaml
-kubectl -n cloudflared rollout status deploy/cloudflared
-kubectl -n cloudflared logs deploy/cloudflared --tail=50
+docker run -d \
+  --name actions-manager-tunnel \
+  --restart unless-stopped \
+  --network host \
+  -v ~/.cloudflared:/etc/cloudflared:ro \
+  cloudflare/cloudflared:2025.11.1 \
+  tunnel --config /etc/cloudflared/config.yml run
 ```
 
-You should see lines like `Registered tunnel connection` for each
-edge connection. Within a minute, `https://staging.example.com` will resolve to
-your tunnel and proxy to the in-cluster Service you configured.
+Avoid `--network container:actions-manager` here: it works, but it ties the
+tunnel's network namespace to the app container, so recreating the app on an
+upgrade leaves the tunnel with no network until it is recreated too.
 
-## Wire the app to the staging URL
+With Compose instead, add `cloudflared` as a service on the same network and
+target the app by service name — `service: http://app:8080` in `config.yml` —
+rather than `localhost`. Keep it in a file of your own (an override, or a
+separate project attached to the app's network) so a
+`docker compose pull && docker compose up -d` upgrade of ActionsManager does
+not disturb it.
 
-Update the cloud-mode environment so the app knows its public origin and so
-GitHub recognises the callback. In your Flux/Helm values (or whatever you use
-to populate the backend Deployment env), set:
+## Point the app at its new URL
 
-```env
-VITE_FRONTEND_URL=https://staging.example.com
-VITE_BACKEND_URL=https://staging.example.com
-GITHUB_OAUTH_CALLBACK_URL=https://staging.example.com/api/auth/callback
-```
-
-Then in the GitHub OAuth App / GitHub App settings used by this staging
-deployment:
-
-- Set the **Authorization callback URL** to
-  `https://staging.example.com/api/auth/callback`.
-- If using GitHub Marketplace, set the **Webhook URL** to
-  `https://staging.example.com/api/marketplace/webhook` (or whichever path the
-  backend exposes for Marketplace events).
-
-See [`docs/ENVIRONMENT_VARIABLES.md`](../ENVIRONMENT_VARIABLES.md) and
-[`docs/CLOUD_DEPLOYMENT.md`](../CLOUD_DEPLOYMENT.md) for the full set of
-variables that may need a staging-specific value.
-
-## Validate after every push
-
-The existing `.github/workflows/docker-build-and-test.yml` already pushes new
-`dev-backend:<TIMESTAMP>` and `dev-frontend:<TIMESTAMP>` images on every push
-to `develop`/`main`/`copilot/*`, and Flux rolls those into the cluster. Once
-the tunnel is in place, the per-change validation loop is:
-
-1. Push a commit to `develop`.
-2. Wait for the GitHub Actions run to complete (5–10 minutes).
-3. Wait for Flux to pick up the new image tag and roll the Deployments
-   (typically under a minute after the image is pushed).
-4. Hit `https://staging.example.com` in a browser and exercise the change.
-5. Optional smoke checks from anywhere on the internet:
-
-   ```bash
-   curl -fsS https://staging.example.com/ -o /dev/null && echo frontend OK
-   curl -fsS https://staging.example.com/api/test/build-patterns | head -c 200
-   ```
-
-If either check fails, inspect:
+Set `APP_URL` to the public hostname. On the self-hosted image this one
+variable is enough — `start.sh` derives the backend, frontend and WebSocket
+URLs from it at container start, including `wss://` for an `https://` value, so
+no rebuild is needed:
 
 ```bash
-kubectl -n cloudflared logs deploy/cloudflared --tail=100
-kubectl -n actions-manager get pods
-kubectl -n actions-manager logs deploy/backend --tail=200
+APP_URL=https://actions.example.com
 ```
+
+Then **remove `ALLOW_INSECURE_HTTP`**. It exists only to permit plain HTTP on a
+non-loopback address; the app is behind TLS now, and leaving it set keeps a
+guard switched off for no reason.
+
+Restart the container to pick both up. Keep `SECRET_KEY` exactly as it was —
+changing it makes previously saved tokens unreadable.
+
+If you use **GitHub OAuth login**, update the OAuth App's callback URL to match
+the new `APP_URL` in the same pass, or the sign-in round trip fails with a
+redirect-URI error.
+
+Full semantics for these variables, including the auto-detection that makes
+`APP_URL` optional for PAT-only installs, are in
+[ENVIRONMENT_VARIABLES.md](../ENVIRONMENT_VARIABLES.md).
+
+## Validate
+
+```bash
+# TLS terminates at Cloudflare and the app answers
+curl -sSI https://actions.example.com/healthz | head -1
+
+# The origin is no longer needed from outside
+curl -sS http://localhost:8080/healthz
+```
+
+Then load `https://actions.example.com` in a browser and confirm live updates
+arrive — open a project and watch a workflow status change without reloading.
+That exercises the WebSocket, which a plain `curl` does not.
+
+If you enabled webhooks, send a test delivery from the GitHub App or repository
+settings and confirm a `200` at
+`https://actions.example.com/webhooks/github`.
+
+## Triage
+
+```bash
+docker logs --tail=100 actions-manager
+docker logs --tail=100 actions-manager-tunnel   # or: journalctl -u cloudflared
+cloudflared tunnel info actionsmanager
+```
+
+| Symptom | Likely cause |
+|---|---|
+| Cloudflare error 1033 | The tunnel is not running, or the DNS route was never created |
+| Cloudflare 502 | `cloudflared` is running but cannot reach `http://localhost:8080` — check the ingress `service:` and, for the container form, that it shares the app's network |
+| Container exits on start with a URL error | `APP_URL` is plain HTTP on a non-loopback address and `ALLOW_INSECURE_HTTP` is unset. Behind the tunnel `APP_URL` should be `https://` |
+| Page loads, status never updates | The WebSocket is not connecting. Check `APP_URL` uses `https://` so the derived URL is `wss://`, not `ws://` |
+| OAuth `redirect_uri` mismatch | The OAuth App's callback URL does not match `APP_URL` |
+| Saved tokens stopped working | `SECRET_KEY` changed when the container was recreated |
 
 ## Optional hardening
 
-For a staging environment that is reachable from the public internet, consider
-turning on Cloudflare Access (Zero Trust) in front of the tunnel hostname so
-only your team can reach it:
+Put Cloudflare Access in front of `actions.example.com` to require an identity
+before the app is reachable at all. It is enforced at Cloudflare's edge, so
+nothing in the container or the tunnel config changes.
 
-- In the Cloudflare dashboard, go to **Zero Trust → Access → Applications**
-  and add a self-hosted application for `staging.example.com`.
-- Add a policy that allows your email or identity provider group.
-
-This requires no changes inside the cluster — Cloudflare enforces the policy
-at the edge before traffic enters the tunnel.
+If you also serve webhooks on this hostname, scope a bypass policy to
+`/webhooks/github` — GitHub cannot satisfy an Access challenge, and deliveries
+will fail if it has to. The endpoint rejects every request whose HMAC does not
+verify, so a bypass there is not an open door.
 
 ## Tearing it down
 
 ```bash
-kubectl delete namespace cloudflared
-cloudflared tunnel delete actions-manager-staging
+# Container form
+docker rm -f actions-manager-tunnel
+# Host service form
+sudo systemctl disable --now cloudflared
+
+cloudflared tunnel delete actionsmanager
+# Then remove the CNAME record from the Cloudflare dashboard
 ```
 
-Then remove the DNS record for `staging.example.com` from the Cloudflare
-dashboard (or it will be cleaned up automatically when the tunnel is deleted).
+Point `APP_URL` back at the host address, restore `ALLOW_INSECURE_HTTP=true` if
+you are going back to plain HTTP, revert the OAuth App callback, and restart.
+Your data is on the `actions-manager-data` volume throughout and is untouched
+by any of this.

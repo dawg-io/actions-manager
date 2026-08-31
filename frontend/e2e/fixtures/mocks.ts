@@ -113,6 +113,11 @@ export interface ProjectStub {
    * paint, before the live check resolves.
    */
   drifted_workflow_names?: string[];
+  /**
+   * Repositories the project has never delivered its workflows to, as returned
+   * by GET /api/projects/{name}. Drives the pending-delivery reminder.
+   */
+  pending_delivery_repos?: string[];
 }
 
 export function makeProject(overrides: Partial<ProjectStub> = {}): ProjectStub {
@@ -239,6 +244,12 @@ export interface MockState {
    * plain campaign shape.
    */
   campaignExtras?: Record<string, unknown>;
+  /**
+   * Body of the last POST /api/projects. `use_prefix` only leaves the browser
+   * in this request, so asserting it is the only way to prove the naming mode
+   * the user picked in the wizard is the one actually sent.
+   */
+  lastProjectCreateRequest?: Record<string, any>;
   failNextSave?: boolean;
   failProjectsList?: boolean;
 }
@@ -450,6 +461,7 @@ export async function installApiMocks(
           return jsonResponse(route, { detail: "Save failed" }, 500);
         }
         const payload = JSON.parse(route.request().postData() || "{}");
+        state.lastProjectCreateRequest = payload;
         const created = makeProject({
           project_id: state.projects.length + 1,
           project_name: payload.project_name,
@@ -457,6 +469,10 @@ export async function installApiMocks(
           project_type: payload.project_type ?? "standard",
           repository_visibility_scope: payload.repository_visibility_scope ?? "public",
           selected_repos: payload.selected_repos ?? [],
+          // Carried from the payload: a project created in prefix mode has to
+          // load back in prefix mode, or the naming the wizard promised is lost
+          // the moment the project is opened.
+          use_prefix: payload.use_prefix ?? false,
           pr_state: "new",
         });
         state.projects.push(created);
@@ -710,6 +726,29 @@ export async function installApiMocks(
   await page.route(
     apiPath((p) => p === "/api/secrets"),
     (route) => jsonResponse(route, []),
+  );
+  // Deployment environments. Their names are chosen by the user and are never
+  // prefixed with the project code, so these fixtures deliberately carry plain
+  // names in both prefix modes.
+  await page.route(
+    apiPath((p) => p === "/api/get-environments"),
+    (route) => jsonResponse(route, { environments: [{ name: "production" }, { name: "staging" }] }),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/environments-count"),
+    (route) => jsonResponse(route, { count: 2 }),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/create-environment"),
+    (route) => jsonResponse(route, { created: true }),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/delete-environment"),
+    (route) => jsonResponse(route, { deleted: true }),
+  );
+  await page.route(
+    apiPath((p) => p === "/api/sync-environment"),
+    (route) => jsonResponse(route, { synced: true }),
   );
   await page.route(
     apiPath((p) => p.startsWith("/api/workspace/members")),

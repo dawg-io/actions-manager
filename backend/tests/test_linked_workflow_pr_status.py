@@ -62,11 +62,12 @@ def setup_and_teardown_db():
 
 
 @pytest.fixture
-def client():
+def client(authenticate_client):
     app.dependency_overrides[projects_get_db] = override_get_db
     app.dependency_overrides[workflows_get_db] = override_get_db
     with mock.patch("mode_validation.validate_startup_configuration"):
         with TestClient(app) as c:
+            authenticate_client(c, TEST_GITHUB_USER, TestingSessionLocal)
             yield c
     app.dependency_overrides.pop(projects_get_db, None)
     app.dependency_overrides.pop(workflows_get_db, None)

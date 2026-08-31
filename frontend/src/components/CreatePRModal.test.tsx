@@ -30,6 +30,73 @@ describe("CreatePRModal", () => {
     vi.clearAllMocks();
   });
 
+  describe("naming mode", () => {
+    it("names workflows as the files that will land on GitHub in prefix mode", () => {
+      render(
+        <CreatePRModal
+          {...baseProps}
+          projectCode="PROJ"
+          usePrefix
+          workflows={[{ name: "build", status: "committed_locally" }]}
+        />
+      );
+
+      // The campaign creates these files on GitHub; listing the bare stem
+      // promised a filename the campaign never produces.
+      expect(screen.getByText("AM_PROJ_build.yml")).toBeInTheDocument();
+      expect(screen.queryByText("build.yml")).not.toBeInTheDocument();
+    });
+
+    it("names workflows bare in no-prefix mode", () => {
+      render(
+        <CreatePRModal
+          {...baseProps}
+          projectCode="PROJ"
+          usePrefix={false}
+          workflows={[{ name: "build", status: "committed_locally" }]}
+        />
+      );
+
+      expect(screen.getByText("build.yml")).toBeInTheDocument();
+      expect(screen.queryByText(/^AM_PROJ_/)).not.toBeInTheDocument();
+    });
+
+    it("keeps selection keyed on the stored name, not the displayed one", () => {
+      const onSuccess = vi.fn();
+      render(
+        <CreatePRModal
+          {...baseProps}
+          projectCode="PROJ"
+          usePrefix
+          onSuccess={onSuccess}
+          workflows={[{ name: "build", status: "committed_locally" }]}
+        />
+      );
+
+      // Prefixing the label must not change what the checkbox toggles, or the
+      // campaign would be submitted with a name the backend cannot resolve.
+      const row = screen.getByText("AM_PROJ_build.yml").closest("label");
+      expect(row?.querySelector("input[type=checkbox]")).toBeChecked();
+    });
+
+    it("does not apply this project's prefix to a linked workflow", () => {
+      render(
+        <CreatePRModal
+          {...baseProps}
+          projectCode="PROJ"
+          usePrefix
+          workflows={[]}
+          reusableWorkflows={[
+            { name: "AM_RWW1_shared.yml", status: "committed_locally", isLinked: true },
+          ]}
+        />
+      );
+
+      expect(screen.getByText("AM_RWW1_shared.yml")).toBeInTheDocument();
+      expect(screen.queryByText("AM_PROJ_AM_RWW1_shared.yml")).not.toBeInTheDocument();
+    });
+  });
+
   it("defaults workflow selection to only changed workflows", () => {
     render(
       <CreatePRModal
@@ -90,6 +157,88 @@ describe("CreatePRModal", () => {
     const buildItem = screen.getByText("build.yml").closest(".repo-item");
     const buildCheckbox = buildItem!.querySelector("input[type='checkbox']") as HTMLInputElement;
     expect(buildCheckbox.checked).toBe(true);
+  });
+
+  describe("preselectAllWorkflows", () => {
+    const mixedWorkflows = [
+      { name: "build", status: "committed_locally" },
+      { name: "deploy", status: "synced_with_github" },
+    ];
+
+    const checkboxFor = (label: string) =>
+      screen
+        .getByText(label)
+        .closest(".repo-item")!
+        .querySelector("input[type='checkbox']") as HTMLInputElement;
+
+    it("seeds every workflow when set, so a repo holding none of them gets all", () => {
+      render(
+        <CreatePRModal {...baseProps} preselectAllWorkflows workflows={mixedWorkflows} />
+      );
+
+      fireEvent.click(screen.getByText(/show unchanged workflows/i));
+      expect(checkboxFor("build.yml").checked).toBe(true);
+      expect(checkboxFor("deploy.yml").checked).toBe(true);
+    });
+
+    it("leaves reusable workflows alone", () => {
+      const { container } = render(
+        <CreatePRModal
+          {...baseProps}
+          preselectAllWorkflows
+          workflows={mixedWorkflows}
+          reusableWorkflows={[
+            { name: "shared", status: "synced_with_github", sourceRepo: "owner/rwx" },
+          ]}
+        />
+      );
+
+      // Both lists share one toggle label; either reveals both.
+      fireEvent.click(screen.getAllByText(/show unchanged workflows/i)[0]);
+      // "shared.yml" also names its source-repo row, so match the checkbox rows.
+      const sharedRows = Array.from(container.querySelectorAll(".repo-item")).filter(
+        (row) => row.querySelector(".repo-name")?.textContent === "shared.yml"
+      );
+      expect(sharedRows.length).toBeGreaterThan(0);
+      for (const row of sharedRows) {
+        const box = row.querySelector("input[type='checkbox']") as HTMLInputElement;
+        expect(box.checked).toBe(false);
+      }
+    });
+
+    it("defaults off, keeping the changed-only selection", () => {
+      render(<CreatePRModal {...baseProps} workflows={mixedWorkflows} />);
+
+      fireEvent.click(screen.getByText(/show unchanged workflows/i));
+      expect(checkboxFor("build.yml").checked).toBe(true);
+      expect(checkboxFor("deploy.yml").checked).toBe(false);
+    });
+  });
+
+  it("lists only the repositories it is given, and Select All cannot widen that", () => {
+    const { container } = render(
+      <CreatePRModal {...baseProps} repositories={[{ name: "owner/repo-b" }]} />
+    );
+
+    // Scoped to the repo section - "Select All" also appears over workflows.
+    const repoSection = screen
+      .getByText("Caller Repositories")
+      .closest(".repo-selection") as HTMLElement;
+    const repoNames = () =>
+      Array.from(repoSection.querySelectorAll(".repo-item .repo-name")).map(
+        (n) => n.textContent
+      );
+
+    expect(repoNames()).toEqual(["owner/repo-b"]);
+
+    fireEvent.click(
+      Array.from(repoSection.querySelectorAll("button")).find(
+        (b) => b.textContent === "Select All"
+      ) as HTMLElement
+    );
+
+    expect(repoNames()).toEqual(["owner/repo-b"]);
+    expect(container.textContent).not.toContain("owner/repo-a");
   });
 
   it("shows all workflows when none have status info (backward compat)", () => {

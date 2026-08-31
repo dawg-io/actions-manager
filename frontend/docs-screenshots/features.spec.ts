@@ -9,7 +9,7 @@ import {
   seedAuthenticatedSession,
   NO_CREDENTIAL_REASON,
 } from "../e2e/fixtures/mocks";
-import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
+import { DOCS_REPOS, DOCS_USER, seedDocsRepos, seedDocsUserProfile } from "./docs-fixtures";
 
 /**
  * Regenerates the screenshots embedded in docs/**\/*.md
@@ -659,6 +659,115 @@ test.describe("docs screenshots", () => {
 
     await page.screenshot({
       path: "../docs/assets/screenshots/drift-detection/drift-deleted-in-github.png",
+    });
+  });
+
+  test("projects — new repository delivery prompt", async ({ page }) => {
+    const project = makeProject({
+      project_name: "Payments Platform",
+      project_code: "PAY",
+      github_user: DOCS_USER,
+      last_modified_by: DOCS_USER,
+      updated_at: "2026-07-24T00:00:00Z",
+      pr_state: "synced",
+      selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+      workflows: [
+        makeWorkflow({
+          name: "build-and-test.yml",
+          workflowStatus: "synced_with_github",
+          lastModifiedBy: DOCS_USER,
+        }),
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+    // Registered after installApiMocks - routes are LIFO - so the picker
+    // offers checkout-web as the repository to add.
+    await seedDocsRepos(page);
+    // The shared mocks don't cover this one, and its failure renders a
+    // "Network Error" strip right below the repository picker.
+    await page.route(
+      (url) => /\/api\/projects\/[^/]+\/repo-branch-configs$/.test(url.pathname),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            project_id: 1,
+            project_branch_option: "default",
+            project_branch_regex: "",
+            project_branch_max_age_days: 30,
+            repos: DOCS_REPOS.map((repo) => ({
+              repo_id: repo.id,
+              repo_name: repo.full_name,
+              branch_config_mode: "inherit",
+              branch_option: null,
+              branch_regex: null,
+              branch_max_age_days: null,
+              effective_branch_option: "default",
+              effective_branch_regex: "",
+              effective_branch_max_age_days: 30,
+              using_project_default: true,
+            })),
+          }),
+        })
+    );
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    const configGroup = page.getByRole("button", { name: "Project Configs" });
+    await configGroup.waitFor({ timeout: 15000 });
+    if ((await configGroup.getAttribute("aria-expanded")) !== "true") {
+      await configGroup.click();
+    }
+    await page.getByRole("button", { name: "Repositories & Branches" }).click();
+
+    // Add the third repo, then save: the prompt fires on a successful save.
+    await page.getByTestId("available-checkbox-acme-corp/checkout-web").click();
+    await page.getByRole("button", { name: /Save/ }).first().click();
+
+    const dialog = page.getByRole("dialog");
+    await dialog.waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/projects/new-repo-delivery-prompt.png",
+    });
+  });
+
+  test("projects — pending delivery reminder", async ({ page }) => {
+    const project = makeProject({
+      project_name: "Payments Platform",
+      project_code: "PAY",
+      github_user: DOCS_USER,
+      last_modified_by: DOCS_USER,
+      updated_at: "2026-07-24T00:00:00Z",
+      pr_state: "synced",
+      selected_repos: [
+        "acme-corp/payments-service",
+        "acme-corp/payments-worker",
+        "acme-corp/checkout-web",
+      ],
+      pending_delivery_repos: ["acme-corp/checkout-web"],
+      workflows: [
+        makeWorkflow({
+          name: "build-and-test.yml",
+          workflowStatus: "synced_with_github",
+          lastModifiedBy: DOCS_USER,
+        }),
+      ],
+    });
+    await mockDriftResponse(page, { lastChecked: DOCS_LAST_CHECKED, driftedWorkflows: [] });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+    await seedDocsRepos(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    const notice = page.getByTestId("pending-delivery-notice");
+    await notice.waitFor({ timeout: 15000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({
+      path: "../docs/assets/screenshots/projects/pending-delivery-reminder.png",
     });
   });
 

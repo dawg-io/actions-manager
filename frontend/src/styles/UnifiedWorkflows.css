@@ -412,6 +412,19 @@ body.pf-resizing {
   line-height: 1;
 }
 
+/* Project prefix (AM_{CODE}_) shown ahead of the workflow stem. Dimmed so the
+   name the user chose stays dominant, and given a far higher flex-shrink than
+   .pf-row-name so a narrow panel clips the prefix rather than the stem. */
+.pf-row-prefix {
+  flex: 0 999 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
 .pf-row-name {
   flex: 0 1 auto;
   min-width: 0;

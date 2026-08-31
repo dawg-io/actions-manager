@@ -35,6 +35,9 @@ export interface RepositoryBranchSelectorProps {
   availableRepositories: RepositoryBranchSelectorRepo[];
   /** Names (full_name or name) of repositories already in the project. */
   selectedRepositoryNames: string[];
+  /** Names of selected repositories that have never received the project's
+   * workflows — each gets a "Not delivered yet" badge. */
+  pendingDeliveryRepos?: string[];
   /** Visibility filter mode for the helper text under the right-hand heading. */
   visibilityScope?: "public" | "private";
   /** Loading flag — shows a placeholder in the available list. */
@@ -131,12 +134,44 @@ const AccountTypeBadge: React.FC<{ ownerType?: string }> = ({ ownerType }) => {
   );
 };
 
+/**
+ * Marks a repository that has never received the project's workflows.
+ *
+ * Informational, not a warning: the file simply isn't there yet, so this uses
+ * the sky palette ConfigBadge already reserves for informational labels rather
+ * than the amber that means something is wrong.
+ */
+const PendingDeliveryBadge: React.FC = () => (
+  <span
+    className="inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300"
+    title="This project's workflows haven't been delivered to this repository yet"
+    data-testid="pending-delivery-badge"
+  >
+    <svg
+      className="h-[11px] w-[11px]"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="m16 12-4-4-4 4" />
+      <path d="M12 16V8" />
+    </svg>
+    Not delivered yet
+  </span>
+);
+
 const repoKey = (r: RepositoryBranchSelectorRepo): string =>
   r.full_name || r.name;
 
 const RepositoryBranchSelector: React.FC<RepositoryBranchSelectorProps> = ({
   availableRepositories,
   selectedRepositoryNames,
+  pendingDeliveryRepos = [],
   visibilityScope,
   loading = false,
   error = null,
@@ -163,10 +198,14 @@ const RepositoryBranchSelector: React.FC<RepositoryBranchSelectorProps> = ({
   // list and look like an empty fetch.
   // Intentionally depends only on resetSearchKey: adding `searchTerm` would
   // immediately re-clear it on every keystroke.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   React.useEffect(() => {
     setSearchTerm("");
   }, [resetSearchKey]);
+
+  const pendingSet = useMemo(
+    () => new Set(pendingDeliveryRepos),
+    [pendingDeliveryRepos],
+  );
 
   const selectedSet = useMemo(
     () => new Set(selectedRepositoryNames),
@@ -301,20 +340,27 @@ const RepositoryBranchSelector: React.FC<RepositoryBranchSelectorProps> = ({
                       </div>
                       {hasMetadata ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {pendingSet.has(key) && <PendingDeliveryBadge />}
                           <VisibilityBadge isPrivate={!!repo.private} />
                           <AccountTypeBadge ownerType={repo.owner_type} />
                         </div>
                       ) : (
                         // Repo metadata isn't in the current available list
                         // (e.g. a previously-saved repo that the latest
-                        // fetch didn't return). Showing the badges here
-                        // would mis-label the repo (defaulting to Public /
-                        // Personal), so we show a neutral marker instead.
-                        <div
-                          className="mt-1 text-[11px] italic text-slate-500 dark:text-slate-400"
-                          data-testid={`selected-repo-unknown-${key}`}
-                        >
-                          Metadata unavailable
+                        // fetch didn't return). Showing the visibility and
+                        // account badges here would mis-label the repo
+                        // (defaulting to Public / Personal), so we show a
+                        // neutral marker instead. The delivery badge still
+                        // renders: it comes from the server, not from the
+                        // repo listing, so a failed fetch can't make it wrong.
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          {pendingSet.has(key) && <PendingDeliveryBadge />}
+                          <span
+                            className="text-[11px] italic text-slate-500 dark:text-slate-400"
+                            data-testid={`selected-repo-unknown-${key}`}
+                          >
+                            Metadata unavailable
+                          </span>
                         </div>
                       )}
                     </div>

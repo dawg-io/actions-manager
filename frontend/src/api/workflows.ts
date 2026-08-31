@@ -1,4 +1,4 @@
-import axios, { AxiosResponse, AxiosError } from "axios";
+import { AxiosResponse, AxiosError } from "axios";
 import apiClient from "./apiClient";
 import config from "../config";
 import { Workflow } from "../types/workflow";
@@ -264,7 +264,7 @@ export const getWorkflowsCount = async (
   projectName: string
 ): Promise<number> => {
   try {
-    const response: AxiosResponse<WorkflowsCountResponse> = await axios.get(
+    const response: AxiosResponse<WorkflowsCountResponse> = await apiClient.get(
       `${BACKEND_URL}/api/workflows-count`,
       {
         params: {
@@ -315,7 +315,7 @@ export const getWorkflowVersions = async (
   workflowName: string
 ): Promise<VersionHistoryResponse> => {
   try {
-    const response: AxiosResponse<VersionHistoryResponse> = await axios.get(
+    const response: AxiosResponse<VersionHistoryResponse> = await apiClient.get(
       `${BACKEND_URL}/api/workflows/${encodeURIComponent(workflowName)}/versions`,
       {
         params: {

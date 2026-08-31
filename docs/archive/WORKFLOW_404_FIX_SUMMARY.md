@@ -6,9 +6,9 @@ When saving a workflow to a repository that doesn't have a `.github/workflows` d
 
 ### Error Logs from Issue
 ```
-[app] | 🔍 Checking file at: https://api.github.com/repos/updawg69/test3/contents/.github/workflows/AM_ZNEC1_abc.yml?ref=main
+[app] | 🔍 Checking file at: https://api.github.com/repos/example-org/test3/contents/.github/workflows/AM_ZNEC1_abc.yml?ref=main
 [app] | 🔍 File check result - SHA: None, Content unchanged: False
-[app] | 🔍 Sending PUT request to: https://api.github.com/repos/updawg69/test3/contents/.github/workflows/AM_ZNEC1_abc.yml?ref=main
+[app] | 🔍 Sending PUT request to: https://api.github.com/repos/example-org/test3/contents/.github/workflows/AM_ZNEC1_abc.yml?ref=main
 [app] | 🔍 PUT response status: 404
 [app] | ❌ PUT failed. Response: {"message":"Not Found",...}
 ```

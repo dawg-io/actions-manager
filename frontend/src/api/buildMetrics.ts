@@ -36,6 +36,8 @@ export interface RecentRun {
   github_run_id: number;
   run_number: number | null;
   workflow_name: string;
+  /** The on-GitHub filename, prefix included. What the UI names the run by. */
+  workflow_filename: string;
   /** "owner/repo" — null when the repo has left the project. */
   repo: string | null;
   branch: string;

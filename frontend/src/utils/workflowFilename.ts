@@ -75,6 +75,38 @@ export function extractWorkflowPrefixAndStem(name: string): { prefix: string; st
 }
 
 /**
+ * Apply a project's `AM_{CODE}_` prefix to a workflow name for display.
+ *
+ * Mirrors `format_workflow_name()` in backend/workflows.py **exactly**: when
+ * prefixing is on, the prefix is applied unconditionally. It deliberately does
+ * not try to detect an already-prefixed name from its shape — `AM_` is a legal
+ * start for a user-chosen workflow name (see `validateWorkflowName` below), so
+ * a project prefixing `AM_TEST_deploy` really does deliver
+ * `AM_PROJ_AM_TEST_deploy.yml`, and a helper that "helpfully" skipped the
+ * prefix would print a filename that does not exist.
+ *
+ * Whether the prefix applies at all is the caller's to decide, because only the
+ * caller knows it. A workflow owned by another project — a linked reusable
+ * workflow — carries that project's name and mode, not this one's, so callers
+ * pass `usePrefix: false` for those. A caller holding a name it cannot classify
+ * should not prefix it at all.
+ *
+ * @example
+ * workflowDisplayFilename("ci", "PROJ", true)   // → "AM_PROJ_ci.yml"
+ * workflowDisplayFilename("ci", "PROJ", false)  // → "ci.yml"
+ * workflowDisplayFilename("ci", "", true)       // → "ci.yml"
+ */
+export function workflowDisplayFilename(
+  name: string,
+  projectCode: string | undefined | null,
+  usePrefix: boolean | undefined,
+): string {
+  const filename = normalizeWorkflowFilename(name ?? '');
+  if (!filename || !usePrefix || !projectCode) return filename;
+  return `AM_${projectCode.toUpperCase()}_${filename}`;
+}
+
+/**
  * Validates a user-supplied workflow base name.
  *
  * Returns an error message string when the name is invalid, or `null` when the

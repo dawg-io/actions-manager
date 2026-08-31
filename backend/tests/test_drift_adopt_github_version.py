@@ -54,7 +54,7 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def db_state():
+def db_state(authenticate_client):
     """Two repos sharing a single project workflow."""
     prev_override = app.dependency_overrides.get(real_get_db)
     app.dependency_overrides[real_get_db] = override_get_db
@@ -93,6 +93,7 @@ def db_state():
         db.commit()
 
         user_tokens["alice"] = "test-token"
+        authenticate_client(client, "alice", TestingSessionLocal)
 
         yield {
             "user_id": user.user_id,

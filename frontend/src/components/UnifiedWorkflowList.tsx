@@ -2,7 +2,7 @@
 import React from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { UnifiedWorkflowItem } from '../types/workflow';
-import { normalizeWorkflowFilename } from '../utils/workflowFilename';
+import { normalizeWorkflowFilename, workflowDisplayFilename } from '../utils/workflowFilename';
 import { CustomFile } from '../api/customFiles';
 import {
   PANEL_DEFAULT_WIDTH,
@@ -130,6 +130,8 @@ const buildStateParts = ({
 interface FileRowProps {
   icon: string;
   name: string;
+  /** Project prefix rendered ahead of the name, dimmed. Empty when unprefixed. */
+  namePrefix?: string;
   /** Full tooltip text — carries the detail the compact row no longer shows. */
   title: string;
   ariaLabel: string;
@@ -149,6 +151,7 @@ interface FileRowProps {
 const FileRow: React.FC<FileRowProps> = ({
   icon,
   name,
+  namePrefix,
   title,
   ariaLabel,
   meta,
@@ -172,6 +175,7 @@ const FileRow: React.FC<FileRowProps> = ({
       data-testid={testId}
     >
       <span className="pf-row-icon" aria-hidden="true">{icon}</span>
+      {namePrefix && <span className="pf-row-prefix">{namePrefix}</span>}
       <span className="pf-row-name">{name}</span>
       {meta && <span className="pf-row-meta">{meta}</span>}
       {drifted && (
@@ -334,15 +338,23 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
   const showReusableSection = reusableWorkflowsEnabled && repoExists && reusableWorkflows.length > 0;
   const showCodeownersSection = !!codeownersRepos && codeownersRepos.length > 0;
 
-  /** The on-GitHub filename, kept in the tooltip since the row shows the bare name. */
-  const getFullFilename = (workflow: UnifiedWorkflowItem, filename: string) =>
-    workflow.name && usePrefix && workflow.type !== 'linked'
-      ? `AM_${(projectCode || '').toUpperCase()}_${filename}`
-      : filename;
+  /**
+   * The project prefix the file will carry on GitHub, or '' in no-prefix mode.
+   * Shown on the row rather than only in the tooltip: a row reading `ci.yml`
+   * for a file that lands as `AM_CODE_ci.yml` reads as a promise the delivery
+   * does not keep. Linked workflows are named by the RWX project that owns
+   * them, so the consumer's prefix never applies to those.
+   */
+  const getRowPrefix = (workflow: UnifiedWorkflowItem, filename: string) => {
+    if (!workflow.name) return '';
+    const full = workflowDisplayFilename(filename, projectCode, usePrefix && workflow.type !== 'linked');
+    return full.slice(0, full.length - filename.length);
+  };
 
   const renderWorkflowRow = (workflow: UnifiedWorkflowItem, fallbackLabel: string) => {
     const filename = getWorkflowDisplayFilename(workflow, fallbackLabel);
-    const fullFilename = getFullFilename(workflow, filename);
+    const namePrefix = getRowPrefix(workflow, filename);
+    const fullFilename = `${namePrefix}${filename}`;
     const status = getRowStatus(workflow.workflowStatus, workflow.isModified);
     const drifted = workflow.type !== 'linked' && isDrifted(workflow.name);
     // aria-label replaces the button's content, so every indicator rendered as an
@@ -366,8 +378,9 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
         key={workflow.id}
         icon={ROW_ICONS[workflow.type]}
         name={filename}
+        namePrefix={namePrefix}
         title={titleParts.join(DETAIL_SEPARATOR)}
-        ariaLabel={[filename, ...stateParts].join(', ')}
+        ariaLabel={[fullFilename, ...stateParts].join(', ')}
         meta={workflow.type === 'linked' ? workflow.rwxProjectName : undefined}
         statusLabel={status.label}
         statusClassName={status.className}

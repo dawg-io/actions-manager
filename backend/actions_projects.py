@@ -22,7 +22,13 @@ import auth as auth_module
 from database import get_db
 from auth import user_tokens
 from models import Account, ActionsProject
-from workflows import GITHUB_API_URL, ACCEPT_HEADER, X_API_VERSION, get_default_branch
+from workflows import (
+    GITHUB_API_URL,
+    ACCEPT_HEADER,
+    X_API_VERSION,
+    GITHUB_TIMEOUT_SECONDS,
+    get_default_branch,
+)
 
 router = APIRouter()
 
@@ -132,7 +138,7 @@ def _resolve_marketplace_action(slug: str):
     """
     url = f"https://github.com/marketplace/actions/{slug}"
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=GITHUB_TIMEOUT_SECONDS)
     except Exception as e:
         raise _ApiError(502, f"Failed to reach GitHub Marketplace: {str(e)}")
 
@@ -243,7 +249,7 @@ def _fetch_repo_file(owner: str, repo: str, ref: str, path: str, token: str) -> 
     file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}?ref={ref}"
 
     try:
-        response = requests.get(file_url, headers=headers)
+        response = requests.get(file_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     except Exception as e:
         raise _ApiError(502, f"GitHub API request failed: {str(e)}")
 

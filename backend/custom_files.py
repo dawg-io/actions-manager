@@ -46,6 +46,11 @@ def validate_file_path(path: str) -> Optional[str]:
     path = path.strip()
     if path.startswith("/"):
         return "Absolute paths are not allowed"
+    # The stored path is interpolated into a GitHub contents URL, where the
+    # server percent-decodes it. Without this, "%2e%2e" survives the ".." check
+    # below and still reaches GitHub as "..", escaping the contents endpoint.
+    if "%" in path:
+        return "Percent-encoded characters are not allowed in a file path"
     parts = path.replace("\\", "/").split("/")
     if ".." in parts:
         return "Path traversal (..) is not allowed"

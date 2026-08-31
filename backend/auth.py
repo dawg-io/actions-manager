@@ -745,6 +745,24 @@ def resolve_authenticated_user(request: Request, db: Session) -> Account:
     return user
 
 
+def assert_session_owns_user(claimed_user: str, request: Request, db: Session) -> Account:
+    """Raise unless the session belongs to *claimed_user*; return that account.
+
+    Routes that take the caller's username as a ``github_user`` query parameter
+    must call this — the parameter is client-supplied and proves nothing on its
+    own.  Note this is only for parameters that name *the caller*: routes where
+    ``github_user`` names a project *owner* pass the caller separately in
+    X-GitHub-User, which WriteProtectionMiddleware pins to the session.
+    """
+    account = resolve_authenticated_user(request, db)
+    if account.github_user.lower() != (claimed_user or "").strip().lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    return account
+
+
 def revoke_current_session(request: Request, db: Session) -> Optional[str]:
     session_token = extract_session_token(request)
     if not session_token:
@@ -879,7 +897,7 @@ def _exchange_code_for_token(code: str):
         "client_id": GITHUB_CLIENT_ID,
         "client_secret": GITHUB_CLIENT_SECRET,
         "code": code
-    }, headers={"Accept": "application/json"})
+    }, headers={"Accept": "application/json"}, timeout=config.GITHUB_TIMEOUT_SECONDS)
 
     token_data = response.json()
     access_token = token_data.get("access_token")
@@ -895,7 +913,7 @@ def _fetch_user_info(access_token: str):
     """Fetch user information from GitHub API."""
     user_response = requests.get("https://api.github.com/user", headers={
         "Authorization": f"token {access_token}"
-    })
+    }, timeout=config.GITHUB_TIMEOUT_SECONDS)
     
     if user_response.status_code != 200:
         debug_log(f"❌ Error: Failed to fetch user info, status: {user_response.status_code}")
@@ -925,7 +943,7 @@ def _fetch_marketplace_data(username: str, github_account_type: Optional[str], a
     try:
         billing_response = requests.get("https://api.github.com/user/marketplace_purchases", headers={
             "Authorization": f"token {access_token}"
-        })
+        }, timeout=config.GITHUB_TIMEOUT_SECONDS)
         if billing_response.status_code == 200:
             billing_data = billing_response.json()
             debug_log(f"📌 Debug: Marketplace data retrieved for {github_account_type} {username}: {len(billing_data)} purchase(s)")
@@ -970,7 +988,7 @@ def _fetch_installation_account(access_token: str) -> tuple[Optional[str], Optio
         response = requests.get("https://api.github.com/user/installations", headers={
             "Authorization": f"token {access_token}",
             "Accept": "application/vnd.github+json",
-        })
+        }, timeout=config.GITHUB_TIMEOUT_SECONDS)
 
         if response.status_code != 200:
             debug_log(f"📌 Warning: GitHub installations API returned {response.status_code}")

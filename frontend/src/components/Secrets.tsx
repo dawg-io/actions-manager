@@ -214,7 +214,6 @@ const Secrets: React.FC<SecretsProps> = ({
     // The omitted dependencies (`setManualSecrets`) are stable React state
     // setters; including them would re-create this callback on every render
     // without changing behaviour.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isFormValid,
     isSaving,

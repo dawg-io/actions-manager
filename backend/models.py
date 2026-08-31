@@ -841,6 +841,18 @@ class WorkflowDriftState(Base):
     # replayed from a snapshot that may already be stale.
     github_sha = Column(String(255), nullable=True)
     deleted_in_github = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Set the first time a check actually finds this workflow's file on this
+    # (repo, branch), and never cleared while the pairing exists. It is the only
+    # durable record that the file was really delivered here.
+    #
+    # The fields that look like they already say so do not. ``workflow_git_hash``
+    # is the blob SHA of whatever branch was last written, including a PR branch,
+    # so a workflow whose campaign is still open carries a real hash while having
+    # never landed. ``github_sha`` above is cleared the moment a check finds the
+    # file gone, so it cannot outlive the check that reports a deletion. Reading
+    # either as delivery history is what made opening a campaign report every
+    # repo as "deleted" (issue #1981).
+    confirmed_present_at = Column(DateTime, nullable=True)
     # Incremented on every not-drifted -> drifted transition. Included in the
     # notification dedup key alongside content_hash so a drift that resolves
     # and then reoccurs with byte-identical content (e.g. a revert) still

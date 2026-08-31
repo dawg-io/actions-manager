@@ -105,7 +105,7 @@ def _add_managed_workflow(db, project_id, workflow_name, workflow_yaml="name: ex
 
 
 @pytest.fixture(autouse=True)
-def db_state():
+def db_state(authenticate_client):
     """Fresh schema per test; installs and restores the DB override."""
     # ponytail: after get_db centralization all three imports are database.get_db;
     # save/restore prevents clobbering the conftest's override for other test modules.
@@ -113,6 +113,7 @@ def db_state():
     app.dependency_overrides[import_get_db] = override_get_db
     Base.metadata.create_all(bind=engine)
     user_tokens["testuser"] = "fake-token"
+    authenticate_client(client, "testuser", TestingSessionLocal)
     yield
     Base.metadata.drop_all(bind=engine)
     user_tokens.pop("testuser", None)
@@ -172,18 +173,27 @@ class TestDiscoverWorkflows:
         user_id, project_id, repo_id = _setup_project(db)
         db.close()
 
-        resp = client.get(
-            f"/api/projects/{project_id}/workflow-import/discover",
-            params={"github_user": "nobody", "project_name": "TestProject"},
-        )
-        assert resp.status_code == 401
+        saved = client.headers.pop("Authorization", None)
+        try:
+            resp = client.get(
+                f"/api/projects/{project_id}/workflow-import/discover",
+                params={"github_user": "testuser", "project_name": "TestProject"},
+            )
+            assert resp.status_code == 401
+        finally:
+            if saved is not None:
+                client.headers["Authorization"] = saved
 
-    def test_discover_wrong_project(self):
+    def test_discover_wrong_project(self, authenticate_client):
         """Discover rejects access to projects the user doesn't own."""
         db = TestingSessionLocal()
         user_id, project_id, repo_id = _setup_project(db)
+        other = Account(github_user="otheruser", github_email="other@example.com", account_type="free")
+        db.add(other)
+        db.commit()
         db.close()
 
+        authenticate_client(client, "otheruser", TestingSessionLocal)
         user_tokens["otheruser"] = "other-token"
         try:
             resp = client.get(
@@ -746,10 +756,11 @@ class TestImportWorkflows:
         user_id, project_id, repo_id = _setup_project(db)
         db.close()
 
+        client.headers.pop("Authorization", None)
         resp = client.post(
             f"/api/projects/{project_id}/workflow-import",
             json={
-                "github_user": "nobody",
+                "github_user": "testuser",
                 "project_name": "TestProject",
                 "workflows": [{
                     "source_repo": "owner/repo1",
@@ -984,7 +995,7 @@ class TestDriftBehaviorWithImport:
 class TestImportPermissions:
     """Verify that read-only / project_viewer users cannot import workflows."""
 
-    def test_viewer_cannot_import_workflows(self):
+    def test_viewer_cannot_import_workflows(self, authenticate_client):
         """A project_viewer member is rejected with 403 on import."""
         db = TestingSessionLocal()
         user_id, project_id, repo_id = _setup_project(db)
@@ -1010,6 +1021,8 @@ class TestImportPermissions:
         db.commit()
         db.close()
 
+        authenticate_client(client, "vieweruser", TestingSessionLocal)
+
         # Authenticate the viewer
         user_tokens["vieweruser"] = "fake-viewer-token"
 
@@ -1031,7 +1044,7 @@ class TestImportPermissions:
         assert "permissions" in resp.json()["detail"].lower() or "editor" in resp.json()["detail"].lower()
         user_tokens.pop("vieweruser", None)
 
-    def test_editor_can_import_workflows(self):
+    def test_editor_can_import_workflows(self, authenticate_client):
         """A project_editor member can successfully import workflows."""
         db = TestingSessionLocal()
         user_id, project_id, repo_id = _setup_project(db)
@@ -1056,6 +1069,8 @@ class TestImportPermissions:
         db.add(pm)
         db.commit()
         db.close()
+
+        authenticate_client(client, "editoruser", TestingSessionLocal)
 
         # Authenticate the editor
         user_tokens["editoruser"] = "fake-editor-token"

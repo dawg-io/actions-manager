@@ -19,11 +19,12 @@ import base64
 from datetime import datetime, timezone
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from database import get_db
+import auth as auth_module
 from auth import user_tokens
 from models import (
     Workflow, ProjectWorkflow, Account, Repo, ProjectRepo,
@@ -38,6 +39,7 @@ from workflows import (
     GITHUB_API_URL,
     ACCEPT_HEADER,
     X_API_VERSION,
+    GITHUB_TIMEOUT_SECONDS,
 )
 from authorization import check_project_access
 
@@ -202,12 +204,17 @@ def _validate_repo_format(repo_name: str) -> tuple:
     return parts[0], parts[1]
 
 
-def _get_authenticated_user_and_project(db: Session, github_user: str, project_name: str, require_write: bool = False):
+def _get_authenticated_user_and_project(request: Request, db: Session, github_user: str, project_name: str, require_write: bool = False):
     """Validate authentication and project access. Returns (token, project).
-    
+
+    ``github_user`` is a client-supplied query parameter, so it is checked
+    against the server-issued session before it is used to select any data.
+
     When require_write=True, ensures the user has at least project_editor access.
     Read-only / project_viewer users are rejected for write operations.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
+
     if github_user not in user_tokens:
         raise HTTPException(status_code=401, detail="User not authenticated")
 
@@ -287,6 +294,7 @@ def _get_discovered_workflow_match_names(file_name: str, project) -> set[str]:
 @router.get("/api/projects/{project_id}/workflow-import/discover", responses=_responses(400, 401, 403, 404))
 def discover_workflows(
     project_id: int,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     github_user: Annotated[str, Query(..., description="GitHub username")],
     project_name: Annotated[str, Query(..., description="Project name")],
@@ -296,7 +304,7 @@ def discover_workflows(
     
     Uses Git Trees API for efficient batch SHA lookup.
     """
-    token, project = _get_authenticated_user_and_project(db, github_user, project_name)
+    token, project = _get_authenticated_user_and_project(request, db, github_user, project_name)
 
     # Validate project_id matches
     if project.project_id != project_id:
@@ -420,6 +428,7 @@ def discover_workflows(
 @router.get("/api/projects/{project_id}/workflow-import/preview", responses=_responses(400, 401, 403, 404, 502))
 def preview_workflow(
     project_id: int,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     github_user: Annotated[str, Query(..., description="GitHub username")],
     project_name: Annotated[str, Query(..., description="Project name")],
@@ -430,7 +439,7 @@ def preview_workflow(
     """
     Preview a specific workflow file content from GitHub before importing.
     """
-    token, project = _get_authenticated_user_and_project(db, github_user, project_name)
+    token, project = _get_authenticated_user_and_project(request, db, github_user, project_name)
 
     if project.project_id != project_id:
         raise HTTPException(status_code=403, detail=_ERR_PROJECT_ID_MISMATCH)
@@ -460,7 +469,7 @@ def preview_workflow(
     file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo_short}/contents/{validated_path}?ref={branch}"
 
     try:
-        response = requests.get(file_url, headers=headers)
+        response = requests.get(file_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"GitHub API request failed: {str(e)}")
 
@@ -494,6 +503,7 @@ def preview_workflow(
 def import_workflows(
     project_id: int,
     payload: ImportRequest,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
 ):
     """
@@ -504,7 +514,7 @@ def import_workflows(
     - save_and_create_pr_campaign: Saves locally and creates PRs for target repositories.
     """
     token, project = _get_authenticated_user_and_project(
-        db, payload.github_user, payload.project_name, require_write=True
+        request, db, payload.github_user, payload.project_name, require_write=True
     )
 
     if project.project_id != project_id:
@@ -555,7 +565,7 @@ def import_workflows(
 
             # Fetch workflow content from GitHub
             file_url = f"{GITHUB_API_URL}/repos/{owner}/{repo_short}/contents/{validated_path}?ref={item.source_branch}"
-            response = requests.get(file_url, headers=headers)
+            response = requests.get(file_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
             if response.status_code != 200:
                 import_results.append(ImportResult(

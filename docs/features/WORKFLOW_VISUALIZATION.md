@@ -99,7 +99,7 @@
 
 ## Workflow-Specific Changes
 
-### docker-build-and-test.yml (Main Build)
+### docker-images.yml (Main Build)
 ```
 BEFORE:                    AFTER:
 ┌─────────────┐           ┌─────────────┐

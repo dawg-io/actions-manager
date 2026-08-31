@@ -56,7 +56,7 @@ client = TestClient(app)
 
 
 @pytest.fixture()
-def state():
+def state(authenticate_client):
     prev = app.dependency_overrides.get(real_get_db)
     app.dependency_overrides[real_get_db] = _override_get_db
     Base.metadata.create_all(bind=engine)
@@ -76,6 +76,7 @@ def state():
         db.add(wf); db.commit(); db.refresh(wf)
         db.add(ProjectWorkflow(project_id=project.project_id, workflow_id=wf.workflow_id)); db.commit()
         user_tokens["alice"] = "tok"
+        authenticate_client(client, "alice", TestingSessionLocal)
         yield {"project_id": project.project_id, "workflow_id": wf.workflow_id,
                "repo_id": repo.repo_id, "db": db, "project": project}
     finally:

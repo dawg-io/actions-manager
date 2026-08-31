@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 import sys
 import os
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from project_deletion import (
@@ -512,7 +513,7 @@ class TestDeleteDeploymentEnvironmentsOptOut:
     @patch('project_deletion.requests.delete')
     def test_default_true_deletes_environments(self, mock_delete, mock_get):
         """Flag omitted/True: default behavior is unchanged, environments are still deleted."""
-        def get_side_effect(url, headers=None):
+        def get_side_effect(url, headers=None, **kwargs):
             resp = Mock()
             if url.endswith("/environments"):
                 resp.status_code = 200
@@ -535,7 +536,7 @@ class TestDeleteDeploymentEnvironmentsOptOut:
     @patch('project_deletion.requests.delete')
     def test_flag_false_preserves_environments(self, mock_delete, mock_get):
         """delete_deployment_environments=False: environments must be preserved, not deleted."""
-        def get_side_effect(url, headers=None):
+        def get_side_effect(url, headers=None, **kwargs):
             resp = Mock()
             if url.endswith("/environments"):
                 resp.status_code = 200
@@ -561,7 +562,7 @@ class TestCascadeDeletion:
     @patch('project_deletion.requests.delete')
     def test_cascade_deletes_all_resource_types(self, mock_delete, mock_get):
         """Deleting a project cascades to workflows, secrets, variables, and environments."""
-        def get_side_effect(url, headers=None):
+        def get_side_effect(url, headers=None, **kwargs):
             resp = Mock()
             if "/actions/workflows" in url:
                 resp.status_code = 200
@@ -600,7 +601,7 @@ class TestCascadeDeletion:
         mock_get.side_effect = get_side_effect
         mock_delete.return_value = Mock(status_code=204)
         # Workflow file deletion returns 200
-        mock_delete.side_effect = lambda url, headers=None, json=None: Mock(
+        mock_delete.side_effect = lambda url, headers=None, json=None, **kwargs: Mock(
             status_code=200 if "/contents/" in url else 204
         )
 
@@ -629,7 +630,7 @@ class TestCascadeDeletion:
         """_delete_all_github_resources processes all repositories in the list."""
         call_log = []
 
-        def get_side_effect(url, headers=None):
+        def get_side_effect(url, headers=None, **kwargs):
             resp = Mock()
             if "/actions/workflows" in url:
                 resp.status_code = 200
@@ -649,7 +650,7 @@ class TestCascadeDeletion:
                 resp.status_code = 404
             return resp
 
-        def delete_side_effect(url, headers=None, json=None):
+        def delete_side_effect(url, headers=None, json=None, **kwargs):
             call_log.append(url)
             return Mock(status_code=204)
 
@@ -1309,7 +1310,7 @@ class TestErrorRecovery:
 
         call_count = {"get": 0}
 
-        def get_side_effect(url, headers=None):
+        def get_side_effect(url, headers=None, **kwargs):
             call_count["get"] += 1
             resp = Mock()
             if "repo1" in url and "/actions/workflows" in url:
@@ -1411,3 +1412,212 @@ class TestErrorRecovery:
         variables = _fetch_repository_variables("test/repo", headers, "AM_TEST_")
 
         assert variables == []
+
+class TestDeletionSummaryEndpointAuth:
+    """The deletion-summary endpoint is session-authenticated.
+
+    Unlike its sibling /enhanced, this route calls assert_session_owns_user, so a
+    request that carries no session token is rejected before any project lookup.
+    A frontend caller that does not send credentials therefore never sees the
+    summary, and the delete dialog can only offer database-only deletion.
+    """
+
+    def test_returns_401_without_a_session(self):
+        """No session token - the summary is refused."""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        original_middleware_factory = app.state.middleware_db_factory
+        app.state.middleware_db_factory = _make_empty_middleware_factory()
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/api/projects/Demo-Project2/deletion-summary",
+                params={"github_user": "testuser"},
+            )
+
+            assert response.status_code == 401
+            assert response.json()["detail"] == "Authentication required"
+        finally:
+            app.state.middleware_db_factory = original_middleware_factory
+
+    @patch("project_deletion.user_tokens", {})
+    @patch("project_deletion.auth_module.assert_session_owns_user")
+    def test_returns_the_summary_once_the_session_is_supplied(self, mock_assert):
+        """Same request, authenticated - the endpoint itself works fine."""
+        from fastapi.testclient import TestClient
+        from main import app
+        from database import get_db
+
+        mock_user = Mock(spec=Account)
+        mock_user.user_id = 1
+        mock_user.github_user = "testuser"
+
+        mock_project = Mock(spec=Project)
+        mock_project.project_id = 1
+        mock_project.project_name = "Demo-Project2"
+        mock_project.project_code = "DP2"
+        mock_project.user_id = 1
+        mock_project.use_prefix = True
+
+        mock_db = Mock(spec=Session)
+        mock_db.query.return_value.filter.return_value.first.side_effect = [mock_user, mock_project]
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.query.return_value.join.return_value.filter.return_value.all.return_value = []
+
+        def override_get_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_get_db
+        original_middleware_factory = app.state.middleware_db_factory
+        app.state.middleware_db_factory = _make_empty_middleware_factory()
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/api/projects/Demo-Project2/deletion-summary",
+                params={"github_user": "testuser"},
+            )
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["project_name"] == "Demo-Project2"
+            assert body["project_code"] == "DP2"
+            assert body["workflows"] == []
+            mock_assert.assert_called_once()
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            app.state.middleware_db_factory = original_middleware_factory
+
+
+def _make_db_with_projects(project_names: list[str]):
+    """Real SQLite session holding one account and the given projects.
+
+    A Mock(spec=Session) cannot exercise this - the bug being pinned is in how
+    SQL matches the name, so the query has to reach an actual database.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(autocommit=False, autoflush=False, bind=engine)()
+
+    account = Account(
+        github_user="testuser",
+        github_email="testuser@example.com",
+        account_type="free",
+    )
+    db.add(account)
+    db.commit()
+
+    for index, name in enumerate(project_names):
+        db.add(Project(project_name=name, project_code=f"P{index}", user_id=account.user_id))
+    db.commit()
+    return db
+
+
+class TestProjectLookupIsNotAWildcardMatch:
+    """_get_project_and_user must match the name exactly, case-insensitively.
+
+    It used to use ilike(), where `_` matches any character and `%` matches any
+    run of them. The same helper backs DELETE /projects/{name}/enhanced, so a
+    lookup that drifted onto a sibling project deleted that sibling - including
+    its GitHub secrets and environments when "delete everything" was chosen.
+    """
+
+    def test_underscore_does_not_match_an_arbitrary_character(self):
+        db = _make_db_with_projects(["webXapp", "web_app"])
+        try:
+            _, project = _get_project_and_user("web_app", "testuser", db)
+            assert project.project_name == "web_app"
+        finally:
+            db.close()
+
+    def test_underscore_name_is_not_reachable_by_a_sibling(self):
+        """Looking up webXapp must never return web_app either."""
+        db = _make_db_with_projects(["web_app", "webXapp"])
+        try:
+            _, project = _get_project_and_user("webXapp", "testuser", db)
+            assert project.project_name == "webXapp"
+        finally:
+            db.close()
+
+    def test_percent_matches_nothing_rather_than_everything(self):
+        db = _make_db_with_projects(["alpha", "beta"])
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _get_project_and_user("%", "testuser", db)
+            assert exc.value.status_code == 404
+        finally:
+            db.close()
+
+    def test_still_matches_case_insensitively(self):
+        db = _make_db_with_projects(["Demo-Project2"])
+        try:
+            _, project = _get_project_and_user("demo-project2", "testuser", db)
+            assert project.project_name == "Demo-Project2"
+        finally:
+            db.close()
+
+
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+
+
+def _requests_calls(source):
+    """Yield every `requests.<method>(...)` Call node in a module's source."""
+    import ast
+
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "requests"
+            and node.func.attr in _HTTP_METHODS
+        ):
+            yield node
+
+
+def _backend_modules_calling_requests():
+    """Backend modules with at least one requests.* call, discovered at collection.
+
+    Discovered rather than listed so a new module is covered the day it is
+    written, instead of the day someone remembers to add it here.
+    """
+    backend = Path(__file__).resolve().parents[1]
+    return [
+        path.name
+        for path in sorted(backend.glob("*.py"))
+        if any(_requests_calls(path.read_text()))
+    ]
+
+
+class TestEveryGitHubCallHasATimeout:
+    """requests has no default timeout, so a hung socket pins a worker forever.
+
+    Covers the whole backend. The AST walk matters over a grep: workflows.py and
+    project_deletion.py both carry multi-line calls whose `requests.get(` and
+    `timeout=` sit on different lines, which a line-based check reads as a
+    violation and a missing timeout as clean.
+    """
+
+    @pytest.mark.parametrize("module_name", _backend_modules_calling_requests())
+    def test_module_passes_timeout_to_every_requests_call(self, module_name):
+        source = (Path(__file__).resolve().parents[1] / module_name).read_text()
+        untimed = [
+            node.lineno
+            for node in _requests_calls(source)
+            if "timeout" not in {kw.arg for kw in node.keywords}
+        ]
+
+        assert untimed == [], f"{module_name} has requests calls without timeout at lines {untimed}"
+
+    def test_discovery_actually_finds_the_modules(self):
+        """A typo in the glob would make every test above vacuously pass."""
+        discovered = _backend_modules_calling_requests()
+
+        assert "auth.py" in discovered
+        assert "workflows.py" in discovered
+        assert "github_api_tracker.py" in discovered
+        assert len(discovered) >= 9

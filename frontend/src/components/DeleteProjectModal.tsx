@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { getProjectDeletionSummary } from "../api/projectDeletion";
+import { errorDetail } from "../api/errorDetail";
+import { workflowDisplayFilename } from "../utils/workflowFilename";
+import type { ProjectDeletionSummary } from "../api/projectDeletion";
 import {
   Dialog,
   DialogContent,
@@ -10,50 +13,15 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 
-// TypeScript interfaces based on backend ProjectDeletionSummary
-interface Workflow {
-  name: string;
-  is_reusable: boolean;
-  created_at?: string;
-  updated_at?: string;
-}
-
-interface Secret {
-  name: string;
-  repository: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-interface EnvironmentVariable {
-  name: string;
-  repository: string;
-  environment: string;
-  value?: string;
-}
-
-interface DeploymentEnvironment {
-  name: string;
-  repository: string;
-  url?: string;
-}
-
-interface ProjectDeletionSummary {
-  project_name: string;
-  project_code: string;
-  workflows: Workflow[];
-  reusable_workflows: Workflow[];
-  secrets: Secret[];
-  environment_variables: EnvironmentVariable[];
-  deployment_environments: DeploymentEnvironment[];
-}
-
 interface DeleteProjectModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirmDelete: (deleteGitHubResources: boolean, deleteDeploymentEnvironments: boolean) => void;
   projectName: string;
   githubUser: string;
+  /** Naming mode, so the list names the files that get deleted from GitHub. */
+  projectCode?: string;
+  usePrefix?: boolean;
 }
 
 const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({ 
@@ -61,7 +29,9 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
   onClose, 
   onConfirmDelete,
   projectName, 
-  githubUser 
+  githubUser,
+  projectCode,
+  usePrefix,
 }) => {
   const [summary, setSummary] = useState<ProjectDeletionSummary | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -75,7 +45,6 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
     try {
       console.log(`🔍 Fetching deletion summary for project: ${projectName}, user: ${githubUser}`);
       const summaryData = await getProjectDeletionSummary(githubUser, projectName);
-      console.log("📊 Deletion summary received:", summaryData);
       console.log("📊 Resource counts:", {
         workflows: summaryData.workflows?.length || 0,
         reusable_workflows: summaryData.reusable_workflows?.length || 0,
@@ -83,26 +52,12 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
         environment_variables: summaryData.environment_variables?.length || 0,
         deployment_environments: summaryData.deployment_environments?.length || 0
       });
-      
-      // Log individual resources for debugging
-      if (summaryData.secrets?.length > 0) {
-        console.log("🔑 Found secrets:", summaryData.secrets.map((s: Secret) => s.name));
-      }
-      if (summaryData.environment_variables?.length > 0) {
-        console.log("🔧 Found environment variables:", summaryData.environment_variables.map((v: EnvironmentVariable) => v.name));
-      }
-      if (summaryData.deployment_environments?.length > 0) {
-        console.log("🌐 Found deployment environments:", summaryData.deployment_environments.map((e: DeploymentEnvironment) => e.name));
-      }
-      
+
       setSummary(summaryData);
     } catch (err) {
       const errorMsg = "Failed to load project deletion summary. You can still delete the project from the database only.";
       setError(errorMsg);
-      console.error("❌ Error fetching deletion summary:", err);
-      console.error("❌ Error response:", (err as any).response?.data);
-      console.error("❌ Error status:", (err as any).response?.status);
-      console.error("❌ Full error object:", err);
+      console.error("❌ Error fetching deletion summary:", errorDetail(err));
     } finally {
       setLoading(false);
     }
@@ -194,7 +149,7 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
                     <ul className="space-y-1">
                       {summary.workflows.map((workflow, index) => (
                         <li key={index} className="bg-white border border-slate-200 rounded-md p-2 px-3 flex items-center justify-between text-slate-800 font-medium hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-600">
-                          🔧 {workflow.name}
+                          🔧 {workflowDisplayFilename(workflow.name, projectCode, usePrefix)}
                         </li>
                       ))}
                     </ul>
@@ -213,7 +168,7 @@ const DeleteProjectModal: React.FC<DeleteProjectModalProps> = ({
                     <ul className="space-y-1">
                       {summary.reusable_workflows.map((workflow, index) => (
                         <li key={index} className="bg-white border border-slate-200 rounded-md p-2 px-3 flex items-center justify-between text-slate-800 font-medium hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-600">
-                          🔁 {workflow.name}
+                          🔁 {workflowDisplayFilename(workflow.name, projectCode, usePrefix)}
                         </li>
                       ))}
                     </ul>

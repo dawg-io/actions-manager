@@ -28,11 +28,12 @@ from typing import Annotated, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+import auth as auth_module
 from auth import user_tokens
 from database import get_db
 from github_api_tracker import RateLimitExceeded, github_get
@@ -106,6 +107,11 @@ class RecentRun(BaseModel):
     github_run_id: int
     run_number: Optional[int] = None
     workflow_name: str
+    # The file the run actually came from, prefix included. `workflow_name`
+    # above is the bare stem ActionsManager stores (`ci`) - no prefix, no
+    # extension - so it cannot name the delivered file. The UI names runs by
+    # this field.
+    workflow_filename: str
     repo: Optional[str] = None
     branch: str
     event: Optional[str] = None
@@ -524,6 +530,7 @@ def _recent_runs(runs: List[WorkflowRun], repo_names: Dict[int, str],
             github_run_id=run.github_run_id,
             run_number=run.run_number,
             workflow_name=run.workflow_name or run.workflow_filename,
+            workflow_filename=run.workflow_filename,
             repo=repo_names.get(run.repo_id),
             branch=run.branch,
             event=run.event,
@@ -574,6 +581,7 @@ def _window_days(retention_days: Optional[int], requested: Optional[int]) -> int
 def get_project_build_metrics(
     project_id: int,
     github_user: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     days: Optional[int] = None,
     refresh: bool = False,
@@ -597,6 +605,7 @@ def get_project_build_metrics(
     the UI switches with, and scoping it would strand the user on whichever
     workflow they picked.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
     if github_user not in user_tokens:
         raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 

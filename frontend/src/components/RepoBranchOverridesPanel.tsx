@@ -28,6 +28,14 @@ interface RepoBranchOverridesPanelProps {
   branchOption: "default" | "pattern";
   regexPattern: string;
   branchMaxAgeDays: number;
+  /**
+   * Bumped by the parent after a successful save. `selectedRepos` alone is not
+   * enough: it changes the moment a repository is ticked, which is *before* the
+   * project is saved, so that refetch runs while the server still has no row for
+   * it and no further refetch was ever triggered. The new repository then stayed
+   * missing from this panel until a manual page refresh.
+   */
+  refreshSignal?: number;
 }
 
 interface DraftConfig {
@@ -69,6 +77,7 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
   branchOption,
   regexPattern,
   branchMaxAgeDays,
+  refreshSignal = 0,
 }) => {
   const [data, setData] = useState<ProjectRepoBranchConfigsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -118,10 +127,9 @@ const RepoBranchOverridesPanel: React.FC<RepoBranchOverridesPanelProps> = ({
     if (projectId) {
       refresh();
     }
-    // Re-fetch when the set of selected repos changes (e.g. after the parent
-    // reloads the project on save and the projectId is unchanged).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refresh, projectId, selectedReposKey]);
+    // Re-fetch when the selected repos change *and* again once the parent has
+    // actually saved them — the first fires on tick, before the server knows.
+  }, [refresh, projectId, selectedReposKey, refreshSignal]);
 
   // Reset local editor state when the active repo is removed from the project.
   useEffect(() => {

@@ -678,6 +678,29 @@ describe('UnifiedWorkflowEditor', () => {
       expect(defaultProps.deleteWorkflow).not.toHaveBeenCalled();
     });
 
+    test('delete confirmation names the file as it lands on GitHub', () => {
+      // The dialog is what a user reads before removing the file from every
+      // repository, so it has to name the file the delete actually removes -
+      // not the stem, which is not what is on GitHub in prefix mode.
+      render(<UnifiedWorkflowEditor {...defaultProps} usePrefix={true} />);
+      fireEvent.click(screen.getByLabelText('More options'));
+      fireEvent.click(screen.getByText(/Delete workflow/));
+
+      expect(
+        screen.getByText('Delete workflow "AM_TEST_test-workflow.yml"?')
+      ).toBeInTheDocument();
+    });
+
+    test('delete confirmation shows no prefix in no-prefix mode', () => {
+      render(<UnifiedWorkflowEditor {...defaultProps} usePrefix={false} />);
+      fireEvent.click(screen.getByLabelText('More options'));
+      fireEvent.click(screen.getByText(/Delete workflow/));
+
+      expect(
+        screen.getByText('Delete workflow "test-workflow.yml"?')
+      ).toBeInTheDocument();
+    });
+
     test('More dropdown closes on outside click', () => {
       render(<UnifiedWorkflowEditor {...defaultProps} />);
       fireEvent.click(screen.getByLabelText('More options'));
@@ -1077,6 +1100,20 @@ describe('UnifiedWorkflowEditor expanded (pop-out) editor', () => {
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getAllByTestId('yaml-editor')).toHaveLength(1);
+  });
+
+  test('titles the expanded view with the on-GitHub filename', async () => {
+    // The collapsed toolbar shows the locked prefix beside the editable stem;
+    // the expanded view replaces that toolbar, so its title has to name the
+    // same file rather than dropping back to the bare stem.
+    const user = userEvent.setup();
+    render(<UnifiedWorkflowEditor {...defaultProps} usePrefix={true} />);
+
+    await user.click(expandButton());
+
+    expect(
+      within(screen.getByRole('dialog')).getByText('AM_TEST_test-workflow.yml')
+    ).toBeInTheDocument();
   });
 
   test('keeps Insert Resource reachable in the expanded YAML view', async () => {
