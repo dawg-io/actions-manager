@@ -127,11 +127,12 @@ def _add_workflow(db, project_id, *, name="campaign.yml", status="under_review")
 class TestPRHistory:
 
     @pytest.fixture(autouse=True)
-    def setup_db(self):
+    def setup_db(self, authenticate_client):
         # Apply the test DB override for this class's tests only, then clean up.
         app.dependency_overrides[get_db] = override_get_db
         Base.metadata.create_all(bind=engine)
         self.db = TestingSessionLocal()
+        authenticate_client(client, TEST_USER, TestingSessionLocal)
         yield
         self.db.close()
         Base.metadata.drop_all(bind=engine)
@@ -143,11 +144,25 @@ class TestPRHistory:
 
     def test_unauthenticated_request_rejected(self):
         """Requests without a valid session token return 401."""
+        saved = client.headers.pop("Authorization", None)
+        try:
+            response = client.get(
+                "/api/project-pr-history",
+                params={"github_user": TEST_USER, "project_name": "x"},
+            )
+            assert response.status_code == 401
+        finally:
+            if saved is not None:
+                client.headers["Authorization"] = saved
+
+    def test_caller_cannot_claim_another_user(self):
+        """A valid session does not let the caller read as someone else."""
+        _create_account_and_project(self.db)
         response = client.get(
             "/api/project-pr-history",
             params={"github_user": "nobody", "project_name": "x"},
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     def test_unknown_project_returns_404(self):
         _, _ = _create_account_and_project(self.db)
@@ -454,10 +469,11 @@ class TestCrossProjectPRHistory:
     """
 
     @pytest.fixture(autouse=True)
-    def setup_db(self):
+    def setup_db(self, authenticate_client):
         app.dependency_overrides[get_db] = override_get_db
         Base.metadata.create_all(bind=engine)
         self.db = TestingSessionLocal()
+        authenticate_client(client, CROSS_USER, TestingSessionLocal)
         yield
         self.db.close()
         Base.metadata.drop_all(bind=engine)
@@ -601,10 +617,11 @@ class TestCrossProjectPRHistory:
 class TestPRCampaigns:
 
     @pytest.fixture(autouse=True)
-    def setup_db(self):
+    def setup_db(self, authenticate_client):
         app.dependency_overrides[get_db] = override_get_db
         Base.metadata.create_all(bind=engine)
         self.db = TestingSessionLocal()
+        authenticate_client(client, TEST_USER, TestingSessionLocal)
         yield
         self.db.close()
         Base.metadata.drop_all(bind=engine)
@@ -698,7 +715,7 @@ class TestPRCampaigns:
         mixed = next(campaign for campaign in data["campaigns"] if campaign["campaign_name"] == "Update mixed.yml")
         assert mixed["completion_percentage"] == 100
 
-    def test_campaigns_reject_another_users_project(self):
+    def test_campaigns_reject_another_users_project(self, authenticate_client):
         _, _ = _create_account_and_project(self.db)
         other = Account(
             github_user="otheruser",
@@ -707,6 +724,10 @@ class TestPRCampaigns:
         )
         self.db.add(other)
         self.db.commit()
+
+        # Actually sign in as otheruser — this test is about project ownership,
+        # not about spoofing someone else's name in the query string.
+        authenticate_client(client, "otheruser", TestingSessionLocal)
 
         with patch("workflows.user_tokens", {"otheruser": "fake-token"}):
             response = client.get(

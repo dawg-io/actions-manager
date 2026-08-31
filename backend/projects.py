@@ -1099,11 +1099,37 @@ def update_project(
         
         db.commit()
 
+        # Returned so the caller can refresh the "not delivered yet" reminder
+        # from this response instead of waiting for the next page load — a repo
+        # added by this very save is the common case for it appearing. Computed
+        # here rather than guessed client-side: a repo removed and re-added
+        # keeps its delivery history, so "just added" does not imply "waiting".
+        saved_workflows = (
+            db.query(Workflow)
+            .join(ProjectWorkflow, Workflow.workflow_id == ProjectWorkflow.workflow_id)
+            .filter(ProjectWorkflow.project_id == existing_project.project_id)
+            .all()
+        )
+        # Distinguishes "nothing is waiting" from "cannot tell yet": an unchecked
+        # project returns [] either way, and a caller that reads that as the
+        # former would suppress the delivery prompt for every new project.
+        pending_delivery_known = (
+            (existing_project.project_type or "standard") != "rwx"
+            and existing_project.last_drift_check_at is not None
+        )
+        pending_delivery_repos = (
+            _pending_delivery_repo_names(db, existing_project.project_id, saved_workflows)
+            if pending_delivery_known
+            else []
+        )
+
         return {
             "message": "✅ Project updated successfully!",
             "project_id": existing_project.project_id,
             "project_code": existing_project.project_code,
-            "pr_state": existing_project.pr_state
+            "pr_state": existing_project.pr_state,
+            "pending_delivery_repos": pending_delivery_repos,
+            "pending_delivery_known": pending_delivery_known,
         }
         
     except HTTPException:
@@ -1590,6 +1616,67 @@ def _get_repo_names(db: Session, project_id: int) -> list:
         .filter(ProjectRepo.project_id == project_id)
         .all()
     ]
+
+
+def _pending_delivery_repo_names(db: Session, project_id: int, all_workflows: list) -> list:
+    """Project repos that have never received any of the project's workflows.
+
+    Drives the "not delivered yet" reminder. A repo qualifies only when *nothing*
+    has landed there: partial delivery is a different situation, and drift already
+    speaks for it.
+
+    Delivery is judged per (workflow, repo) from ``confirmed_present_at`` — the
+    same evidence ``_delivery_confirmed_on_branch`` uses (issue #1981) — never
+    from ``workflow_status``, which is per-workflow and would call a repo
+    undelivered while the same workflow is live in every other repo.
+
+    A repo with an open ActionsManager PR is excluded: the file is on its way, so
+    the user has already done the thing the reminder would ask for. A campaign
+    stamps ``confirmed_present_at`` only when it lands on the target branch, so
+    without this the reminder would nag for the whole life of the PR.
+    """
+    workflow_ids = [wf.workflow_id for wf in all_workflows if not wf.reusable_workflow]
+    if not workflow_ids:
+        return []
+
+    delivered_repo_ids = {
+        repo_id for (repo_id,) in
+        db.query(WorkflowDriftState.repo_id)
+        .filter(
+            WorkflowDriftState.workflow_id.in_(workflow_ids),
+            WorkflowDriftState.confirmed_present_at.isnot(None),
+        )
+        .distinct()
+        .all()
+    }
+
+    # Only a PR that carries workflows means "the files are on their way". A
+    # CODEOWNERS-only or custom-file-only campaign also opens a PR for the repo,
+    # and suppressing on that would hide the reminder for the life of a PR that
+    # delivers no workflow at all. _clear_drift_for_merged_pr guards on the same
+    # field for the same reason.
+    repos_with_open_pr = {
+        repo_name for (repo_name,) in
+        db.query(ProjectPullRequest.repo_name)
+        .filter(
+            ProjectPullRequest.project_id == project_id,
+            ProjectPullRequest.pr_state == "open",
+            ProjectPullRequest.workflow_names.isnot(None),
+            ProjectPullRequest.workflow_names != "",
+        )
+        .distinct()
+        .all()
+    }
+
+    return sorted(
+        repo_name
+        for (repo_id, repo_name) in
+        db.query(Repo.repo_id, Repo.repo_name)
+        .join(ProjectRepo, ProjectRepo.repo_id == Repo.repo_id)
+        .filter(ProjectRepo.project_id == project_id)
+        .all()
+        if repo_id not in delivered_repo_ids and repo_name not in repos_with_open_pr
+    )
 
 
 def _split_workflows(all_workflows: list) -> tuple:
@@ -2326,6 +2413,18 @@ def get_project(
         wf.workflow_name for wf in all_workflows if wf.workflow_id in drifted_workflow_ids
     })
 
+    # Repos still waiting for their first delivery. Gated on the project having
+    # been drift-checked at least once: before that, an absent
+    # confirmed_present_at means "never looked", not "never delivered", and a
+    # project delivered by direct commit would have every repo reported as
+    # waiting. Saying nothing until there is evidence matches how drift itself
+    # refuses to report a state it could not verify (issue #1815).
+    pending_delivery_repos = (
+        _pending_delivery_repo_names(db, project.project_id, all_workflows)
+        if project_type != "rwx" and project.last_drift_check_at is not None
+        else []
+    )
+
     return {
         "project_id": project.project_id,
         "project_name": project.project_name,
@@ -2353,6 +2452,7 @@ def get_project(
         "last_preflight_pr_url": project.last_preflight_pr_url,
         "drift_detected": check_drift and len(repo_names) > 0,
         "drifted_workflow_names": drifted_workflow_names,
+        "pending_delivery_repos": pending_delivery_repos,
         "drift_check_interval_minutes": project.drift_check_interval_minutes,
         "caller_project_role": caller_project_role,
         "custom_files": _serialize_custom_files(db, project.project_id),

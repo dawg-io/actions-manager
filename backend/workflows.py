@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from config import GITHUB_TIMEOUT_SECONDS
 from database import SessionLocal, get_db
 import auth as auth_module
 from auth import user_tokens, get_github_api_endpoints
@@ -488,9 +489,9 @@ def _responses(*codes: int) -> dict:
 GITHUB_API_URL = "https://api.github.com"
 ACCEPT_HEADER = "application/vnd.github+json"
 X_API_VERSION = "2022-11-28"
-# requests has no default timeout, so a hung GitHub socket blocks the worker
-# thread until the process restarts rather than failing the request.
-GITHUB_TIMEOUT_SECONDS = int(os.getenv("GITHUB_TIMEOUT_SECONDS", "30"))
+# GITHUB_TIMEOUT_SECONDS is imported at the top of this module - it lives in
+# config so auth.py and github_api_tracker.py can reach it too, since this
+# module imports both and they cannot import back.
 PROJECT_ERROR = "Project not found"
 ACCOUNT_ERROR = "Account not found"
 BRANCH_INFO_NOT_FOUND = "Branch information not found; branch not deleted"
@@ -1295,6 +1296,80 @@ def _workflow_ids_locked_by_pr(pr, stem_by_id: dict, rwx_repos_by_wid: dict) -> 
     return locked
 
 
+def _reset_drift_lookup_caches(db: Session, project_id: int) -> None:
+    """Drop the lookup caches a drift check memoizes on the Session.
+
+    Scopes them to one check. The background sweep reuses a single Session for a
+    whole batch, which can span minutes of GitHub I/O, so anything cached for the
+    Session's lifetime outlives the check that built it. Staleness here is not
+    neutral: _delivery_confirmed_on_branch reads "repo not in this project" as
+    "no evidence could ever have been recorded", so a set missing a repo attached
+    mid-batch reports that repo as a deletion — the false positive the gate
+    exists to remove (issue #1981).
+    """
+    db.info.pop(f"project_repo_ids:{project_id}", None)
+    db.info.pop("repo_id_by_name", None)
+
+
+def _project_repo_ids(db: Session, project_id: int) -> set:
+    """Repo ids this project delivers to, cached for the (workflow x repo) loop."""
+    key = f"project_repo_ids:{project_id}"
+    cached = db.info.get(key)
+    if cached is None:
+        cached = {
+            row.repo_id
+            for row in db.query(ProjectRepo.repo_id).filter(
+                ProjectRepo.project_id == project_id
+            ).all()
+        }
+        db.info[key] = cached
+    return cached
+
+
+def _delivery_confirmed_on_branch(db: Session, workflow, repo_name: str, branch: str,
+                                  project_id: int) -> bool:
+    """Whether a drift check has ever actually found this file on this (repo, branch).
+
+    "Deleted in GitHub" is a claim about history, and nothing else in the row can
+    make it: ``workflow_git_hash`` is the blob SHA of whatever branch was last
+    written, a PR branch included, and ``github_sha`` is nulled by the very check
+    that reports a deletion. ``confirmed_present_at`` is stamped the first time a
+    check sees the file and never cleared, so it is the one field that answers
+    this (issue #1981).
+
+    Keyed per (workflow, repo, branch): the same workflow can be live on one
+    branch and never delivered to another.
+
+    Returns True — do not suppress — wherever the answer is unknowable rather
+    than known-negative. Drift state is only persisted for a project's own repos
+    (``record_drift_transitions`` skips details whose repo_id is None), so for
+    anything else, such as the source repo of a linked reusable workflow, no
+    evidence would ever have been recorded and its absence proves nothing.
+    Suppressing there would downgrade real deletions to "not delivered yet".
+    """
+    if db is None or project_id is None:
+        return True
+
+    repo_id_by_name = db.info.get("repo_id_by_name")
+    if repo_id_by_name is None:
+        repo_id_by_name = {r.repo_name: r.repo_id for r in db.query(Repo).all()}
+        db.info["repo_id_by_name"] = repo_id_by_name
+
+    repo_id = repo_id_by_name.get(repo_name)
+    if repo_id is None or repo_id not in _project_repo_ids(db, project_id):
+        return True
+
+    return (
+        db.query(WorkflowDriftState.confirmed_present_at)
+        .filter(
+            WorkflowDriftState.workflow_id == workflow.workflow_id,
+            WorkflowDriftState.repo_id == repo_id,
+            WorkflowDriftState.branch == (branch or ""),
+        )
+        .scalar()
+    ) is not None
+
+
 def _drift_for_missing_workflow(workflow, repo_name: str, drift_type: str, db: Session, project_id: int,
                                 branch: str = "") -> Optional[DriftStatus]:
     """Workflow doesn't exist on GitHub. Decide deleted / pending-merge / never-synced.
@@ -1323,6 +1398,24 @@ def _drift_for_missing_workflow(workflow, repo_name: str, drift_type: str, db: S
                 github_sha=None,
                 local_sha=workflow.workflow_git_hash,
                 message=f"{label}orkflow in open PR - pending merge to {repo_name}",
+                drift_type=drift_type,
+                repo=repo_name,
+                branch=branch,
+            )
+
+        if not _delivery_confirmed_on_branch(db, workflow, repo_name, branch, project_id):
+            # Reported as a non-drift status rather than None so the result still
+            # reaches record_drift_transitions and clears any deleted row an
+            # earlier check wrote for this pairing.
+            print(f"\u2139\ufe0f  Workflow '{workflow.workflow_name}' has never been seen on {repo_name}@{branch or 'default'} - pending delivery, not a deletion")
+            return _create_drift_status(
+                workflow_name=workflow.workflow_name,
+                has_drift=False,
+                github_content=None,
+                local_content=workflow.workflow_yaml,
+                github_sha=None,
+                local_sha=workflow.workflow_git_hash,
+                message=f"{label}orkflow not delivered to {repo_name} yet",
                 drift_type=drift_type,
                 repo=repo_name,
                 branch=branch,
@@ -3155,6 +3248,7 @@ def run_project_drift_check(db: Session, user: str, project: Project):
     background sweep call this, so an automatic check can never diverge from
     the one a user asks for.
     """
+    _reset_drift_lookup_caches(db, project.project_id)
     try:
         details = _collect_project_drift_details(db, user, project)
     except HTTPException:
@@ -3194,6 +3288,7 @@ def run_project_drift_check(db: Session, user: str, project: Project):
 def get_project_drift(
     project_id: int,
     github_user: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     refresh: bool = False,
 ):
@@ -3207,6 +3302,7 @@ def get_project_drift(
     time of this request — otherwise "clean" would look freshly verified when
     nothing had been checked in days.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
     if github_user not in user_tokens:
         raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
@@ -3256,9 +3352,11 @@ def get_project_drift(
 def get_workflow_drift(
     workflow_id: int,
     github_user: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Per-workflow drift detail — includes both YAML versions and SHAs per repo/branch."""
+    auth_module.assert_session_owns_user(github_user, request, db)
     if github_user not in user_tokens:
         raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
@@ -5761,10 +5859,12 @@ def _refresh_preflight_status_from_github(
 def get_preflight_validation_status(
     github_user: str,
     project_name: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     refresh_from_github: bool = True,
 ):
     """Return (and optionally refresh) the project's preflight validation status."""
+    auth_module.assert_session_owns_user(github_user, request, db)
     try:
         if github_user not in user_tokens:
             raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
@@ -6506,6 +6606,7 @@ def _campaign_pr_response(
 def get_project_pr_status(
     github_user: str,
     project_name: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     refresh_from_github: bool = False
 ):
@@ -6538,6 +6639,7 @@ def get_project_pr_status(
     Returns cached database state by default for fast loading. Only fetches from GitHub
     when explicitly requested via refresh_from_github=true.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
     try:
         if github_user not in user_tokens:
             raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
@@ -7173,6 +7275,7 @@ def close_pull_request(
 def get_project_pr_history(
     github_user: str,
     project_name: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     state_filter: str = "all",  # "all", "merged", "closed"
     repo_filter: Optional[str] = None,
@@ -7211,6 +7314,7 @@ def get_project_pr_history(
         workflow_filter: Optional substring to match against stored workflow names.
         db:              SQLAlchemy database session.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
     try:
         if github_user not in user_tokens:
             raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
@@ -7332,6 +7436,7 @@ def get_project_pr_history(
 def get_project_pr_campaigns(
     github_user: str,
     project_name: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     refresh_from_github: bool = False
 ) -> PRCampaignsResponse:
@@ -7344,6 +7449,7 @@ def get_project_pr_campaigns(
     a campaign_id are grouped heuristically by project, workflow set, target
     branch, and creation day so existing PR History data remains visible.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
     try:
         if github_user not in user_tokens:
             raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
@@ -9212,8 +9318,12 @@ def _commit_reusable_workflows_to_branch(rxworkflows: List[dict], owner: str, re
 def _delete_custom_file_from_am_branch(owner: str, repo: str, cf_path: str, am_branch: str, project_code: str,
                                         user: str, db: Session, headers: dict) -> tuple:
     """Returns (success, error_message)."""
+    # Encoded at the URL, plain in messages: the stored path must not be able to
+    # reshape the request (a "?" or "#" in it would otherwise start a query or
+    # fragment, and "%xx" would be decoded by GitHub).
+    cf_url_path = quote(cf_path, safe="/")
     sha_resp = github_get(
-        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_url_path}",
         user, db,
         headers={**headers, "params": {"ref": am_branch}},
         params={"ref": am_branch},
@@ -9221,7 +9331,7 @@ def _delete_custom_file_from_am_branch(owner: str, repo: str, cf_path: str, am_b
     if sha_resp.status_code == 200:
         current_sha = sha_resp.json().get("sha")
         del_resp = requests.delete(
-            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_url_path}",
             headers=headers,
             json={
                 "message": f"Delete {cf_path} via ActionsManager [{project_code}] [skip ci]",
@@ -9245,8 +9355,9 @@ def _upsert_custom_file_to_am_branch(owner: str, repo: str, cf: dict, am_branch:
                                       user: str, db: Session, headers: dict) -> tuple:
     """Returns (success, error_message)."""
     cf_path = cf.get("file_path", "")
+    cf_url_path = quote(cf_path, safe="/")
     sha_resp = github_get(
-        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_url_path}",
         user, db,
         headers=headers,
         params={"ref": am_branch},
@@ -9260,7 +9371,7 @@ def _upsert_custom_file_to_am_branch(owner: str, repo: str, cf: dict, am_branch:
     if existing_sha:
         put_body["sha"] = existing_sha
     put_resp = requests.put(
-        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_path}",
+        f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_url_path}",
         headers=headers,
         json=put_body,
         timeout=GITHUB_TIMEOUT_SECONDS,
@@ -9309,9 +9420,10 @@ def _commit_codeowners_to_branch(codeowners_for_repo: Optional[dict], owner: str
     if not codeowners_for_repo:
         return "", None
     co_path = codeowners_for_repo["file_path"]
+    co_url_path = quote(co_path, safe="/")
     try:
         sha_resp = github_get(
-            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_path}",
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_url_path}",
             user, db,
             headers=headers,
             params={"ref": am_branch},
@@ -9325,7 +9437,7 @@ def _commit_codeowners_to_branch(codeowners_for_repo: Optional[dict], owner: str
         if existing_sha:
             put_body["sha"] = existing_sha
         put_resp = requests.put(
-            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_path}",
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{co_url_path}",
             headers=headers,
             json=put_body,
             timeout=GITHUB_TIMEOUT_SECONDS,

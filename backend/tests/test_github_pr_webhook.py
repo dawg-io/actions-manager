@@ -399,9 +399,10 @@ class TestPageLoadPRSync:
     """
 
     @pytest.fixture(autouse=True)
-    def setup_db(self):
+    def setup_db(self, authenticate_client):
         Base.metadata.create_all(bind=engine)
         self.db = TestingSessionLocal()
+        authenticate_client(client, "syncuser", TestingSessionLocal)
         yield
         self.db.close()
         Base.metadata.drop_all(bind=engine)

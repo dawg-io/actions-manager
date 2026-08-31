@@ -30,7 +30,7 @@ Welcome to the Actions Manager documentation! This guide will help you find the 
 ### Advanced Topics
 
 - **[Deployment Guide](DEPLOYMENT.md)** - CI/CD, Docker, production setup
-- **[Staging via Cloudflare Tunnel](guides/STAGING_TUNNEL.md)** - Public HTTPS staging URL for per-commit cloud-deployment testing
+- **[Public HTTPS via Cloudflare Tunnel](guides/STAGING_TUNNEL.md)** - Put your self-hosted install behind a public HTTPS hostname, no open ports
 - **[Database Schema](../DATABASE_SCHEMA.md)** - Database structure
 - **[Security Policy](../SECURITY.md)** - Security practices and reporting
 - **[PR-Based Delivery](features/PR_BASED_DELIVERY.md)** - Technical implementation details

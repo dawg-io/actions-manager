@@ -29,6 +29,10 @@ interface RepositoriesAndBranchesProps {
   setRepos: (repos: Repository[] | ((prev: Repository[]) => Repository[])) => void;
   selectedRepos: string[];
   setSelectedRepos: (repos: string[] | ((prev: string[]) => string[])) => void;
+  /** Selected repos that have never received the project's workflows. */
+  pendingDeliveryRepos?: string[];
+  /** Bumped after a save so the branch-override panel refetches. */
+  repoConfigRefreshSignal?: number;
   setRegexPattern: (pattern: string) => void;
   regexPattern: string;
   branchOption: BranchOption;
@@ -58,6 +62,8 @@ const RepositoriesAndBranches: React.FC<RepositoriesAndBranchesProps> = ({
   setRepos,
   selectedRepos,
   setSelectedRepos,
+  pendingDeliveryRepos = [],
+  repoConfigRefreshSignal = 0,
   setRegexPattern,
   regexPattern,
   branchOption,
@@ -238,6 +244,7 @@ const RepositoriesAndBranches: React.FC<RepositoriesAndBranchesProps> = ({
       <RepositoryBranchSelector
         availableRepositories={scopedRepos}
         selectedRepositoryNames={selectedRepos}
+        pendingDeliveryRepos={pendingDeliveryRepos}
         visibilityScope={visibilityScope}
         loading={reposLoading}
         error={reposError}
@@ -255,6 +262,7 @@ const RepositoriesAndBranches: React.FC<RepositoriesAndBranchesProps> = ({
               branchOption={branchOption}
               regexPattern={regexPattern}
               branchMaxAgeDays={branchMaxAgeDays}
+              refreshSignal={repoConfigRefreshSignal}
             />
           ) : (
             <div className="rounded-md border border-dashed border-slate-300 px-3 py-6 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">

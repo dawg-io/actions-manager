@@ -6,7 +6,6 @@
       "dom.iterable",
       "ES2022"
     ],
-    "allowJs": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

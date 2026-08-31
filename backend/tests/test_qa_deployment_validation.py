@@ -554,7 +554,7 @@ class TestReleaseWorkflowConfiguration:
 
     def test_self_hosted_release_workflow_builds_multi_arch(self):
         """Verify self-hosted release workflow publishes amd64 and arm64 images."""
-        workflow_file = REPO_ROOT / ".github" / "workflows" / "self-hosted-image.yml"
+        workflow_file = REPO_ROOT / ".github" / "workflows" / "docker-images.yml"
         with open(workflow_file, 'r') as f:
             content = f.read()
 
@@ -564,7 +564,7 @@ class TestReleaseWorkflowConfiguration:
 
     def test_self_hosted_release_workflow_verifies_manifest_arches(self):
         """Verify workflow inspects published manifest for both required platforms."""
-        workflow_file = REPO_ROOT / ".github" / "workflows" / "self-hosted-image.yml"
+        workflow_file = REPO_ROOT / ".github" / "workflows" / "docker-images.yml"
         with open(workflow_file, 'r') as f:
             content = f.read()
 

@@ -126,9 +126,7 @@ def _repos_create_url_for_owner(owner: str, owner_type: str) -> str:
 
 def _assert_session_owns_user(user: str, request: Request, db: Session) -> None:
     """Raise 403 if the authenticated session belongs to a different GitHub user."""
-    account = auth_module.resolve_authenticated_user(request, db)
-    if account.github_user.lower() != user.lower():
-        raise HTTPException(status_code=403, detail="Access denied")
+    auth_module.assert_session_owns_user(user, request, db)
 
 
 def _should_restrict_to_public_repos(user: str, db: Session) -> bool:

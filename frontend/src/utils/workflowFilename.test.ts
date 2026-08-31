@@ -3,6 +3,7 @@ import {
   normalizeWorkflowStem,
   normalizeWorkflowFilename,
   extractWorkflowPrefixAndStem,
+  workflowDisplayFilename,
   validateWorkflowName,
   setWorkflowYamlName,
 } from './workflowFilename';
@@ -219,6 +220,48 @@ describe('workflowFilename utilities', () => {
 
     test('rejects hidden file pattern with extension', () => {
       expect(validateWorkflowName('.gitignore.yml')).toMatch(/dot/i);
+    });
+  });
+
+  describe('workflowDisplayFilename', () => {
+    test('prefixes and adds the extension in prefix mode', () => {
+      expect(workflowDisplayFilename('ci', 'PROJ', true)).toBe('AM_PROJ_ci.yml');
+    });
+
+    test('leaves the name bare in no-prefix mode', () => {
+      expect(workflowDisplayFilename('ci', 'PROJ', false)).toBe('ci.yml');
+    });
+
+    test('uppercases the project code', () => {
+      expect(workflowDisplayFilename('ci', 'proj', true)).toBe('AM_PROJ_ci.yml');
+    });
+
+    test('mirrors the backend and prefixes unconditionally', () => {
+      // format_workflow_name() has no idempotency check, and `AM_` is a legal
+      // start for a user-chosen name, so guessing from the shape would print a
+      // filename the delivery never produces.
+      expect(workflowDisplayFilename('AM_TEST_deploy', 'PROJ', true)).toBe('AM_PROJ_AM_TEST_deploy.yml');
+    });
+
+    test('leaves a name alone when the caller says the prefix does not apply', () => {
+      // How a linked reusable workflow, owned and named by another project, is
+      // rendered: the caller knows it is foreign and passes usePrefix false.
+      expect(workflowDisplayFilename('AM_RWW1_shared.yml', 'PROJ', false)).toBe('AM_RWW1_shared.yml');
+      expect(workflowDisplayFilename('shared', 'PROJ', false)).toBe('shared.yml');
+    });
+
+    test('is a no-op without a project code', () => {
+      expect(workflowDisplayFilename('ci', '', true)).toBe('ci.yml');
+      expect(workflowDisplayFilename('ci', undefined, true)).toBe('ci.yml');
+    });
+
+    test('returns empty for an empty name rather than a bare prefix', () => {
+      expect(workflowDisplayFilename('', 'PROJ', true)).toBe('');
+      expect(workflowDisplayFilename('  ', 'PROJ', true)).toBe('');
+    });
+
+    test('does not double the extension', () => {
+      expect(workflowDisplayFilename('ci.yaml', 'PROJ', true)).toBe('AM_PROJ_ci.yml');
     });
   });
 

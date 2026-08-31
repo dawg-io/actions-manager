@@ -433,7 +433,6 @@ const YAMLEditor = React.forwardRef<YamlEditorHandle, YAMLEditorProps>(({
       view.destroy();
       viewRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height, readOnly, theme]); // Intentionally excluding value and handleChange to prevent recreation
 
   // Update editor content when value prop changes externally

@@ -13,7 +13,10 @@ import '../styles/VersionHistoryPanel.css';
 interface VersionHistoryPanelProps {
   user: string;
   projectName: string;
+  /** Canonical stem — the API identifier. Never rendered. */
   workflowName: string;
+  /** On-GitHub filename for the header. Falls back to the stem. */
+  displayName?: string;
   currentContent: string;
   onClose: () => void;
   onRestore: (content: string) => void;
@@ -23,6 +26,7 @@ const VersionHistoryPanel: React.FC<VersionHistoryPanelProps> = ({
   user,
   projectName,
   workflowName,
+  displayName,
   currentContent,
   onClose,
   onRestore,
@@ -37,7 +41,6 @@ const VersionHistoryPanel: React.FC<VersionHistoryPanelProps> = ({
 
   useEffect(() => {
     loadVersionHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, projectName, workflowName]);
 
   const loadVersionHistory = async () => {
@@ -147,7 +150,7 @@ const VersionHistoryPanel: React.FC<VersionHistoryPanelProps> = ({
       />
       <div className="version-history-panel relative">
         <div className="version-history-header">
-          <h2>Version History: {workflowName}</h2>
+          <h2>Version History: {displayName || workflowName}</h2>
           <button className="close-button" onClick={onClose}>✕</button>
         </div>
 

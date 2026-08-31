@@ -38,6 +38,7 @@ from models import (
     Base, Account, Project, ProjectPullRequest, ProjectPRCampaign, Repo, ProjectRepo, Codeowners,
     LinkedReusableWorkflow, Workflow, ProjectWorkflow, WorkflowVersion,
 )
+from auth import create_auth_session  # noqa: E402
 from main import app
 from workflows import (
     get_db, _save_prs_and_update_status, _fetch_branch_protection,
@@ -52,7 +53,7 @@ client = TestClient(app)
 
 
 @pytest.fixture()
-def db_session():
+def db_session(authenticate_client):
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -69,6 +70,7 @@ def db_session():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    authenticate_client(client, TEST_USER, TestingSessionLocal)
     db = TestingSessionLocal()
     try:
         yield db
@@ -642,7 +644,14 @@ class TestSchemaSafety:
         db_session.add(other)
         db_session.commit()
 
-        response = _get_campaigns(github_user="intruder")
+        # Actually sign in as the intruder: the point of this test is that a
+        # real session still cannot reach a project it does not own.
+        saved = client.headers.get("Authorization")
+        client.headers["Authorization"] = f"Bearer {create_auth_session('intruder', db_session)}"
+        try:
+            response = _get_campaigns(github_user="intruder")
+        finally:
+            client.headers["Authorization"] = saved
 
         assert response.status_code == 404
 

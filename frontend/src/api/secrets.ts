@@ -1,4 +1,4 @@
-import axios, { AxiosResponse } from "axios";
+import { AxiosResponse } from "axios";
 import apiClient from "./apiClient";
 import config from "../config";
 import { Repository } from "./handlers";
@@ -113,7 +113,7 @@ export const getSecrets = async (
   projectName: string
 ): Promise<Secret[]> => {
   try {
-    const response: AxiosResponse<GetSecretsResponse> = await axios.get(
+    const response: AxiosResponse<GetSecretsResponse> = await apiClient.get(
       `${BACKEND_URL}/api/get-secrets`,
       {
         params: {
@@ -218,7 +218,7 @@ export const getSecretsCount = async (
 ): Promise<number> => {
   try {
     const repoNames = selectedRepos.join(",");
-    const response: AxiosResponse<GetSecretsCountResponse> = await axios.get(
+    const response: AxiosResponse<GetSecretsCountResponse> = await apiClient.get(
       `${BACKEND_URL}/api/secrets-count`,
       {
         params: {

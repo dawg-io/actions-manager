@@ -6,7 +6,21 @@
 # .github/workflows/base-images.yml) instead of building the OS layer fresh
 # from node:24-slim on every CI run - see that Dockerfile for what it
 # contains.
-FROM ghcr.io/dawg-io/actions-manager/base-frontend:latest AS frontend-builder
+#
+# Pinned to BUILDPLATFORM - the machine running the build - rather than the
+# target platform. What leaves this stage is `/app/frontend/build`: static JS,
+# CSS and HTML that is byte-identical for every architecture, so building it
+# once natively is both correct and strictly cheaper than building it per-arch.
+#
+# It is also the difference between a working arm64 image and a hung one. Vite
+# bundles with Rolldown, a native binary; emulated through QEMU for a
+# cross-architecture build it reaches "rendering chunks" and never returns (one
+# such job ran 107 minutes before it was cancelled). Building this stage on the
+# host's own architecture means the bundler is never emulated, whichever runner
+# picks the job up. The target-architecture image just copies the result.
+#
+# Needs BuildKit, which this file already requires for its COPY heredocs below.
+FROM --platform=$BUILDPLATFORM ghcr.io/dawg-io/actions-manager/base-frontend:latest AS frontend-builder
 
 # Set Node.js memory limit to prevent OOM errors during build
 # Adjust NODE_OPTIONS if you have more/less memory available

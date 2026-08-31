@@ -27,7 +27,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 
 MAX_WAIT_SECONDS = 300
 POLL_INTERVAL_SECONDS = 10
@@ -65,14 +65,19 @@ def get_task_id_from_report(report_path: str) -> str | None:
     return None
 
 
-def wait_for_analysis(base_url: str, token: str, task_id: str) -> None:
-    """Poll /api/ce/task until the analysis reaches SUCCESS; exit on failure or timeout."""
+def wait_for_analysis(base_url: str, token: str, task_id: str) -> dict:
+    """Poll /api/ce/task until the analysis reaches SUCCESS; exit on failure or timeout.
+
+    Returns the completed task. Note ``analysedAt`` on it is not reported in
+    the server's local timezone, so it cannot be used to work out the server's
+    calendar date - see query_new_issues_for_date.
+    """
     waited = 0
     while waited < MAX_WAIT_SECONDS:
         data = sonar_get(base_url, "/api/ce/task", {"id": task_id}, token)
         status = data.get("task", {}).get("status", "PENDING")
         if status == "SUCCESS":
-            return
+            return data.get("task", {})
         if status in ("FAILED", "CANCELED"):
             print(f"SonarQube analysis task {task_id} ended with status: {status}", file=sys.stderr)
             sys.exit(2)
@@ -159,6 +164,36 @@ def format_issue_summary(issues: list, base_url: str, project_key: str, today: s
     return "\n".join(lines)
 
 
+FUTURE_BOUND_ERROR = "Start bound cannot be in the future"
+
+
+def query_new_issues_for_date(base_url, token, project_key, day):
+    """Query one calendar day, stepping back if the server calls it the future.
+
+    createdAfter/createdBefore are evaluated in the SonarQube server's
+    timezone, while the runner's clock is UTC. When the server sits west of
+    UTC, the runner's calendar date is still tomorrow to the server for the
+    hours after UTC midnight, and the query is rejected outright - failing this
+    check on any PR pushed in that window, whatever it contains.
+
+    Rather than trying to infer the server's offset (``analysedAt`` is not
+    reported in server-local time, so it cannot settle it either), ask, and let
+    the server's own answer correct us: the previous day is never in its
+    future.
+    """
+    try:
+        return query_new_issues(base_url, token, project_key, day), day
+    except RuntimeError as exc:
+        if FUTURE_BOUND_ERROR not in str(exc):
+            raise
+    earlier = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    print(
+        f"  {day} is still in the future for this SonarQube server "
+        f"(it is behind UTC); using {earlier}."
+    )
+    return query_new_issues(base_url, token, project_key, earlier), earlier
+
+
 def main() -> int:
     base_url = os.environ.get("SONAR_HOST_URL", "").rstrip("/")
     token = os.environ.get("SONAR_TOKEN", "")
@@ -181,9 +216,6 @@ def main() -> int:
         )
         return 2
 
-    today = date.today().isoformat()
-    print(f"Checking SonarQube for new issues: project={project_key}, date={today}")
-
     report_path = os.environ.get("SONAR_REPORT_TASK_PATH", DEFAULT_REPORT_TASK_PATH)
     task_id = get_task_id_from_report(report_path)
     if task_id:
@@ -193,8 +225,13 @@ def main() -> int:
     else:
         print(f"No report-task.txt found at {report_path}; skipping analysis wait.")
 
+    today = date.today().isoformat()
+    print(f"Checking SonarQube for new issues: project={project_key}, date={today}")
+
     try:
-        issues = query_new_issues(base_url, token, project_key, today)
+        issues, today = query_new_issues_for_date(
+            base_url, token, project_key, today
+        )
     except RuntimeError as exc:
         print(f"Error querying SonarQube: {exc}", file=sys.stderr)
         return 2

@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-syntax, no-restricted-imports -- Legacy: TODO migrate inline styles and CSS imports to Tailwind CSS classes */
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import apiClient from '../api/apiClient';
 import config from '../config';
 import { getRulesetSyncStatus } from '../api/rulesets';
 import ConfirmDialog from './ConfirmDialog';
@@ -72,7 +72,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
     if (user && projectName) {
       loadRulesets();
     }
-  }, [user, projectName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, projectName]);
 
   // Load ruleset sync statuses when rulesets or selectedRepos change
   useEffect(() => {
@@ -125,7 +125,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
 
     setIsLoading(true);
     try {
-      const response: ApiResponse = await axios.get(`${BACKEND_URL}/api/rulesets/${projectName}`, {
+      const response: ApiResponse = await apiClient.get(`${BACKEND_URL}/api/rulesets/${projectName}`, {
         params: { github_user: user }
       });
 
@@ -175,7 +175,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
       formData.append('project_name', projectName);
       formData.append('github_user', user);
 
-      const response: ApiResponse = await axios.post(`${BACKEND_URL}/api/rulesets/upload`, formData, {
+      const response: ApiResponse = await apiClient.post(`${BACKEND_URL}/api/rulesets/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -210,7 +210,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
     setPendingDeleteId(null);
     setIsLoading(true);
     try {
-      const response: ApiResponse = await axios.delete(`${BACKEND_URL}/api/rulesets/${rulesetId}`, {
+      const response: ApiResponse = await apiClient.delete(`${BACKEND_URL}/api/rulesets/${rulesetId}`, {
         params: { github_user: user }
       });
 
@@ -244,7 +244,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
         typeof repo === 'string' ? repo : (repo as any).full_name || (repo as any).name
       );
 
-      const response: ApiResponse = await axios.post(`${BACKEND_URL}/api/rulesets/${rulesetId}/apply`, {
+      const response: ApiResponse = await apiClient.post(`${BACKEND_URL}/api/rulesets/${rulesetId}/apply`, {
         repo_names: repoNames,
         github_user: user
       });
@@ -307,7 +307,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
         typeof repo === 'string' ? repo : (repo as any).full_name || (repo as any).name
       );
 
-      const response: ApiResponse = await axios.post(`${BACKEND_URL}/api/rulesets/${rulesetId}/sync`, {
+      const response: ApiResponse = await apiClient.post(`${BACKEND_URL}/api/rulesets/${rulesetId}/sync`, {
         repo_names: repoNames,
         github_user: user
       });

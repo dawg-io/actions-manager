@@ -145,6 +145,15 @@ Register GitHub OAuth app with:
 
 ## Cloud Deployment (Future / Not Part of Self-Hosted Beta)
 
+> **Development-repository reference.** The cloud build is not part of the
+> public self-hosted distribution, and neither is the tooling this section
+> walks through. `deployment/`, `docker-compose.cloud.yml`,
+> `.env.cloud.example` and `.github/workflows/` are all removed when a
+> release is promoted to the public repository, so the paths below resolve
+> only in the private development repository. Self-hosted operators want
+> [INSTALLATION.md](INSTALLATION.md) and the Self-Hosted Deployment section
+> above instead.
+
 ### Architecture
 
 The cloud deployment uses **two separate containers** for scalability:
@@ -240,6 +249,166 @@ Security (Recommended):
 Register GitHub OAuth app with:
 - **Homepage URL**: `https://yourdomain.com`
 - **Callback URL**: `https://api.yourdomain.com/auth/callback`
+
+### Local/VM Dev-Test Setup (No Kubernetes)
+
+For a disposable dev/test instance of the cloud build on a plain Docker
+Compose host (VM or workstation) — no Kubernetes, no external database to
+hand-wire:
+
+```bash
+# 1. Add a local Postgres service via the example override
+#    (the copy must land at repo root — the cloud compose file's build
+#    contexts and env file are root-relative)
+cp deployment/docker/docker-compose.cloud.override.example.yml docker-compose.override.yml
+
+# 2. Configure environment
+cp .env.cloud.example .env.cloud
+# Edit .env.cloud — see minimum values below
+
+# 3. Start from repo root (both -f flags are required: Compose does not
+#    auto-merge docker-compose.override.yml once -f is used for another file)
+docker compose -f docker-compose.cloud.yml -f docker-compose.override.yml \
+  --env-file .env.cloud up --build -d
+```
+
+Minimum `.env.cloud` values for a from-scratch throwaway test:
+- `INSTALLATION_MODE=cloud`
+- `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` — from a throwaway GitHub OAuth App
+- `GITHUB_WEBHOOK_SECRET` — any random value; only needs to satisfy startup validation on a dev/test box
+- `DATABASE_URL` — pointing at the override's `postgres` service by name, e.g. `postgresql://actions_manager_dev:actions_manager_dev_only@postgres:5432/actions_manager`
+
+This is dev/test tooling only. It does not change self-hosted beta behavior
+and is not part of any release process.
+
+### Cloud Dev Deployment Node
+
+The long-lived internal cloud dev/staging environment runs as a Docker Compose
+stack on the `deployment-host` self-hosted runner. It replaces the Kubernetes
+cluster that Flux used to reconcile, which was decommissioned in PR #1956.
+
+`.github/workflows/docker-images.yml` → `deploy-cloud-dev` redeploys it after
+`build-cloud-images` publishes new `dev-backend` / `dev-frontend` images — on
+PRs targeting `develop`, and on `workflow_dispatch` for a manual redeploy. The
+node holds a single stack on one Postgres volume, so concurrent deploys would
+fight over it; the job does not yet serialise itself with a `concurrency:`
+group.
+
+The compose file is `deployment/docker/docker-compose.cloud.deploy.yml`. Unlike
+`docker-compose.cloud.yml` it never builds from source: it pulls the already-
+published images by tag, so what runs on the node is exactly what CI pushed.
+
+**Host provisioning (one-time, by hand).** Secrets are never committed to this
+repo or stored as Actions secrets — the stack reads them from a file on the
+node:
+
+```bash
+sudo mkdir -p /opt/actions-manager-cloud
+sudo cp .env.cloud.example /opt/actions-manager-cloud/.env.cloud
+sudo chmod 600 /opt/actions-manager-cloud/.env.cloud
+# Then edit it — see the values below.
+```
+
+The deploy job fails with a pointer to this section if that file is missing.
+
+**Deploying to a remote Docker host.** `deployment-host` is a runner *label*,
+and it may well sit on the same machine as `pmox-runner` — adding the label
+moves nothing by itself. What decides where the stack lands is
+`CLOUD_DOCKER_HOST`: the runner is only the agent that drives a Docker daemon
+somewhere else.
+
+That daemon should not be the runner's own, because the runner's post-job
+cleanup hook prunes containers and networks and will tear the stack down
+between deploys. Point the job at a separate Docker host with these repository
+variables (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Example | Effect |
+|---|---|---|
+| `CLOUD_DOCKER_HOST` | `ssh://deploy@deploy-host.example.com` | **Required.** Sets `DOCKER_HOST` for every compose call. The job refuses to run without it |
+| `CLOUD_HEALTH_HOST` | `deploy-host.example.com` | Host the post-deploy health checks curl. Optional — derived from `CLOUD_DOCKER_HOST` when absent |
+
+Neither is a secret (they are hostnames), so they belong in Variables, not
+Secrets.
+
+Create `CLOUD_HEALTH_HOST` only when the daemon is reachable at a different
+address than the published ports — behind NAT, split-horizon DNS, or an SSH
+bastion. Otherwise **do not create the variable at all**: GitHub will not
+accept an empty variable value, but an undefined variable renders as the empty
+string, which is what the job's derivation expects. If you would rather have it
+defined anyway, set it to the Docker host's address — that is exactly what the
+derivation produces.
+
+Set `CLOUD_DOCKER_HOST` as either a repository **Variable** or a repository
+**Secret** — the job reads `vars.CLOUD_DOCKER_HOST || secrets.CLOUD_DOCKER_HOST`
+and takes whichever is non-empty. A plain hostname is naturally a Variable, but
+an internal `ssh://user@host` does reveal infrastructure, so a Secret is a
+defensible choice; note that it then prints as `***` in the log, and the
+`Deploying onto:` line from `docker info` becomes the way to confirm the
+target. What does *not* work is an **Environment**-scoped entry, which
+resolves as empty unless the job declares `environment:`.
+
+The job refuses to run when it resolves empty, rather than falling back to the
+runner's own daemon — that would deploy onto the wrong machine and still report
+success.
+
+For `ssh://`, the runner's user needs key-based SSH to that host and a
+`known_hosts` entry for it; the job fails early with that hint if `docker
+version` cannot reach the daemon. The job prints the daemon URL, the runner's
+hostname, and `docker info`'s node name before deploying, so the target is
+visible in the log. Note that `.env.cloud` still lives on the
+**runner**, not the remote host — Compose resolves `env_file` client-side.
+
+Values the node needs beyond `.env.cloud.example`'s defaults:
+
+| Variable | Why |
+|---|---|
+| `APP_URL` | The node's reachable URL, e.g. `http://<node-host>:3100` — not in the template, add it |
+| `VITE_BACKEND_URL` / `VITE_FRONTEND_URL` | Public URLs; the backend builds the OAuth `redirect_uri` from `VITE_BACKEND_URL` (`auth.py:67`, `auth.py:1181`) |
+| `ALLOW_INSECURE_HTTP=true` | Required for non-loopback plain HTTP (see `backend/mode_validation.py`) — not in the template, add it. Unnecessary behind TLS |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth App whose callback URL matches `VITE_BACKEND_URL` |
+
+The database needs **nothing**. The bundled `db` service defaults to
+`actions_manager` / `actions_manager_dev_only` / `actions_manager`, and the
+backend's `DATABASE_URL` defaults to match, so a deploy works with none of the
+`POSTGRES_*` variables set. That password is not a secret in any meaningful
+sense: the service publishes no port and is reachable only from inside the
+compose network.
+
+To use a different database, set `DATABASE_URL` in the env file and it wins.
+If you instead want the bundled Postgres under different credentials, set the
+`POSTGRES_*` variables **and** a matching `DATABASE_URL` — the four move
+together, and overriding only some of them fails authentication. Note also
+that these are read only when the data directory is first created: changing
+them against an existing `cloud_dev_postgres_data` volume leaves the stored
+role untouched, so use `ALTER USER` or recreate the volume.
+
+Avoid `$` in any of these values — the deploy passes the env file to
+`docker compose --env-file`, which treats `$` as the start of a substitution.
+
+Optional overrides, all with working defaults:
+
+| Variable | Default | Why change it |
+|---|---|---|
+| `CLOUD_FRONTEND_PORT` | `3100` | Defaults avoid `3000`/`8000`, which `health-check.yml` and the |
+| `CLOUD_BACKEND_PORT` | `8100` | Playwright jobs bind on the same infra |
+| `CLOUD_ENV_FILE` | `/opt/actions-manager-cloud/.env.cloud` | Env file location |
+| `CLOUD_IMAGE_REPO` | `ghcr.io/dawg-io/actions-manager` | Pulling from a different registry path |
+
+Note that cloud-mode startup validation is still relaxed
+(`_CLOUD_PRELAUNCH_RELAXED = True` in `backend/mode_validation.py`), so this
+node may run with stubbed Marketplace calls — that flag exists precisely for
+this environment. Only the tier-bypass guards are enforced today.
+
+To operate the stack by hand on the node:
+
+```bash
+cd /path/to/actions-manager
+IMAGE_TAG=<tag> docker compose -p actions-manager-cloud \
+  -f deployment/docker/docker-compose.cloud.deploy.yml ps
+```
+
+This node is internal dev/test infrastructure. It is not a hosted service, and
+nothing about it is part of the self-hosted beta or any release process.
 
 ---
 

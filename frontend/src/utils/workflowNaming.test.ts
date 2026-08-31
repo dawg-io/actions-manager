@@ -1,9 +1,14 @@
 import { analyzeWorkflowContent, generateIntelligentName } from './workflowNaming';
 
+// analyzeWorkflowContent declares `string`, but its first line guards against
+// anything that isn't one - workflow bodies arrive from the GitHub API. These
+// casts exercise that guard without loosening the signature for real callers.
+const invalid = (value: unknown) => value as string;
+
 describe('workflowNaming utils', () => {
   describe('analyzeWorkflowContent', () => {
     test('should return empty analysis for invalid content', () => {
-      const result = analyzeWorkflowContent(null);
+      const result = analyzeWorkflowContent(invalid(null));
       expect(result).toEqual({
         technology: null,
         triggers: [],
@@ -14,7 +19,7 @@ describe('workflowNaming utils', () => {
     });
 
     test('should return empty analysis for non-string content', () => {
-      const result = analyzeWorkflowContent(123);
+      const result = analyzeWorkflowContent(invalid(123));
       expect(result).toEqual({
         technology: null,
         triggers: [],

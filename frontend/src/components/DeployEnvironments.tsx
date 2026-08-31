@@ -52,7 +52,7 @@ interface ManualEnvironment {
 }
 
 interface DeployEnvironmentsProps {
-  user?: string;
+  user: string;
   selectedRepos?: string[];
   accountType?: string;
   installationMode?: string | null;

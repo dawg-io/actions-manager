@@ -65,6 +65,18 @@ app = FastAPI(
 _WRITE_EXEMPT_PREFIXES = ("/auth/", "/webhooks/", "/admin/", "/ws", "/docs", "/redoc", "/openapi.json")
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
+# CORS preflight carries no credentials, so it can never be authenticated.
+_UNAUTHENTICATABLE_METHODS = {"OPTIONS"}
+
+# The only /api/* reads that are deliberately anonymous. Both return
+# instance-shaped configuration and never user data — the sign-in screen has to
+# render them before anyone has a session. Everything else under /api/ requires
+# one, reads included.
+_ANON_READ_PATHS = frozenset({
+    "/api/setup/status",
+    "/api/webhooks/readiness",
+})
+
 # DB factory used by the middleware — tests can override via app.state.middleware_db_factory
 # Stored on app.state so both tests and middleware reference the same object
 app.state.middleware_db_factory = SessionLocal
@@ -84,20 +96,25 @@ def _set_request_github_user_header(request: Request, github_user: str) -> None:
 
 class WriteProtectionMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that blocks write requests (POST/PUT/PATCH/DELETE) for read-only users.
-    
-    - Safe HTTP methods (GET, HEAD, OPTIONS) are always allowed.
-    - Certain path prefixes are exempt (auth, webhooks, admin panel).
+    Middleware that authenticates /api/* requests and blocks writes by read-only users.
+
+    - Every /api/* request, read or write, must carry a valid session. Reads are
+      NOT exempt: they used to be, which left GET handlers taking the caller's
+      identity from the client-supplied X-GitHub-User header (or a github_user
+      query param) with nothing to check it against.
+    - OPTIONS is allowed through because CORS preflight carries no credentials.
+    - Certain path prefixes are exempt (auth, webhooks, admin panel), as are the
+      two deliberately-anonymous reads in _ANON_READ_PATHS.
     - If no workspace members exist yet (fresh install), enforcement is skipped
       so existing behavior is preserved until the first user logs in via OAuth.
-    - For /api/* write requests, resolves the caller from the app session token.
-    - If the caller is a read_only workspace member, the request is rejected with 403.
+    - If the caller is a read_only workspace member, writes are rejected with 403.
     - Missing/invalid sessions or unknown users/non-members return 401.
+    - On success the caller's X-GitHub-User header is replaced with the
+      session-resolved user, so downstream handlers can trust it as identity.
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Allow safe methods unconditionally
-        if request.method in _SAFE_METHODS:
+        if request.method in _UNAUTHENTICATABLE_METHODS:
             return await call_next(request)
 
         path = request.url.path
@@ -109,6 +126,9 @@ class WriteProtectionMiddleware(BaseHTTPMiddleware):
 
         # Only enforce on /api/* paths
         if not path.startswith("/api/"):
+            return await call_next(request)
+
+        if path in _ANON_READ_PATHS:
             return await call_next(request)
 
         # Look up workspace members to decide if enforcement is active
@@ -144,7 +164,7 @@ class WriteProtectionMiddleware(BaseHTTPMiddleware):
                     content={"detail": "Unknown workspace member"},
                 )
 
-            if member.workspace_role == "read_only":
+            if member.workspace_role == "read_only" and request.method not in _SAFE_METHODS:
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Read-only users cannot perform write operations"},

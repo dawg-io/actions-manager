@@ -52,6 +52,15 @@ INSTALLATION_MODE = get_installation_mode()
 LICENSE_KEY = os.getenv("LICENSE_KEY", "").strip()
 
 
+# requests has no default timeout, so a hung GitHub socket blocks the worker
+# thread until the process restarts rather than failing the request. Defined
+# here rather than in workflows.py because auth.py and github_api_tracker.py
+# both need it and workflows.py imports both of them - this module imports
+# nothing of ours, so everything can reach it. workflows.py re-exports it for
+# the callers that already import it from there.
+GITHUB_TIMEOUT_SECONDS = int(os.getenv("GITHUB_TIMEOUT_SECONDS", "30"))
+
+
 def get_cors_allowed_origins() -> list[str]:
     """
     Resolve the list of allowed CORS origins.

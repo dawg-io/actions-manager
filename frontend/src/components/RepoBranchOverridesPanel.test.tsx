@@ -91,6 +91,76 @@ describe('RepoBranchOverridesPanel', () => {
     );
   });
 
+  describe('refetching after a save', () => {
+    test('a newly saved repo appears without a page refresh', async () => {
+      // The reported bug: ticking a repo changes selectedRepos and triggers a
+      // refetch *before* the project is saved, so the server has no row for it
+      // yet. Nothing refetched afterwards, so the row stayed missing until the
+      // user reloaded the page. The parent bumps refreshSignal once the save
+      // lands, which is the only moment the server can answer correctly.
+      const newRepo = {
+        ...repoInherit,
+        repo_id: 3,
+        repo_name: 'whatsupdawg/test3',
+      };
+      mockFetch.mockResolvedValueOnce({ ...baseResponse });
+
+      const props = {
+        user: 'alice',
+        projectId: 42,
+        onRemoveRepo: mockOnRemoveRepo,
+        branchOption: 'default' as const,
+        regexPattern: '',
+        branchMaxAgeDays: 30,
+      };
+      const selected = [
+        'whatsupdawg/test1',
+        'whatsupdawg/test2',
+        'whatsupdawg/test3',
+      ];
+
+      // Repo already ticked, and the pre-save fetch came back without it.
+      const { rerender } = render(
+        <RepoBranchOverridesPanel {...props} selectedRepos={selected} refreshSignal={0} />
+      );
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText('whatsupdawg/test3')).not.toBeInTheDocument();
+
+      // The save lands: the server now knows the repo, and the parent says so.
+      mockFetch.mockResolvedValue({
+        ...baseResponse,
+        repos: [repoInherit, repoOverride, newRepo],
+      });
+      rerender(
+        <RepoBranchOverridesPanel {...props} selectedRepos={selected} refreshSignal={1} />
+      );
+
+      expect(await screen.findByText('whatsupdawg/test3')).toBeInTheDocument();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    test('an unchanged signal does not refetch on every render', async () => {
+      const props = {
+        user: 'alice',
+        projectId: 42,
+        selectedRepos: ['whatsupdawg/test1'],
+        onRemoveRepo: mockOnRemoveRepo,
+        branchOption: 'default' as const,
+        regexPattern: '',
+        branchMaxAgeDays: 30,
+      };
+      const { rerender } = render(
+        <RepoBranchOverridesPanel {...props} refreshSignal={2} />
+      );
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+
+      rerender(<RepoBranchOverridesPanel {...props} refreshSignal={2} />);
+      rerender(<RepoBranchOverridesPanel {...props} refreshSignal={2} />);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test('clicking Configure opens inline editor and disables override fields when inheriting', async () => {
     render(
       <RepoBranchOverridesPanel

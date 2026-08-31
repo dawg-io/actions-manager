@@ -58,7 +58,7 @@ def _now():
 
 
 @pytest.fixture()
-def state():
+def state(authenticate_client):
     prev = app.dependency_overrides.get(real_get_db)
     app.dependency_overrides[real_get_db] = _override_get_db
     Base.metadata.create_all(bind=engine)
@@ -77,6 +77,7 @@ def state():
         db.add(wf); db.commit(); db.refresh(wf)
         db.add(ProjectWorkflow(project_id=project.project_id, workflow_id=wf.workflow_id)); db.commit()
         user_tokens["alice"] = "tok"
+        authenticate_client(client, "alice", TestingSessionLocal)
         yield {"db": db, "account": user, "project": project, "repo": repo, "workflow": wf,
                "project_id": project.project_id}
     finally:
@@ -682,8 +683,19 @@ class TestSyncRobustness:
 
 class TestAuthorization:
     def test_unauthenticated_caller_is_rejected(self, state):
+        """No session at all — the github_user param alone proves nothing."""
+        saved = client.headers.pop("Authorization", None)
+        try:
+            resp = _get(state["project_id"])
+            assert resp.status_code == 401
+        finally:
+            if saved is not None:
+                client.headers["Authorization"] = saved
+
+    def test_caller_cannot_claim_another_user(self, state):
+        """Authenticated as alice, asking as mallory: 403, not another user's data."""
         resp = _get(state["project_id"], github_user="mallory")
-        assert resp.status_code == 401
+        assert resp.status_code == 403
 
     def test_unknown_project_is_404(self, state):
         assert _get(999999).status_code == 404

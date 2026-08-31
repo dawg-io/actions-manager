@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from action_versions import ACTION_VERSIONS
+from config import GITHUB_TIMEOUT_SECONDS
 
 
 @dataclass
@@ -122,7 +123,7 @@ class BuildTypeDetector:
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
         
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=GITHUB_TIMEOUT_SECONDS)
             if response.status_code == 200:
                 return response.json()
             return None

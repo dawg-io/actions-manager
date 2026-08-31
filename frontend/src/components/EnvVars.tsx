@@ -261,7 +261,6 @@ const EnvVars: React.FC<EnvVarsProps> = ({
     // are React state setters and the helper closures only read state through
     // the explicitly-listed values. Adding them would not change behaviour but
     // would re-create the callback on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     user,
     projectName,

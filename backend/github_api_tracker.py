@@ -9,6 +9,7 @@ It also enforces rate limits based on account type.
 
 import requests
 from sqlalchemy.orm import Session
+from config import GITHUB_TIMEOUT_SECONDS
 from models import Account
 from datetime import datetime, timezone, timedelta
 import logging
@@ -102,8 +103,16 @@ def github_request(method: str, url: str, username: str, db: Session, **kwargs):
         # Track the API call
         track_github_api_call(username, db)
     
-    # Make the actual request
-    return requests.request(method, url, **kwargs)
+    # Every github_get/post/put/patch caller funnels through here, so the
+    # default belongs at this one point rather than at each call site. Passed
+    # explicitly rather than via kwargs.setdefault so the timeout is visible in
+    # the call itself; a caller that needs longer still wins.
+    return requests.request(
+        method,
+        url,
+        timeout=kwargs.pop("timeout", GITHUB_TIMEOUT_SECONDS),
+        **kwargs,
+    )
 
 
 def github_get(url: str, username: str, db: Session, **kwargs):

@@ -1,17 +1,17 @@
 import { copyToClipboard } from './copyUtils';
 
-// Mock the clipboard API
 Object.assign(navigator, {
   clipboard: {
     writeText: vi.fn(() => Promise.resolve()),
   },
 });
 
-// Mock window.isSecureContext for testing
 Object.defineProperty(window, 'isSecureContext', {
   writable: true,
-  value: true
+  value: true,
 });
+
+const writeText = () => vi.mocked(navigator.clipboard.writeText);
 
 describe('copyUtils', () => {
   beforeEach(() => {
@@ -21,8 +21,8 @@ describe('copyUtils', () => {
   describe('copyToClipboard', () => {
     test('should call clipboard API with text', async () => {
       const text = 'test text';
-      
-      navigator.clipboard.writeText.mockResolvedValueOnce();
+
+      writeText().mockResolvedValueOnce();
 
       await copyToClipboard(text);
 
@@ -32,8 +32,8 @@ describe('copyUtils', () => {
     test('should call onSuccess callback when successful', async () => {
       const onSuccess = vi.fn();
       const text = 'test text';
-      
-      navigator.clipboard.writeText.mockResolvedValueOnce();
+
+      writeText().mockResolvedValueOnce();
 
       await copyToClipboard(text, onSuccess);
 
@@ -44,13 +44,13 @@ describe('copyUtils', () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const onError = vi.fn();
       const text = 'test text';
-      
-      navigator.clipboard.writeText.mockRejectedValueOnce(new Error('Clipboard error'));
 
-      await copyToClipboard(text, null, onError);
+      writeText().mockRejectedValueOnce(new Error('Clipboard error'));
+
+      await copyToClipboard(text, undefined, onError);
 
       expect(onError).toHaveBeenCalledWith(expect.any(Error));
-      
+
       consoleSpy.mockRestore();
     });
   });

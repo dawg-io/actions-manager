@@ -24,6 +24,20 @@ search:
 footer_content: "&copy; 2026 ActionsManager. All rights reserved."
 
 # GitHub integration
+#
+# This site is actionsmanager.io: pages.yml builds it from THIS repository's
+# develop, dispatched during a release, so what ships here is this file
+# verbatim - the promotion's dawg-io -> dawg-io rewrite never runs over it,
+# because the public repo is not what serves the site.
+#
+# So the edit link has to name the public repo explicitly. Pointed at the
+# private one it 404s for every visitor who is not a collaborator, which is
+# everybody the docs are written for. The branch was wrong in both directions
+# too: this repository's default branch is develop, not main, so the old link
+# was broken even for us.
+#
+# dawg-io/actions-manager@main is where a public reader can actually open a
+# pull request against these pages, and docs/ survives the export.
 gh_edit_link: true
 gh_edit_link_text: "Edit this page on GitHub"
 gh_edit_repository: "https://github.com/dawg-io/actions-manager"

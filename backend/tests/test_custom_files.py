@@ -100,6 +100,20 @@ class TestPathValidation:
         assert validate_file_path("../../etc/passwd") is not None
         assert validate_file_path(".github/../../../secret") is not None
 
+    def test_percent_encoded_traversal_rejected(self):
+        """GitHub decodes the path server-side, so "%2e%2e" is "..".
+
+        These passed the literal ".." check and reached the contents API as a
+        traversal, escaping the /contents/ endpoint.
+        """
+        assert validate_file_path("%2e%2e/%2e%2e/etc/passwd") is not None
+        assert validate_file_path(".github/%2e%2e/%2e%2e/secret") is not None
+        assert validate_file_path("%252e%252e/secret") is not None
+
+    def test_url_control_characters_rejected(self):
+        """A raw "%" cannot appear in a path that is interpolated into a URL."""
+        assert validate_file_path("a%20b.txt") is not None
+
     def test_dotenv_rejected(self):
         assert validate_file_path(".env") is not None
         assert validate_file_path(".env.production") is not None

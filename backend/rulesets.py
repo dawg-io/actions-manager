@@ -10,7 +10,7 @@ Handles GitHub repository ruleset management including:
 
 import json
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ import httpx
 from database import get_db
 from models import Ruleset, Project, ProjectRuleset, Account
 import os
+import auth as auth_module
 from auth import user_tokens
 
 
@@ -186,10 +187,12 @@ async def create_ruleset(
 async def get_project_rulesets(
     project_name: str,
     github_user: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)]
 ):
     """Get all rulesets for a specific project"""
     
+    auth_module.assert_session_owns_user(github_user, request, db)
     try:
         # Get user account
         user_account = db.query(Account).filter(Account.github_user == github_user).first()

@@ -187,7 +187,6 @@ const CodeownersManager: React.FC<CodeownersManagerProps> = ({
     if (refreshCounter && activeRepo) {
       loadCodeowners(activeRepo);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshCounter]);
 
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

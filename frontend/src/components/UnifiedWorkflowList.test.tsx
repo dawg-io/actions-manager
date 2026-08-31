@@ -85,26 +85,33 @@ beforeEach(() => {
 
 describe('UnifiedWorkflowList', () => {
   describe('Compact rows', () => {
-    it('renders a single-line row with the bare filename and a status dot', () => {
+    it('renders a single-line row with the filename and a status dot', () => {
       render(<UnifiedWorkflowList {...baseProps} unifiedWorkflows={[regularWorkflow]} />);
 
-      const row = screen.getByRole('button', { name: 'my-workflow.yml, No status' });
+      const row = screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, No status' });
       expect(within(row).getByText('my-workflow.yml')).toBeInTheDocument();
       expect(row.querySelector('.pf-row-dot')).toHaveClass('status-none');
     });
 
-    it('keeps the prefixed on-GitHub filename in the row tooltip instead of showing it inline', () => {
+    it('shows the project prefix inline ahead of the workflow stem', () => {
       render(<UnifiedWorkflowList {...baseProps} usePrefix unifiedWorkflows={[regularWorkflow]} />);
 
-      // The prefix is detail — it belongs in the editor header, not the navigator.
-      expect(screen.queryByText('AM_PROJ_')).not.toBeInTheDocument();
+      // The row has to read as the file that actually lands on GitHub. Showing
+      // only the bare stem promised a filename the delivery never produces.
+      const row = screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, No status' });
+      expect(within(row).getByText('AM_PROJ_')).toHaveClass('pf-row-prefix');
+      expect(within(row).getByText('my-workflow.yml')).toHaveClass('pf-row-name');
       expect(screen.getByTitle('AM_PROJ_my-workflow.yml · No status')).toBeInTheDocument();
     });
 
-    it('omits the prefix from the tooltip in no-prefix mode', () => {
-      render(<UnifiedWorkflowList {...baseProps} usePrefix={false} unifiedWorkflows={[regularWorkflow]} />);
+    it('omits the prefix entirely in no-prefix mode', () => {
+      const { container } = render(
+        <UnifiedWorkflowList {...baseProps} usePrefix={false} unifiedWorkflows={[regularWorkflow]} />
+      );
 
       expect(screen.getByTitle('my-workflow.yml · No status')).toBeInTheDocument();
+      expect(container.querySelector('.pf-row')).toHaveAccessibleName('my-workflow.yml, No status');
+      expect(container.querySelector('.pf-row-prefix')).not.toBeInTheDocument();
     });
 
     it('never applies the consumer prefix to linked workflows', () => {
@@ -115,10 +122,13 @@ describe('UnifiedWorkflowList', () => {
         rwxProjectName: 'My RWX Project',
       };
 
-      render(<UnifiedWorkflowList {...baseProps} usePrefix unifiedWorkflows={[linkedPrefixed]} />);
+      const { container } = render(
+        <UnifiedWorkflowList {...baseProps} usePrefix unifiedWorkflows={[linkedPrefixed]} />
+      );
 
       expect(screen.getByText('AM_RWW1_testrwx.yml')).toBeInTheDocument();
       expect(screen.queryByTitle(/AM_PROJ_/)).not.toBeInTheDocument();
+      expect(container.querySelector('.pf-row-prefix')).not.toBeInTheDocument();
     });
 
     it('surfaces linked source details in the tooltip', () => {
@@ -146,7 +156,7 @@ describe('UnifiedWorkflowList', () => {
         />
       );
 
-      const row = screen.getByRole('button', { name: 'my-workflow.yml, Unsaved changes' });
+      const row = screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, Unsaved changes' });
       expect(row.querySelector('.pf-row-modified')).toBeInTheDocument();
       expect(row.querySelector('.pf-row-dot')).toHaveClass('status-unsaved');
     });
@@ -165,7 +175,7 @@ describe('UnifiedWorkflowList', () => {
         />
       );
 
-      await user.click(screen.getByRole('button', { name: 'my-workflow.yml, No status' }));
+      await user.click(screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, No status' }));
       expect(handleSelectWorkflow).toHaveBeenCalledWith('regular-0');
     });
 
@@ -178,12 +188,12 @@ describe('UnifiedWorkflowList', () => {
         />
       );
 
-      expect(screen.getByRole('button', { name: 'my-workflow.yml, No status' })).toHaveAttribute(
+      expect(screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, No status' })).toHaveAttribute(
         'aria-current',
         'page'
       );
       expect(
-        screen.getByRole('button', { name: 'my-reusable.yml, No status' })
+        screen.getByRole('button', { name: 'AM_PROJ_my-reusable.yml, No status' })
       ).not.toHaveAttribute('aria-current');
     });
 
@@ -259,7 +269,7 @@ describe('UnifiedWorkflowList', () => {
 
       // aria-label replaces content, so the aria-hidden ⚠️ glyph would otherwise vanish.
       expect(
-        screen.getByRole('button', { name: 'my-workflow.yml, Synced, Drift detected' })
+        screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, Synced, Drift detected' })
       ).toBeInTheDocument();
     });
 
@@ -274,7 +284,7 @@ describe('UnifiedWorkflowList', () => {
       );
 
       expect(
-        screen.getByRole('button', { name: 'my-workflow.yml, Synced, Unsaved changes' })
+        screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, Synced, Unsaved changes' })
       ).toBeInTheDocument();
       // A draft with no lifecycle status reports it once, via the status itself.
       expect(
@@ -378,13 +388,13 @@ describe('UnifiedWorkflowList', () => {
 
       expect(toggle).toHaveAttribute('aria-expanded', 'false');
       expect(
-        screen.queryByRole('button', { name: 'my-workflow.yml, No status' })
+        screen.queryByRole('button', { name: 'AM_PROJ_my-workflow.yml, No status' })
       ).not.toBeInTheDocument();
 
       await user.click(toggle);
 
       expect(toggle).toHaveAttribute('aria-expanded', 'true');
-      expect(screen.getByRole('button', { name: 'my-workflow.yml, No status' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'AM_PROJ_my-workflow.yml, No status' })).toBeInTheDocument();
     });
 
     it('collapses sections independently', async () => {

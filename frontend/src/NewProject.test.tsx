@@ -505,6 +505,53 @@ describe('NewProject', () => {
     });
   });
 
+  describe('Wizard entry point', () => {
+    it('offers a working Cancel on the first step, which leaves the wizard', async () => {
+      render(<NewProject user="testuser" />);
+
+      // Step 1 has nothing to step back to, and leaving discards the draft, so
+      // the control says what it does rather than being a dead "Back".
+      expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      expect(cancel).toBeEnabled();
+
+      await user.click(cancel);
+
+      expect(mockNavigate).toHaveBeenCalledWith('/project/testuser');
+    });
+
+    it('calls the page a guided setup only while the tour is running', () => {
+      render(<NewProject user="testuser" />);
+
+      expect(screen.getByText('New project')).toBeInTheDocument();
+      expect(screen.queryByText('Guided setup')).not.toBeInTheDocument();
+    });
+
+    it('calls the page a guided setup while the tour is running', () => {
+      render(<NewProject user="testuser" tourStep="project-basics" />);
+
+      expect(screen.getByText('Guided setup')).toBeInTheDocument();
+    });
+
+    it('does not pre-fill the tour demo project when no tour is running', async () => {
+      render(<NewProject user="testuser" />);
+
+      await waitFor(() => expect(getUserDetails).toHaveBeenCalled());
+      // On a non-self-hosted account the tour's seeding hook is the only thing
+      // on this screen that lists projects, so no call means it never ran.
+      expect(fetchProjects).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('Project Name:')).toHaveValue('');
+    });
+
+    it('pre-fills the demo project name while the tour is running', async () => {
+      render(<NewProject user="testuser" tourStep="project-basics" />);
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Project Name:')).toHaveValue('Demo-Project'),
+      );
+    });
+  });
+
   describe('RWX Project Type Auto-Discovery', () => {
     beforeEach(() => {
       // Mock fetchRwxRepos to return empty array by default

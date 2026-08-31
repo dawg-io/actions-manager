@@ -49,9 +49,9 @@ Requirements:
 Good when you want a stable hostname on a domain you already control, and no inbound firewall
 rules. `cloudflared` makes an outbound connection to Cloudflare, so nothing needs to be forwarded.
 
-For a full production walkthrough (Kubernetes, credentials as Secrets, config as a ConfigMap), see
-[Staging Cloud Deployment via Cloudflare Tunnel](STAGING_TUNNEL.md). The short
-version for a Docker or bare-metal install:
+To put the whole app behind the tunnel rather than just this one path, see
+[Public HTTPS for a Self-Hosted Install via Cloudflare Tunnel](STAGING_TUNNEL.md).
+The short version for exposing only the webhook endpoint:
 
 ```bash
 # One-time: authenticate and create a named tunnel
@@ -236,6 +236,6 @@ Common failures:
 
 ## Related topics
 
-- [Staging Cloud Deployment via Cloudflare Tunnel](STAGING_TUNNEL.md)
+- [Public HTTPS for a Self-Hosted Install via Cloudflare Tunnel](STAGING_TUNNEL.md)
 - [Environment Variables](../ENVIRONMENT_VARIABLES.md)
 - [Self-Hosted Installation](../SELF_HOSTED_INSTALL.md)

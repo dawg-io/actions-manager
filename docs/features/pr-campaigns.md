@@ -46,6 +46,10 @@ PR campaigns are the recommended delivery method for rolling out workflow change
 
 ActionsManager creates a pull request in each repository using the configured GitHub token. All PRs share the same title, description, and branch name for consistency.
 
+A campaign does not have to cover the whole project. Adding a repository to a project offers a
+campaign [scoped to just that repository]({% link features/projects.md %}#adding-a-repository-to-a-project-that-already-has-workflows),
+so the repositories already in sync are left alone.
+
 ## Campaign Dashboard
 
 ![PR campaign dashboard showing campaign stats, status, and per-repository pull requests](../assets/screenshots/pr-campaigns/pr-campaign.png)

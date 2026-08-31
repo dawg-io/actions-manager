@@ -20,12 +20,15 @@ import yaml
 WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 
 # Runner labels we own. Anything containing "self-hosted" is ours by definition.
-SELF_HOSTED_LABELS = {"pmox-runner", "claude-runner"}
+# pi-runner is the Raspberry Pi that builds the native arm64 image; it used to
+# be selected as [self-hosted, Linux, ARM64], which matched the substring rule
+# below, so naming it directly needs it spelled out here.
+SELF_HOSTED_LABELS = {"pmox-runner", "claude-runner", "deployment-host", "pi-runner"}
 
 # (workflow filename, job id) -> why this one is allowed to bill.
 EXEMPT = {
     (
-        "self-hosted-image.yml",
+        "docker-images.yml",
         "build-fork-validation",
     ): (
         "Fork PRs must never execute untrusted code on our persistent "

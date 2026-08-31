@@ -1,4 +1,4 @@
-/* eslint-disable no-restricted-syntax, no-restricted-imports -- Legacy: TODO migrate inline styles and CSS imports to Tailwind CSS classes */
+/* eslint-disable no-restricted-imports -- Legacy: TODO migrate CSS imports to Tailwind CSS classes */
 import React, { useState, useEffect } from 'react';
 import {
   GitPullRequest,
@@ -39,6 +39,10 @@ interface NavSection {
 
 interface SidebarProps {
   activeSection?: string;
+  /** Number of repositories still waiting for the project's workflows. Shown as
+   * a count beside Repositories & Branches so the reminder is reachable from
+   * any section. 0 hides it. */
+  pendingDeliveryCount?: number;
   onSectionChange?: (section: string) => void;
   projectName?: string;
   onProjectNameSave?: (newValue: string) => void;
@@ -85,6 +89,7 @@ const allProjectConfigKeys = [
 
 const Sidebar: React.FC<SidebarProps> = ({ 
   activeSection, 
+  pendingDeliveryCount = 0,
   onSectionChange, 
   projectName,
   projectCode,
@@ -246,16 +251,35 @@ const Sidebar: React.FC<SidebarProps> = ({
           {/* Repository Configs – flat first-class items (no parent grouping) */}
           {repoConfigSections.map(section => {
             const Icon = section.Icon;
+            // Only Repositories & Branches carries the count: one badge for one
+            // piece of state. Repeating it on a second item would read as two
+            // separate things needing attention.
+            const pendingCount =
+              section.key === 'repos-and-branches' ? pendingDeliveryCount : 0;
+            const pendingNoun = pendingCount === 1 ? 'repository' : 'repositories';
+            const pendingLabel =
+              pendingCount > 0
+                ? `${section.label} — ${pendingCount} ${pendingNoun} not delivered yet`
+                : section.label;
             return (
               <button
                 key={section.key}
                 className={`sidebar-item ${activeSection === section.key ? 'active' : ''}`}
-                aria-label={section.label}
+                aria-label={pendingLabel}
                 onClick={() => handleSectionChange(section.key)}
-                title={isCollapsed ? section.label : ''}
+                title={isCollapsed ? pendingLabel : ''}
               >
                 <span className="sidebar-icon" aria-hidden="true"><Icon size={18} strokeWidth={1.75} /></span>
                 {!isCollapsed && <span className="sidebar-label">{section.label}</span>}
+                {pendingCount > 0 && (
+                  <span
+                    className="ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 text-[11px] font-semibold text-sky-700 dark:text-sky-300"
+                    data-testid="sidebar-pending-delivery-count"
+                    aria-hidden="true"
+                  >
+                    {pendingCount}
+                  </span>
+                )}
               </button>
             );
           })}

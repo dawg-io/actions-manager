@@ -53,7 +53,7 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def db_state():
+def db_state(authenticate_client):
     """Fresh schema + sample project per test.
 
     Saves and restores any pre-existing ``workflows.get_db`` dependency
@@ -93,6 +93,7 @@ def db_state():
 
         # Provide auth token used by the endpoints
         user_tokens["alice"] = "test-token"
+        authenticate_client(client, "alice", TestingSessionLocal)
 
         yield {
             "user_id": user.user_id,

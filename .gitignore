@@ -8,6 +8,7 @@ __pycache__/
 
 # Virtual environments
 venv/
+.venv/
 env/
 .env/
 
@@ -39,6 +40,9 @@ docs/vendor/
 .env.self-hosted
 backend/.env
 *secret*.key
+
+# Local Compose override (copied from deployment/docker/docker-compose.cloud.override.example.yml)
+docker-compose.override.yml
 
 # IDE files
 .vscode/
@@ -104,3 +108,7 @@ failure.log
 
 # Claude Code agent worktrees (scratch clones, never part of the repo)
 .claude/worktrees/
+
+# Frontend dev-deployment env: real hostnames, kept out of the tree
+# (copy from frontend/.env.dev.example)
+frontend/.env.dev

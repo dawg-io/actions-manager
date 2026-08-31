@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
-import OnboardingTour, { TOUR_STEPS, resolveActiveStep } from './OnboardingTour';
+import OnboardingTour, { TOUR_STEPS, resolveActiveStep, runningTourStep } from './OnboardingTour';
 import { tour, TourSignals } from '../utils/tour';
 import type { OnboardingState, UserDetails } from '../api/user';
 
@@ -80,6 +80,28 @@ describe('resolveActiveStep', () => {
     expect(
       resolveActiveStep({ completed: false, completed_at: null, step: 'not-a-real-step' }),
     ).toBe(-1);
+  });
+});
+
+describe('runningTourStep', () => {
+  test('reports the step while the tour is running', () => {
+    expect(
+      runningTourStep({ completed: false, completed_at: null, step: 'project-basics' }),
+    ).toBe('project-basics');
+  });
+
+  test('reports no step once onboarding is complete, even with a step still recorded', () => {
+    // The backend keeps onboarding_step as a resume point and clears it only on
+    // restart. Reading it raw left the Create Project wizard pre-filling the
+    // tour's demo values on every visit, long after the tour had finished.
+    expect(
+      runningTourStep({ completed: true, completed_at: '2026-08-16T00:00:00Z', step: 'project-basics' }),
+    ).toBeNull();
+  });
+
+  test('reports no step when onboarding state is absent or unstarted', () => {
+    expect(runningTourStep(undefined)).toBeNull();
+    expect(runningTourStep({ completed: false, completed_at: null, step: null })).toBeNull();
   });
 });
 

@@ -6,16 +6,18 @@ Provides endpoints for enhanced project deletion functionality including:
 - Deleting GitHub resources (workflows, secrets, environment variables)
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Annotated, List, Dict, Any, Optional, Set
 import requests
 from pydantic import BaseModel
 
 from database import get_db
+import auth as auth_module
 from auth import user_tokens
 from models import Project, Account, Repo, Workflow, ProjectRepo, ProjectWorkflow, ProjectSecret, ProjectEnvVar, ProjectDisplayOrder
-from workflows import cleanup_orphaned_workflows
+from workflows import GITHUB_TIMEOUT_SECONDS, cleanup_orphaned_workflows
 
 router = APIRouter()
 
@@ -66,7 +68,7 @@ def _fetch_repository_secrets(repo_name: str, headers: Dict[str, str], project_p
     secrets_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/secrets"
     
     try:
-        response = requests.get(secrets_url, headers=headers)
+        response = requests.get(secrets_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         print(f"🔍 Debug: Repository secrets API response: {response.status_code}")
         
         if response.status_code == 200:
@@ -109,7 +111,7 @@ def _fetch_repository_variables(repo_name: str, headers: Dict[str, str], project
     variables_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/variables"
     
     try:
-        response = requests.get(variables_url, headers=headers)
+        response = requests.get(variables_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         print(f"🔍 Debug: Repository variables API response: {response.status_code}")
         
         if response.status_code == 200:
@@ -154,7 +156,7 @@ def _fetch_environment_secrets(repo_name: str, env_name: str, headers: Dict[str,
     env_secrets_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env_name}/secrets"
     
     try:
-        response = requests.get(env_secrets_url, headers=headers)
+        response = requests.get(env_secrets_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if response.status_code == 200:
             env_secrets_data = response.json()
@@ -190,7 +192,7 @@ def _fetch_environment_variables(repo_name: str, env_name: str, headers: Dict[st
     env_vars_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env_name}/variables"
     
     try:
-        response = requests.get(env_vars_url, headers=headers)
+        response = requests.get(env_vars_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if response.status_code == 200:
             env_vars_data = response.json()
@@ -230,7 +232,7 @@ def _fetch_deployment_environments(repo_name: str, headers: Dict[str, str]) -> t
     environments_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments"
     
     try:
-        response = requests.get(environments_url, headers=headers)
+        response = requests.get(environments_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         print(f"🔍 Debug: Environments API response: {response.status_code}")
         
         if response.status_code == 200:
@@ -274,7 +276,7 @@ def _validate_repository_access(repo_name: str, headers: Dict[str, str]) -> bool
     repo_url = f"{GITHUB_API_URL}/repos/{repo_name}"
     
     try:
-        response = requests.get(repo_url, headers=headers)
+        response = requests.get(repo_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         print(f"🔍 Debug: Repository '{repo_name}' accessibility: {response.status_code}")
         
         if response.status_code != 200:
@@ -394,7 +396,7 @@ def _delete_workflow_file(
     On failure the error message is appended to deletion_results['errors'].
     """
     file_url = f"{GITHUB_API_URL}/repos/{repo_name}/contents/{workflow_path}"
-    file_response = requests.get(file_url, headers=headers)
+    file_response = requests.get(file_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
     if file_response.status_code != 200:
         error_msg = f"Failed to get workflow file data for {filename} from {repo_name}: HTTP {file_response.status_code}"
         deletion_results["errors"].append(error_msg)
@@ -414,6 +416,7 @@ def _delete_workflow_file(
             "message": f"Delete workflow {filename} (ActionsManager project deletion)",
             "sha": sha,
         },
+        timeout=GITHUB_TIMEOUT_SECONDS,
     )
     if delete_response.status_code == 200:
         deletion_results["github_resources_deleted"].append(f"Workflow: {filename} from {repo_name}")
@@ -429,7 +432,7 @@ def _delete_project_workflows(repo_name: str, headers: Dict[str, str], project_p
     """Delete GitHub workflows that match the project prefix or are tracked in database."""
     workflows_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/workflows"
     try:
-        workflows_response = requests.get(workflows_url, headers=headers)
+        workflows_response = requests.get(workflows_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         if workflows_response.status_code != 200:
             return
         workflows_data = workflows_response.json()
@@ -466,7 +469,7 @@ def _delete_repository_secrets(repo_name: str, headers: Dict[str, str], project_
     secrets_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/secrets"
     
     try:
-        secrets_response = requests.get(secrets_url, headers=headers)
+        secrets_response = requests.get(secrets_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if secrets_response.status_code == 200:
             secrets_data = secrets_response.json()
@@ -476,7 +479,7 @@ def _delete_repository_secrets(repo_name: str, headers: Dict[str, str], project_
                 if not _belongs_to_project(secret["name"], tracked_names, project_prefix):
                     continue
                 delete_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/secrets/{secret['name']}"
-                delete_response = requests.delete(delete_secret_url, headers=headers)
+                delete_response = requests.delete(delete_secret_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
                 if delete_response.status_code == 204:
                     deletion_results["github_resources_deleted"].append(f"Repository Secret: {secret['name']} from {repo_name}")
@@ -493,7 +496,7 @@ def _delete_repository_variables(repo_name: str, headers: Dict[str, str], projec
     variables_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/variables"
     
     try:
-        variables_response = requests.get(variables_url, headers=headers)
+        variables_response = requests.get(variables_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if variables_response.status_code == 200:
             variables_data = variables_response.json()
@@ -503,7 +506,7 @@ def _delete_repository_variables(repo_name: str, headers: Dict[str, str], projec
                 if not _belongs_to_project(variable["name"], tracked_names, project_prefix):
                     continue
                 delete_variable_url = f"{GITHUB_API_URL}/repos/{repo_name}/actions/variables/{variable['name']}"
-                delete_response = requests.delete(delete_variable_url, headers=headers)
+                delete_response = requests.delete(delete_variable_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
                 if delete_response.status_code == 204:
                     deletion_results["github_resources_deleted"].append(f"Repository Variable: {variable['name']} from {repo_name}")
@@ -520,13 +523,13 @@ def _delete_deployment_environments(repo_name: str, headers: Dict[str, str], del
     environments_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments"
     
     try:
-        env_response = requests.get(environments_url, headers=headers)
+        env_response = requests.get(environments_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if env_response.status_code == 200:
             environments_data = env_response.json()
             for env in environments_data.get("environments", []):
                 delete_env_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env['name']}"
-                delete_response = requests.delete(delete_env_url, headers=headers)
+                delete_response = requests.delete(delete_env_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
                 
                 if delete_response.status_code == 204:
                     deletion_results["github_resources_deleted"].append(f"Deployment Environment: {env['name']} from {repo_name}")
@@ -543,7 +546,7 @@ def _delete_environment_secrets(repo_name: str, headers: Dict[str, str], project
     environments_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments"
     
     try:
-        env_response = requests.get(environments_url, headers=headers)
+        env_response = requests.get(environments_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
         
         if env_response.status_code == 200:
             environments_data = env_response.json()
@@ -551,7 +554,7 @@ def _delete_environment_secrets(repo_name: str, headers: Dict[str, str], project
 
             for env in environments_data.get("environments", []):
                 env_secrets_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env['name']}/secrets"
-                env_secrets_response = requests.get(env_secrets_url, headers=headers)
+                env_secrets_response = requests.get(env_secrets_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
                 if env_secrets_response.status_code != 200:
                     continue
@@ -561,7 +564,7 @@ def _delete_environment_secrets(repo_name: str, headers: Dict[str, str], project
                     if not _belongs_to_project(secret["name"], tracked_names, project_prefix):
                         continue
                     delete_env_secret_url = f"{GITHUB_API_URL}/repos/{repo_name}/environments/{env['name']}/secrets/{secret['name']}"
-                    delete_response = requests.delete(delete_env_secret_url, headers=headers)
+                    delete_response = requests.delete(delete_env_secret_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
 
                     if delete_response.status_code == 204:
                         deletion_results["github_resources_deleted"].append(f"Environment Secret: {secret['name']} from {repo_name}/{env['name']}")
@@ -647,7 +650,7 @@ def _get_project_and_user(project_name: str, github_user: str, db: Session) -> t
         raise HTTPException(status_code=404, detail="GitHub user not found")
 
     project = db.query(Project).filter(
-        Project.project_name.ilike(project_name.strip()),
+        func.lower(Project.project_name) == project_name.strip().lower(),
         Project.user_id == user.user_id
     ).first()
 
@@ -743,6 +746,7 @@ def _collect_github_resources_for_deletion_summary(
 @router.get("/projects/{project_name}/deletion-summary")
 async def get_project_deletion_summary(
     project_name: str,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     github_user: Annotated[str, Query(description="GitHub username is required")],
 ):
@@ -750,6 +754,7 @@ async def get_project_deletion_summary(
     Get a summary of all resources that would be affected when deleting a project.
     This includes database records and GitHub resources.
     """
+    auth_module.assert_session_owns_user(github_user, request, db)
     try:
         # Get user and project from database
         user, project = _get_project_and_user(project_name, github_user, db)

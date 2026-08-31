@@ -258,6 +258,23 @@ apply:
 Until you choose one, the workflow keeps being reported as drifted — ActionsManager still manages a
 file that no longer exists in the repository.
 
+**Deleted means a file that was really there is gone.** ActionsManager only reports a workflow as
+deleted from a repository and branch where a drift check has actually seen the file. A workflow
+whose pull request is still open has never been on the target branch, so its absence there is
+pending merge — opening a campaign does not put the project into drift. The same holds for a
+repository or branch newly added to an existing project: nothing has been delivered there yet, so
+nothing can have been deleted. This is judged per (workflow, repository, branch) from that
+workflow's own delivery history, so an unrelated file that once had the same name in the repository
+has no bearing on it.
+
+Because a newly added repository is silent in the drift list, ActionsManager says so elsewhere
+instead: saving a repository into a project prompts you to
+[deliver the project's workflows to it]({% link features/projects.md %}#adding-a-repository-to-a-project-that-already-has-workflows)
+or keep the change local, and if you keep it local a
+[standing reminder]({% link features/projects.md %}#keeping-track-of-whats-still-waiting) tracks what
+is still waiting. "Not drifted" here means "nothing has been delivered yet", not "in sync" — the two
+readings look identical in the drift list, which is exactly why the reminder lives outside it.
+
 ### When a check can't complete
 
 If GitHub can't be queried — an expired or revoked token, a rate limit, or a GitHub outage —

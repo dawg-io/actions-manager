@@ -16,7 +16,7 @@ import FirstBootRestore from "./components/FirstBootRestore";
 import { ThemeProvider } from "./components/ThemeContext";
 import { checkGitHubPermissions, getUserDetails, loginWithGitHubToken, logout, updateOnboardingState, OnboardingState, PermissionValidationResult, UserDetails } from "./api/user";
 import OnboardingWelcome, { shouldShowWelcome } from "./components/OnboardingWelcome";
-import OnboardingTour, { TOUR_STEPS } from "./components/OnboardingTour";
+import OnboardingTour, { TOUR_STEPS, runningTourStep } from "./components/OnboardingTour";
 import { tour } from "./utils/tour";
 import type { TourStepId } from "./utils/tour";
 import config from "./config";
@@ -289,7 +289,7 @@ function App(): React.ReactElement {
                 />
                 <Route
                   path="/project/:user/new"
-                  element={<NewProjectWrapper tourStep={userDetails?.onboarding?.step ?? null} />}
+                  element={<NewProjectWrapper tourStep={runningTourStep(userDetails?.onboarding)} />}
                 />
                 <Route
                   path="/project/:user"

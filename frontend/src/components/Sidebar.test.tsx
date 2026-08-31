@@ -453,4 +453,41 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Repositories & Branches')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^CODEOWNERS$/i })).not.toBeInTheDocument();
   });
+
+  describe('pending delivery count', () => {
+    test('shows the count beside Repositories & Branches', () => {
+      render(<Sidebar projectType="standard" pendingDeliveryCount={2} />);
+      const badge = screen.getByTestId('sidebar-pending-delivery-count');
+      expect(badge).toHaveTextContent('2');
+      expect(
+        screen.getByRole('button', {
+          name: 'Repositories & Branches — 2 repositories not delivered yet',
+        }),
+      ).toBeInTheDocument();
+    });
+
+    test('says "repository" for a single one', () => {
+      render(<Sidebar projectType="standard" pendingDeliveryCount={1} />);
+      expect(
+        screen.getByRole('button', {
+          name: 'Repositories & Branches — 1 repository not delivered yet',
+        }),
+      ).toBeInTheDocument();
+    });
+
+    test('hides the count at zero, leaving the plain label', () => {
+      render(<Sidebar projectType="standard" pendingDeliveryCount={0} />);
+      expect(
+        screen.queryByTestId('sidebar-pending-delivery-count'),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Repositories & Branches' }),
+      ).toBeInTheDocument();
+    });
+
+    test('badges one item only — never a second config section', () => {
+      render(<Sidebar projectType="standard" pendingDeliveryCount={3} />);
+      expect(screen.getAllByTestId('sidebar-pending-delivery-count')).toHaveLength(1);
+    });
+  });
 });

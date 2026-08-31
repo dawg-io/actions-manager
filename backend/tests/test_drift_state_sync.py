@@ -10,6 +10,7 @@ cache showed a drift alert for drift that no longer existed.
 
 import sys
 import os
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -154,6 +155,44 @@ class TestClearWorkflowDrift:
         assert second == 0
         # Re-clearing must not emit a duplicate resolved notification.
         assert db_session.query(NotificationEvent).count() == 1
+
+    def test_delivering_to_a_branch_records_the_delivery(self, db_session):
+        """The caller just put the file there, and no drift check will see it.
+
+        A deletion on GitHub before the next check would otherwise leave the
+        pairing unconfirmed forever — the file is gone, so no later check can
+        supply the evidence — and be reported as "never delivered" (issue #1981).
+        """
+        project, workflow, (repo,) = _setup_project(db_session)
+
+        clear_workflow_drift(db_session, project, workflow.workflow_id,
+                             repo.repo_name, "main")
+
+        state = db_session.query(WorkflowDriftState).one()
+        assert state.branch == "main"
+        assert state.confirmed_present_at is not None
+
+    def test_a_delivery_does_not_overwrite_an_earlier_confirmation(self, db_session):
+        project, workflow, (repo,) = _setup_project(db_session)
+        state = _drifted_state(db_session, project, workflow, repo)
+        state.confirmed_present_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db_session.commit()
+
+        clear_workflow_drift(db_session, project, workflow.workflow_id,
+                             repo.repo_name, "main")
+
+        db_session.refresh(state)
+        assert state.confirmed_present_at.year == 2026
+        assert state.confirmed_present_at.month == 1
+
+    def test_clearing_every_repo_records_no_delivery(self, db_session):
+        """Without a repo and branch there is no pairing to confirm."""
+        project, workflow, (repo,) = _setup_project(db_session)
+        _drifted_state(db_session, project, workflow, repo)
+
+        clear_workflow_drift(db_session, project, workflow.workflow_id)
+
+        assert db_session.query(WorkflowDriftState).one().confirmed_present_at is None
 
     def test_omitting_repo_clears_every_repo_for_the_workflow(self, db_session):
         project, workflow, (repo_a, repo_b) = _setup_project(

@@ -110,7 +110,6 @@ const PlainFileEditor: React.FC<PlainFileEditorProps> = ({
       view.destroy();
       viewRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height, readOnly, theme, ariaLabel]); // Intentionally excluding value/onChange/language — see value-sync effect below
 
   useEffect(() => {

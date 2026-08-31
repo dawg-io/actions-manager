@@ -1,4 +1,3 @@
-/* eslint-disable no-restricted-syntax -- Legacy: TODO migrate inline styles to Tailwind CSS classes */
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { saveProject } from "./api/projects";
@@ -68,6 +67,22 @@ function demoRepoEntry(fullName: string, scope: VisibilityScope): Repository {
     private: scope === "private",
     default_branch: "main",
   };
+}
+
+/**
+ * The wizard is reached both from the guided tour and straight from the
+ * project list, so it cannot call itself guided unconditionally.
+ */
+function eyebrowLabel(tourStep: string | null): string {
+  return tourStep ? "Guided setup" : "New project";
+}
+
+/**
+ * Step 1 has nothing behind it, so its back control leaves the wizard and
+ * discards the draft - which is Cancel, not Back.
+ */
+function backControlLabel(step: WizardStep): string {
+  return step === 1 ? "Cancel" : "Back";
 }
 
 /** Whether the wizard may leave the given step. */
@@ -278,7 +293,16 @@ const NewProject: React.FC<NewProjectProps> = ({ user, tourStep = null }) => {
     setCurrentStep((step) => Math.min(step + 1, FINAL_WIZARD_STEP) as WizardStep);
   };
 
+  // On the first step there is no earlier step to return to, so this leaves the
+  // wizard entirely. It used to be disabled there, which reads as a dead button
+  // rather than as "nothing to go back to". Leaving discards the draft, so the
+  // control is labelled "Cancel" on step 1 - a button that says "Back" should
+  // step within the flow, not exit it.
   const handlePreviousStep = (): void => {
+    if (currentStep === 1) {
+      navigate(`/project/${user}`);
+      return;
+    }
     setCurrentStep((step) => Math.max(step - 1, 1) as WizardStep);
   };
 
@@ -325,7 +349,7 @@ const NewProject: React.FC<NewProjectProps> = ({ user, tourStep = null }) => {
     <div className="newProjectContainer w-full max-w-[1400px] mx-auto px-6 lg:px-8">
       <div className="mb-6">
         <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
-          Guided setup
+          {eyebrowLabel(tourStep)}
         </p>
         <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Create Project</h2>
         <p className="mt-2 max-w-2xl text-sm text-gray-600 dark:text-slate-300">
@@ -435,9 +459,9 @@ const NewProject: React.FC<NewProjectProps> = ({ user, tourStep = null }) => {
               type="button"
               variant="outline"
               onClick={handlePreviousStep}
-              disabled={currentStep === 1 || isCreating}
+              disabled={isCreating}
             >
-              Back
+              {backControlLabel(currentStep)}
             </Button>
             {currentStep < FINAL_WIZARD_STEP && (
               <Button

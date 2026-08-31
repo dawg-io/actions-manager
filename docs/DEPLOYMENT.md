@@ -190,13 +190,13 @@ Actions Manager includes a comprehensive CI/CD pipeline with automated testing, 
 ┌─────────────────────────────────────────────────────────────┐
 │                    GitHub Actions Workflow                  │
 ├─────────────────────────────────────────────────────────────┤
-│  Trigger: Push to main/develop, PR, Manual                 │
+│  Trigger: PR to develop, push to release/**, tag, Manual    │
 │                                                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
 │  │   Lint       │  │   Test       │  │   Build      │    │
 │  │              │  │              │  │              │    │
 │  │ • Black      │  │ • pytest     │  │ • Backend    │    │
-│  │ • flake8     │  │ • Jest       │  │ • Frontend   │    │
+│  │ • flake8     │  │ • Vitest     │  │ • Frontend   │    │
 │  │ • ESLint     │  │ • Coverage   │  │ • Docker     │    │
 │  └──────────────┘  └──────────────┘  └──────────────┘    │
 │                                                             │
@@ -204,8 +204,8 @@ Actions Manager includes a comprehensive CI/CD pipeline with automated testing, 
 │  │   Security   │  │   SBOM       │  │   Deploy     │    │
 │  │              │  │              │  │              │    │
 │  │ • Trivy      │  │ • CycloneDX  │  │ • GHCR       │    │
-│  │ • Bandit     │  │ • Supply     │  │ • Kubernetes │    │
-│  │ • Gitleaks   │  │   Chain      │  │ • Flux       │    │
+│  │ • Bandit     │  │ • Supply     │  │ • Compose    │    │
+│  │ • Gitleaks   │  │   Chain      │  │   on host    │    │
 │  └──────────────┘  └──────────────┘  └──────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -219,7 +219,7 @@ Actions Manager includes a comprehensive CI/CD pipeline with automated testing, 
 
 2. **Testing**
    - Backend: pytest with coverage
-   - Frontend: Jest with coverage
+   - Frontend: Vitest with coverage
    - Integration tests
 
 3. **Security Scanning**
@@ -235,17 +235,18 @@ Actions Manager includes a comprehensive CI/CD pipeline with automated testing, 
 
 5. **Deployment**
    - Docker images to GHCR
-   - Kubernetes via Flux
-   - Automated rollback on failure
+   - Cloud dev stack via Docker Compose on the deployment host
+   - A failed health check fails the run and leaves the previous stack up
 
 ### Workflow Configuration
 
 Located in `.github/workflows/`:
 
-- `docker-build-and-test.yml` - Main build and deploy workflow
+- `docker-images.yml` - Builds and publishes every image, and deploys the cloud dev stack
+- `main-pipeline.yml` - Orchestrates the reusable workflows below
 - `security-scan.yml` - Security scanning
-- `tests.yml` - Test suite
-- `lint.yml` - Code quality checks
+- `linting.yml` - Code quality checks
+- `sonarqube_scan.yml` - Runs pytest and Vitest, then the SonarQube analysis
 
 ### Running Pipeline Locally
 

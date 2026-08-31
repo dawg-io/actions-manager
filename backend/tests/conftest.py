@@ -110,3 +110,39 @@ def test_db():
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture
+def authenticate_client():
+    """Give a TestClient a real server-issued session for a username.
+
+    Reads are authenticated now: WriteProtectionMiddleware no longer exempts
+    safe methods, and routes that take the caller as a ``github_user`` query
+    parameter check it against the session. A TestClient that only passes
+    ``github_user=<name>`` therefore gets 401 without this.
+
+    Usage::
+
+        def my_fixture(authenticate_client):
+            authenticate_client(client, "alice", TestingSessionLocal)
+
+    The Authorization header is removed automatically at teardown.
+    """
+    from auth import create_auth_session
+
+    patched = []
+
+    def _authenticate(client, username, session_factory):
+        db = session_factory()
+        try:
+            token = create_auth_session(username, db)
+        finally:
+            db.close()
+        client.headers["Authorization"] = f"Bearer {token}"
+        patched.append(client)
+        return token
+
+    yield _authenticate
+
+    for client in patched:
+        client.headers.pop("Authorization", None)

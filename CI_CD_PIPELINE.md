@@ -116,7 +116,7 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - **YAML Linting**:
   - yamllint (workflow files)
 
-### 4. Docker Build & Test (`docker-build-and-test.yml`)
+### 4. Docker Build & Test (`docker-images.yml`)
 
 **Trigger**: Push to main/develop/feature branches
 
@@ -126,7 +126,6 @@ The Actions Manager project uses a comprehensive CI/CD pipeline with multiple wo
 - Builds backend and frontend images
 - Tags with timestamp
 - Pushes to GitHub Container Registry
-- Updates Kubernetes manifests via Flux
 - Cleanup of old images
 - Triggers SonarQube scan
 

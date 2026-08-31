@@ -1,4 +1,4 @@
-import axios, { AxiosResponse, AxiosError } from "axios";
+import { AxiosResponse, AxiosError } from "axios";
 import apiClient from "./apiClient";
 import config from "../config";
 import type { ProjectColorKey } from "../utils/projectColors";
@@ -99,6 +99,12 @@ export interface SaveProjectResponse {
   project_id: string;
   message?: string;
   pr_state?: string;
+  /** Recomputed by the save, so the caller can refresh the "not delivered yet"
+   * reminder without waiting for the next project load. */
+  pending_delivery_repos?: string[];
+  /** False when the project has never been drift-checked, where the empty list
+   * above means "cannot tell yet" rather than "nothing is waiting". */
+  pending_delivery_known?: boolean;
 }
 
 export interface UpdateProjectColorResponse {
@@ -171,6 +177,10 @@ export interface LoadProjectResponse extends Project {
   /** Workflow names with persisted drift from the last drift check (issue #1793's WorkflowDriftState),
    * used to seed the drift badge on initial render before the live check resolves. */
   drifted_workflow_names?: string[];
+  /** Repositories in the project that have never received any of its workflows,
+   * so the UI can remind the user to deliver them. Empty while a project has
+   * never been drift-checked — see `_pending_delivery_repo_names`. */
+  pending_delivery_repos?: string[];
 }
 
 // ===== API Functions =====
@@ -436,7 +446,7 @@ export const resetProjectRepoBranchConfig = async (
 // Fetch all available RWX workflows that can be linked
 export const getAvailableRwxWorkflows = async (user: string, projectName?: string): Promise<RwxWorkflow[]> => {
   try {
-    const response: AxiosResponse<RwxWorkflow[]> = await axios.get(
+    const response: AxiosResponse<RwxWorkflow[]> = await apiClient.get(
       `${BACKEND_URL}/api/rwx-workflows`,
       { params: { github_user: user, standard_project_name: projectName } }
     );
