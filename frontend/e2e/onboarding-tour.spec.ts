@@ -203,7 +203,12 @@ test.describe("Guided tour", () => {
 
     await page.getByTestId("onboarding-complete-close").click();
 
-    expect(writes).toContainEqual(expect.objectContaining({ completed: true }));
+    // Polled, not asserted once: click() resolves when the click is dispatched,
+    // not when the POST it triggers has reached the route handler, and a plain
+    // expect() on a JS array does not retry. Failed about half the time.
+    await expect.poll(() => writes).toContainEqual(
+      expect.objectContaining({ completed: true }),
+    );
   });
 });
 

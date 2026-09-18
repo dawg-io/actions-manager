@@ -26,7 +26,10 @@ from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from models import Base, Account, Project, CustomFile
+from models import (
+    Base, Account, Project, CustomFile, Repo, ProjectRepo,
+    ProjectPRCampaign, ProjectPullRequest, ProjectMembership, WorkspaceMember,
+)
 from main import app
 from custom_files import get_db, validate_file_path
 
@@ -332,7 +335,12 @@ class TestCustomFilesAPI:
         # Confirm gone from DB
         assert self.db.query(CustomFile).filter_by(id=file_id).first() is None
 
-    def test_delete_synced_file_marks_pending_delete(self):
+    def test_delete_synced_file_with_no_repos_hard_deletes(self):
+        """A project with nowhere to deliver has nothing to remove from GitHub.
+
+        The row used to be marked pending_delete and left to a PR Campaign that
+        would never have anything to commit.
+        """
         _, project = _seed(self.db)
         cf = CustomFile(
             project_id=project.project_id,
@@ -344,18 +352,68 @@ class TestCustomFilesAPI:
         self.db.add(cf)
         self.db.commit()
         self.db.refresh(cf)
+        file_id = cf.id
+
+        with patch("custom_files.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("auth.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("workflows.user_tokens", {TEST_USER: "fake-token"}):
+            resp = self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{file_id}",
+                headers={"X-GitHub-User": TEST_USER},
+                params={"github_user": TEST_USER},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["hard_deleted"] is True
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is None
+
+    def test_delete_scope_project_hard_deletes_and_leaves_github_copy(self):
+        """scope=project drops the row outright instead of queuing a GitHub delete."""
+        _, project = _seed(self.db)
+        cf = CustomFile(
+            project_id=project.project_id,
+            file_path="sonar-project.properties",
+            file_content="sonar.projectKey=x",
+            file_status="synced_with_github",
+            git_hash="a" * 40,
+        )
+        self.db.add(cf)
+        self.db.commit()
+        self.db.refresh(cf)
+        file_id = cf.id
+
+        with patch("custom_files.user_tokens", {TEST_USER: "fake-token"}):
+            resp = self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{file_id}",
+                headers={"X-GitHub-User": TEST_USER},
+                params={"github_user": TEST_USER, "scope": "project"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["hard_deleted"] is True
+        # Gone from ActionsManager, with nothing left marked for a GitHub delete.
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is None
+
+    def test_delete_rejects_unknown_scope(self):
+        _, project = _seed(self.db)
+        cf = CustomFile(
+            project_id=project.project_id,
+            file_path=".yamllint.yml",
+            file_content="",
+            file_status="synced_with_github",
+            git_hash="a" * 40,
+        )
+        self.db.add(cf)
+        self.db.commit()
+        self.db.refresh(cf)
 
         with patch("custom_files.user_tokens", {TEST_USER: "fake-token"}):
             resp = self.client.delete(
                 f"/api/projects/{project.project_id}/custom-files/{cf.id}",
                 headers={"X-GitHub-User": TEST_USER},
-                params={"github_user": TEST_USER},
+                params={"github_user": TEST_USER, "scope": "everything"},
             )
-        assert resp.status_code == 200
-        assert resp.json()["pending_delete"] is True
+        assert resp.status_code == 400
         self.db.refresh(cf)
-        assert cf.pending_delete is True
-        assert cf.file_status == "committed_locally"
+        assert cf.pending_delete is False
 
     def test_restore_clears_pending_delete(self):
         _, project = _seed(self.db)
@@ -612,7 +670,36 @@ class TestBug1ProjectDraftPromotion:
         self.db.refresh(project)
         assert project.pr_state == "draft"
 
-    def test_delete_promotes_synced_to_draft(self):
+    def test_delete_leaves_project_synced_when_nothing_needs_delivering(self):
+        """Deletion happens on GitHub now, so a synced project stays synced.
+
+        Only an open deletion PR leaves work outstanding, and that path sets
+        draft itself — see TestGitHubScopedDeletion.
+        """
+        project = self._seed_with_state("synced")
+        cf = CustomFile(
+            project_id=project.project_id, file_path="sonar.properties",
+            file_content="x", file_status="synced_with_github", git_hash="a" * 40,
+        )
+        self.db.add(cf)
+        self.db.commit()
+        self.db.refresh(cf)
+
+        with patch("custom_files.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("auth.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("workflows.user_tokens", {TEST_USER: "fake-token"}):
+            resp = self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{cf.id}",
+                headers={"X-GitHub-User": TEST_USER},
+                params={"github_user": TEST_USER},
+            )
+        assert resp.status_code == 200
+        self.db.refresh(project)
+        assert project.pr_state == "synced"
+
+    def test_delete_scope_project_leaves_project_state_alone(self):
+        """Nothing needs delivering after a project-scoped removal, so a synced
+        project must not be dragged back to draft."""
         project = self._seed_with_state("synced")
         cf = CustomFile(
             project_id=project.project_id, file_path="sonar.properties",
@@ -626,11 +713,11 @@ class TestBug1ProjectDraftPromotion:
             resp = self.client.delete(
                 f"/api/projects/{project.project_id}/custom-files/{cf.id}",
                 headers={"X-GitHub-User": TEST_USER},
-                params={"github_user": TEST_USER},
+                params={"github_user": TEST_USER, "scope": "project"},
             )
         assert resp.status_code == 200
         self.db.refresh(project)
-        assert project.pr_state == "draft"
+        assert project.pr_state == "synced"
 
 
 class TestBug2CustomFileSurvivesMerge:
@@ -772,3 +859,360 @@ class TestBug2CustomFileSurvivesMerge:
         assert data["custom_files"][0]["file_status"] == "synced_with_github"
 
         app.dependency_overrides.pop(get_db, None)
+
+
+class TestGitHubScopedDeletion:
+    """`scope=project_and_github` has to reach GitHub, not queue for a campaign.
+
+    Picking "Delete from ActionsManager and GitHub" used to set pending_delete and
+    wait for the next PR Campaign. The file stayed in the repositories, the project
+    sat in "pending delete", and — when the deletion was the campaign's only change
+    — the campaign then failed because the AM branch had no diff.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        app.dependency_overrides[get_db] = override_get_db
+        Base.metadata.create_all(bind=engine)
+        self.db = TestingSessionLocal()
+        self.client = TestClient(app)
+        yield
+        self.db.close()
+        Base.metadata.drop_all(bind=engine)
+        app.dependency_overrides.pop(get_db, None)
+
+    def _project_with_repo(self, pr_state="synced"):
+        _, project = _seed(self.db)
+        project.pr_state = pr_state
+        repo = Repo(repo_name="acme/app")
+        self.db.add(repo)
+        self.db.commit()
+        self.db.refresh(repo)
+        self.db.add(ProjectRepo(project_id=project.project_id, repo_id=repo.repo_id))
+        cf = CustomFile(
+            project_id=project.project_id,
+            file_path="scripts/deploy.sh",
+            file_content="#!/bin/sh\n",
+            file_status="synced_with_github",
+            git_hash="a" * 40,
+        )
+        self.db.add(cf)
+        self.db.commit()
+        self.db.refresh(cf)
+        return project, cf
+
+    def _delete(self, project, cf, **params):
+        with patch("custom_files.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("auth.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("workflows.user_tokens", {TEST_USER: "fake-token"}), \
+             patch("workflows._resolve_branches_for_repo", return_value=["main"]):
+            return self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{cf.id}",
+                headers={"X-GitHub-User": TEST_USER},
+                params={"github_user": TEST_USER, **params},
+            )
+
+    @staticmethod
+    def _resp(status_code, payload=None):
+        r = MagicMock()
+        r.status_code = status_code
+        r.text = ""
+        r.json.return_value = payload if payload is not None else {}
+        return r
+
+    def test_direct_delivery_commits_the_removal_and_drops_the_row(self):
+        project, cf = self._project_with_repo()
+        file_id = cf.id
+
+        with patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=self._resp(200)) as gh_delete:
+            resp = self._delete(project, cf, scope="project_and_github", delivery="direct")
+
+        assert resp.status_code == 200
+        assert resp.json()["hard_deleted"] is True
+        # The file is gone from GitHub, so there is nothing left to track.
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is None
+        assert gh_delete.call_count == 1
+        assert gh_delete.call_args.kwargs["json"]["branch"] == "main"
+
+    def test_direct_delivery_reports_which_branch_it_reached(self):
+        project, cf = self._project_with_repo()
+
+        with patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=self._resp(200)):
+            resp = self._delete(project, cf, scope="project_and_github", delivery="direct")
+
+        assert resp.json()["targets"] == [
+            {"repo": "acme/app", "branch": "main", "status": "deleted", "error": None}
+        ]
+
+    def test_campaign_delivery_runs_a_real_pr_campaign(self):
+        """Not loose pull requests: the deletion has to land in PR Campaigns so it
+        is grouped, tracked and merged like every other delivery."""
+        project, cf = self._project_with_repo()
+        pr = {"number": 7, "html_url": "https://github.com/acme/app/pull/7",
+              "title": "t", "user": {"login": TEST_USER}, "body": "b"}
+
+        with patch("workflows._create_or_get_am_branch",
+                   return_value=("actions-manager/cft/app/ab12-main", True, None)), \
+             patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=self._resp(200)), \
+             patch("workflows._check_existing_pr", return_value=None), \
+             patch("workflows._fetch_branch_protection", return_value={"status": "none"}), \
+             patch("workflows._create_pull_request", return_value=(pr, None)):
+            resp = self._delete(project, cf, scope="project_and_github", delivery="campaign")
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["pending_delete"] is True
+        assert body["campaign_id"] is not None
+        assert body["prs_created"] == 1
+
+        # A campaign record the PR Campaigns view can find, with the PR attached.
+        campaign = self.db.query(ProjectPRCampaign).filter_by(
+            campaign_id=body["campaign_id"]
+        ).first()
+        assert campaign is not None
+        assert campaign.project_id == project.project_id
+        prs = self.db.query(ProjectPullRequest).filter_by(campaign_id=campaign.campaign_id).all()
+        assert [p.pr_number for p in prs] == [7]
+
+        # GitHub still has the file until the campaign merges, so Restore must work.
+        self.db.refresh(cf)
+        assert cf.pending_delete is True
+        assert cf.file_status == "under_review"
+
+    def test_campaign_delivery_moves_a_synced_project_off_synced(self):
+        project, cf = self._project_with_repo(pr_state="synced")
+        pr = {"number": 7, "html_url": "https://github.com/acme/app/pull/7",
+              "title": "t", "user": {"login": TEST_USER}, "body": "b"}
+
+        with patch("workflows._create_or_get_am_branch",
+                   return_value=("actions-manager/cft/app/ab12-main", True, None)), \
+             patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=self._resp(200)), \
+             patch("workflows._check_existing_pr", return_value=None), \
+             patch("workflows._fetch_branch_protection", return_value={"status": "none"}), \
+             patch("workflows._create_pull_request", return_value=(pr, None)):
+            resp = self._delete(project, cf, scope="project_and_github", delivery="campaign")
+
+        self.db.refresh(project)
+        assert project.pr_state != "synced"
+        # Returned from the mutation, so the UI does not need a reload to see it.
+        assert resp.json()["pr_state"] == project.pr_state
+
+    def test_a_failed_campaign_does_not_strand_the_file_in_pending_delete(self):
+        """Leaving pending_delete set for a delivery that never happened is the
+        exact state this whole change exists to remove."""
+        project, cf = self._project_with_repo()
+
+        with patch("workflows._create_or_get_am_branch",
+                   return_value=(None, False, "branch is protected")), \
+             patch("workflows._create_pull_request") as create_pr:
+            resp = self._delete(project, cf, scope="project_and_github", delivery="campaign")
+
+        assert resp.status_code == 502
+        assert "branch is protected" in " ".join(resp.json()["detail"]["errors"])
+        create_pr.assert_not_called()
+        self.db.refresh(cf)
+        assert cf.pending_delete is False
+        assert cf.file_status == "synced_with_github"
+
+    def test_a_failed_repository_keeps_the_row_and_reports_why(self):
+        project, cf = self._project_with_repo()
+        file_id = cf.id
+        rejected = self._resp(409, {"message": "deploy.sh does not match abc"})
+
+        with patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=rejected):
+            resp = self._delete(project, cf, scope="project_and_github", delivery="direct")
+
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert "does not match" in detail["errors"][0]
+        # Dropping the row would leave the file in the repository with nothing
+        # in ActionsManager still pointing at it.
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is not None
+
+    def test_a_campaign_whose_pr_is_refused_reports_githubs_reason(self):
+        """The campaign records the target as failed, and the reason survives to
+        the response rather than being flattened to "Failed to create PR"."""
+        project, cf = self._project_with_repo()
+        file_id = cf.id
+
+        with patch("workflows._create_or_get_am_branch",
+                   return_value=("actions-manager/cft/app/ab12-main", True, None)), \
+             patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=self._resp(200)), \
+             patch("workflows._check_existing_pr", return_value=None), \
+             patch("workflows._fetch_branch_protection", return_value={"status": "none"}), \
+             patch("workflows._create_pull_request",
+                   return_value=(None, "HTTP 403: Resource not accessible")):
+            resp = self._delete(project, cf, scope="project_and_github", delivery="campaign")
+
+        assert resp.status_code == 502
+        assert "Resource not accessible" in " ".join(resp.json()["detail"]["errors"])
+        # Nothing was delivered, so the record must survive — and must not be left
+        # marked for a deletion no pull request will ever carry out.
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is not None
+        self.db.refresh(cf)
+        assert cf.pending_delete is False
+
+    def test_project_scope_never_touches_github(self):
+        project, cf = self._project_with_repo()
+        file_id = cf.id
+
+        with patch("workflows.requests.delete") as gh_delete, \
+             patch("workflows._create_pull_request") as create_pr:
+            resp = self._delete(project, cf, scope="project")
+
+        assert resp.status_code == 200
+        assert resp.json()["hard_deleted"] is True
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is None
+        gh_delete.assert_not_called()
+        create_pr.assert_not_called()
+
+    def test_a_never_delivered_file_never_reaches_github(self):
+        project, cf = self._project_with_repo()
+        cf.file_status = "new"
+        cf.git_hash = None
+        self.db.commit()
+
+        with patch("workflows.requests.delete") as gh_delete:
+            resp = self._delete(project, cf, scope="project_and_github", delivery="direct")
+
+        assert resp.status_code == 200
+        assert resp.json()["hard_deleted"] is True
+        gh_delete.assert_not_called()
+
+    def test_refuses_when_the_project_name_would_resolve_elsewhere(self):
+        """create_pull_requests takes a name, and _find_project_by_name falls back
+        to a global match for privileged members — so an admin acting on another
+        user's project while owning a same-named one would target the wrong repos."""
+        project, cf = self._project_with_repo()
+        other_owner = Account(
+            github_user="cf_other", github_email="other@example.com", account_type="free"
+        )
+        self.db.add(other_owner)
+        self.db.commit()
+        self.db.refresh(other_owner)
+        decoy = Project(
+            project_name=project.project_name, project_code="OTH",
+            user_id=other_owner.user_id, branch_option="default",
+        )
+        self.db.add(decoy)
+        self.db.commit()
+        self.db.refresh(decoy)
+        assert decoy.project_id != project.project_id
+
+        with patch("workflows._find_project_by_name", return_value=decoy), \
+             patch("workflows._create_pull_request") as create_pr:
+            resp = self._delete(project, cf, scope="project_and_github", delivery="campaign")
+
+        assert resp.status_code == 409
+        create_pr.assert_not_called()
+        # Nothing was delivered, so nothing may be marked for deletion.
+        self.db.refresh(cf)
+        assert cf.pending_delete is False
+
+    def _make_viewer(self, project):
+        """A workspace member with read-only project access."""
+        viewer = Account(
+            github_user="cf_viewer", github_email="viewer@example.com", account_type="free"
+        )
+        self.db.add(viewer)
+        self.db.commit()
+        self.db.refresh(viewer)
+        self.db.add(WorkspaceMember(user_id=viewer.user_id, workspace_role="member"))
+        self.db.add(ProjectMembership(
+            user_id=viewer.user_id, project_id=project.project_id,
+            project_role="project_viewer",
+        ))
+        self.db.commit()
+        return viewer
+
+    def test_a_project_viewer_cannot_delete_from_github(self):
+        """Seeing a project is not permission to commit deletions to its repos.
+
+        _get_project_for_user accepts any ProjectMembership row, which was fine
+        while this route only set pending_delete. It now reaches GitHub.
+        """
+        project, cf = self._project_with_repo()
+        self._make_viewer(project)
+        file_id = cf.id
+
+        with patch("custom_files.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("auth.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("workflows.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("workflows.requests.delete") as gh_delete, \
+             patch("workflows._create_pull_request") as create_pr:
+            resp = self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{file_id}",
+                headers={"X-GitHub-User": "cf_viewer"},
+                params={"github_user": "cf_viewer",
+                        "scope": "project_and_github", "delivery": "direct"},
+            )
+
+        assert resp.status_code == 403
+        gh_delete.assert_not_called()
+        create_pr.assert_not_called()
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is not None
+
+    def test_a_project_viewer_cannot_open_a_deletion_campaign_either(self):
+        project, cf = self._project_with_repo()
+        self._make_viewer(project)
+
+        with patch("custom_files.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("auth.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("workflows.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("workflows._create_pull_request") as create_pr:
+            resp = self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{cf.id}",
+                headers={"X-GitHub-User": "cf_viewer"},
+                params={"github_user": "cf_viewer",
+                        "scope": "project_and_github", "delivery": "campaign"},
+            )
+
+        assert resp.status_code == 403
+        create_pr.assert_not_called()
+        self.db.refresh(cf)
+        assert cf.pending_delete is False
+
+    def test_a_project_viewer_may_still_remove_it_from_actionsmanager_only(self):
+        """The editor check guards GitHub, not the project-scoped removal, which
+        is the pre-existing behaviour of this route."""
+        project, cf = self._project_with_repo()
+        self._make_viewer(project)
+        file_id = cf.id
+
+        with patch("custom_files.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("auth.user_tokens", {"cf_viewer": "fake-token"}), \
+             patch("workflows.requests.delete") as gh_delete:
+            resp = self.client.delete(
+                f"/api/projects/{project.project_id}/custom-files/{file_id}",
+                headers={"X-GitHub-User": "cf_viewer"},
+                params={"github_user": "cf_viewer", "scope": "project"},
+            )
+
+        assert resp.status_code == 200
+        gh_delete.assert_not_called()
+        assert self.db.query(CustomFile).filter_by(id=file_id).first() is None
+
+    def test_the_project_owner_is_still_allowed(self):
+        """Owners hold full rights and have no membership row to read a role from."""
+        project, cf = self._project_with_repo()
+
+        with patch("workflows.github_get", return_value=self._resp(200, {"sha": "abc"})), \
+             patch("workflows.requests.delete", return_value=self._resp(200)):
+            resp = self._delete(project, cf, scope="project_and_github", delivery="direct")
+
+        assert resp.status_code == 200
+
+    def test_rejects_an_unknown_delivery(self):
+        project, cf = self._project_with_repo()
+
+        resp = self._delete(project, cf, scope="project_and_github", delivery="yolo")
+
+        assert resp.status_code == 400
+        self.db.refresh(cf)
+        assert cf.pending_delete is False

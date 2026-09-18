@@ -75,7 +75,11 @@ export interface UseUnifiedWorkflowsStateReturn {
 
 export const useUnifiedWorkflowsState = (
   workflows: any[], 
-  setWorkflows: (workflows: any[]) => void,
+  // Both accept a functional updater — the real setters come from ProjectMgmt's
+  // useState and utils/workflowOperations already calls them that way. Declaring
+  // setWorkflows as array-only was just wrong, and it is what made
+  // markWorkflowAsSaved read the array from its closure instead.
+  setWorkflows: (workflows: any[] | ((prev: any[]) => any[])) => void,
   setRXWorkflows: (workflows: any[] | ((prev: any[]) => any[])) => void
 ): UseUnifiedWorkflowsStateReturn => {
   // UI State
@@ -139,19 +143,26 @@ export const useUnifiedWorkflowsState = (
         newSet.delete(index);
         return newSet;
       });
-      // Also update the workflow in state - create new object instead of mutating
-      const newWorkflows = [...workflows];
-      if (newWorkflows[index]) {
-        newWorkflows[index] = {
-          ...newWorkflows[index],
-          isModified: false,
-          // Update savedName to the current name so future saves use the new name
-          // as the baseline and won't treat it as another rename.
-          savedName: newWorkflows[index].name,
-          ...(workflowStatus !== undefined ? { workflowStatus } : {})
-        };
-        setWorkflows(newWorkflows);
-      }
+      // Functional update, like the reusable branch below. Reading `workflows`
+      // from this closure replays whatever the array was when the callback was
+      // created, which lands after the save that called it — so a name changed
+      // in the same tick as the save (the editor's rename) was written back to
+      // its old value, reverting the rename in the UI and stamping savedName
+      // with the name the user had just replaced.
+      setWorkflows(prev => {
+        const newWorkflows = Array.isArray(prev) ? [...prev] : [];
+        if (newWorkflows[index]) {
+          newWorkflows[index] = {
+            ...newWorkflows[index],
+            isModified: false,
+            // Update savedName to the current name so future saves use the new name
+            // as the baseline and won't treat it as another rename.
+            savedName: newWorkflows[index].name,
+            ...(workflowStatus !== undefined ? { workflowStatus } : {})
+          };
+        }
+        return newWorkflows;
+      });
     } else {
       setModifiedRXWorkflows(prev => {
         const newSet = new Set(prev);
@@ -174,7 +185,7 @@ export const useUnifiedWorkflowsState = (
         return newWorkflows;
       });
     }
-  }, [workflows, setWorkflows, setRXWorkflows]);
+  }, [setWorkflows, setRXWorkflows]);
 
   return {
     // UI State

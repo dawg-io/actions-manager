@@ -36,7 +36,7 @@ import LinkedWorkflowsModal from "./components/LinkedWorkflowsModal";
 import ProjectColorSelector from "./components/ProjectColorSelector";
 import { WorkflowImportPanel } from "./components/WorkflowImportPanel";
 import { getProjectTypeConfig, ProjectType } from "./utils/projectTypeConfig";
-import { getPrefixModeConfig } from "./utils/prefixModeConfig";
+import { getPrefixModeConfig, projectKeyFixedNote } from "./utils/prefixModeConfig";
 import { normalizeProjectColorKey, type ProjectColorKey } from "./utils/projectColors";
 import { PROJECT_TIER_CONFIG, getEffectiveTierKey, SELF_HOSTED_BETA_CALLER_LIMIT, SELF_HOSTED_BETA_RWX_LIMIT } from "./utils/accountTier";
 import { getProjectPRStatus } from "./api/pullRequests";
@@ -1236,6 +1236,19 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       clearWorkflowModifiedStatesFn();
     }
 
+    // Re-baseline savedName. This save posted each workflow's current name, and
+    // maps a name that differs from savedName to original_name — so once it
+    // succeeds, the stored name IS the current name. Leaving savedName at the
+    // pre-save value made the next save re-send a stale original_name; worse,
+    // renaming back to the original looked like "no rename", so no
+    // original_name was sent at all and the backend created a SECOND workflow
+    // under the old name while the first kept delivering. clearWorkflowModified
+    // only empties the modified sets — it does not touch savedName.
+    const rebaseline = <T extends { name?: string }>(list: T[]): T[] =>
+      list.map(w => ({ ...w, savedName: w.name }));
+    setWorkflows(prev => rebaseline(prev));
+    setRXWorkflows(prev => rebaseline(prev));
+
     // Immediately reflect the updated PR state so the button re-enables without a page refresh
     if (result.prState) {
       setProjectPRState(normalizeProjectPRState(result.prState));
@@ -1361,6 +1374,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
     // Only warn for actions that actually push to GitHub (non-workflow sections),
     // since the workflow Save button only persists locally.
     const willPushToGitHub = activeSection !== 'workflows' && activeSection !== 'rxworkflows';
+
     if (willPushToGitHub) {
       ifNotDrifted('Save to GitHub', () => { doSaveProject(); });
       return;
@@ -1680,9 +1694,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
 
   // Helper function to render workflows section
   const renderWorkflows = (): React.ReactElement => {
-    // For RWX projects, reusable workflows are always enabled and the repo always exists
+    // Reusable workflow authoring is always on for RWX projects
     const effectiveReusableEnabled = projectType === 'rwx' ? true : reusableWorkflowsEnabled;
-    const effectiveRepoExists = projectType === 'rwx' ? true : false;
     return (
       <div className="section-content">
         <div className="section-card-content">
@@ -1709,13 +1722,14 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
             onAddRXWorkflow={handleAddRXWorkflowCallback}
             detectedBuildTypes={EMPTY_BUILD_TYPES}
             reusableWorkflowsEnabled={effectiveReusableEnabled}
-            repoExists={effectiveRepoExists}
+            projectType={projectType}
             linkedWorkflows={projectType === 'standard' ? linkedWorkflows : []}
             setLinkedWorkflows={projectType === 'standard' ? setLinkedWorkflows : undefined}
             canLinkReusableWorkflows={projectType === 'standard' && !isProjectReadOnly}
             onLinkReusableWorkflow={projectType === 'standard' && !isProjectReadOnly ? handleOpenLinkModal : undefined}
             onImportExisting={!isProjectReadOnly && selectedRepos.length > 0 ? () => setShowWorkflowImport(true) : undefined}
             refreshProjectsList={refreshProjectsList}
+            refreshProjectData={refreshProjectCampaignState}
             onProjectStateChange={handleProjectStateChange}
             driftedWorkflowNames={driftedWorkflowNames}
             customFiles={customFiles as any}
@@ -2850,8 +2864,14 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           usePrefix={usePrefix}
           customFiles={customFiles}
           reusableWorkflows={[
-            // RWX project's own workflows use the first selected repo as source
-            ...rxworkflows.map((w) => ({
+            // RWX project's own workflows use the first selected repo as source.
+            // A caller project can own reusable workflows too (imported), but
+            // reusable delivery resolves the target through
+            // _get_reusable_workflow_repo, which for a standard project returns
+            // a linked RWX project's repo - or a fallback repo that may not
+            // exist - never one of this project's own. Offering them here would
+            // open a PR against a repository outside the project.
+            ...(projectType === 'rwx' ? rxworkflows : []).map((w) => ({
               name: w.name,
               status: w.workflowStatus,
               sourceRepo: selectedRepos.length > 0 ? selectedRepos[0] : undefined
@@ -2888,6 +2908,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           projectName={projectName}
           githubUser={user}
           selectedRepos={selectedRepos}
+          projectType={projectType}
+          onCreateReusableProject={() => navigate(`/project/${user}/new?type=rwx`)}
           onImportComplete={(prState) => {
             if (prState) {
               setProjectPRState(normalizeProjectPRState(prState));
@@ -2946,7 +2968,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         <ConfirmDialog
           open={true}
           title="Rename project?"
-          description={`This will change the project display name to "${pendingRename}". The project key (${projectCode}) will remain unchanged.`}
+          description={`This will change the project display name to "${pendingRename}". The project key (${projectCode}) is fixed. ${projectKeyFixedNote(usePrefix, projectCode)}`}
           confirmLabel="Rename"
           onConfirm={confirmProjectRename}
           onCancel={() => setPendingRename(null)}

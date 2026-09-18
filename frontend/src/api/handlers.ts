@@ -19,6 +19,8 @@ export interface Workflow {
   name: string;
   content: string;
   isModified?: boolean;
+  /** Persisted name as stored in the database. Used to detect renames and pass `original_name` to the backend. */
+  savedName?: string;
 }
 
 export interface Secret {
@@ -248,18 +250,22 @@ export const handleSaveProject = async (
 
     // Filter out empty workflows (workflows with no name or content) to send clean arrays
     // ✅ FIX: Add null/undefined checks before calling trim() to prevent TypeError
+    // savedName -> original_name, so a rename saved here is a rename rather
+    // than a second workflow beside the old one. Dropping it was one of three
+    // layers that turned a project save of a renamed workflow into a duplicate.
+    const formatWorkflow = (w: Workflow) => {
+        const name = (w.name || "").trim();
+        const saved = (w.savedName || "").trim();
+        const base = { name, content: (w.content || "").trim() };
+        return saved && saved !== name ? { ...base, original_name: saved } : base;
+    };
     const formattedWorkflows = workflowsToSave
         .filter(w => w.name?.trim() || w.content?.trim()) // Only include workflows with name or content
-        .map(w => ({
-            name: (w.name || "").trim(),
-            content: (w.content || "").trim(),
-        }));    
+        .map(formatWorkflow);
     const formattedRXWorkflows = rxworkflowsToSave
         .filter(w => w.name?.trim() || w.content?.trim()) // Only include workflows with name or content
-        .map(w => ({
-            name: (w.name || "").trim(),
-            content: (w.content || "").trim(),
-        }));    
+        .map(formatWorkflow);
+
     const formattedRepos = selectedRepos.map(repo => {
         if (typeof repo === "string") return repo;
         return repo.full_name || repo.name;

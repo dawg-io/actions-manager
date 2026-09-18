@@ -41,13 +41,14 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
   onAddRXWorkflow,
   detectedBuildTypes,
   reusableWorkflowsEnabled,
-  repoExists,
+  projectType = 'standard',
   linkedWorkflows = [],
   setLinkedWorkflows,
   canLinkReusableWorkflows = false,
   onLinkReusableWorkflow,
   onImportExisting,
   refreshProjectsList,
+  refreshProjectData,
   onProjectStateChange,
   driftedWorkflowNames,
   customFiles = [],
@@ -100,9 +101,13 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
       workflowStatus: workflow.workflowStatus,
       originalIndex: index,
       type: 'regular' as const,
+      savedName: workflow.savedName,
       lastModifiedBy: workflow.lastModifiedBy,
     })),
-    ...(reusableWorkflowsEnabled && repoExists ? rxworkflows.map((workflow, index) => ({
+    // Always listed. A reusable workflow the project owns is a file the user
+    // saved or imported here, so hiding it behind the authoring toggle only
+    // made it unreachable - it stayed in the database, invisible.
+    ...rxworkflows.map((workflow, index) => ({
       id: `reusable-${index}`,
       name: workflow.name,
       content: workflow.content,
@@ -112,8 +117,9 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
       workflowStatus: workflow.workflowStatus,
       originalIndex: index,
       type: 'reusable' as const,
+      savedName: workflow.savedName,
       lastModifiedBy: workflow.lastModifiedBy,
-    })) : []),
+    })),
     ...linkedWorkflows.map((workflow, index) => ({
       id: `linked-${workflow.workflow_id}`,
       name: workflow.workflow_name,
@@ -162,6 +168,7 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
     setIsDetecting: state.setIsDetecting,
     setIsGeneratingTemplates: state.setIsGeneratingTemplates,
     refreshProjectsList,
+    refreshProjectData,
     onProjectStateChange,
     branchOption
   });
@@ -259,8 +266,7 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
         loadingStatuses={state.loadingStatuses}
         workflowStatuses={state.workflowStatuses}
         selectedRepos={selectedRepos}
-        reusableWorkflowsEnabled={reusableWorkflowsEnabled}
-        repoExists={repoExists}
+        projectType={projectType}
         setIsCollapsed={state.setIsCollapsed}
         handleSelectWorkflow={handleSelectWorkflow}
         addWorkflowFn={operations.openWorkflowCreationDialog}
@@ -286,6 +292,8 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
             githubUser={user}
             onChange={handleCustomFilesChange}
             onAfterAdd={(newId) => setSelectedCustomFileId(newId)}
+            onRemoved={() => setSelectedCustomFileId(null)}
+            onProjectStateChange={onProjectStateChange}
           />
         </div>
       ) : selectedCodeownersRepo !== null ? (
@@ -329,6 +337,7 @@ const UnifiedWorkflows: React.FC<UnifiedWorkflowsProps> = ({
           unlinkWorkflow={operations.handleUnlinkWorkflow}
           addWorkflowFn={operations.openWorkflowCreationDialog}
           onImportExisting={onImportExisting}
+          projectType={projectType}
         />
       )}
       

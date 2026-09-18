@@ -191,6 +191,14 @@
   margin-top: var(--spacing-xs);
 }
 
+/* Marks the key as not editable. Muted against the key itself so it reads as a
+   qualifier rather than part of the value. Inherits the themed colour above, so
+   light and dark both follow --sidebar-item-color. */
+.sidebar-project-key-fixed {
+  opacity: 0.7;
+  font-style: italic;
+}
+
 .sidebar-project-badges {
   display: flex;
   flex-wrap: wrap;

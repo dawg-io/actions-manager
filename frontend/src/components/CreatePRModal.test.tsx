@@ -1,7 +1,7 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import CreatePRModal from "./CreatePRModal";
+import CreatePRModal, { prResultFailureReasons } from "./CreatePRModal";
 import * as pullRequestApi from "../api/pullRequests";
 
 import type { Mock } from 'vitest';
@@ -934,6 +934,88 @@ describe("CreatePRModal", () => {
       await waitFor(() => expect(pullRequestApi.createPullRequests).toHaveBeenCalled());
       const { campaign } = (pullRequestApi.createPullRequests as Mock).mock.calls[0][2];
       expect(campaign).toEqual({ name: undefined, description: undefined });
+    });
+  });
+  describe("failure reasons on the results screen", () => {
+    const failingRun = (results: Record<string, unknown>, prsCreated = 0) => {
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
+        prs_created: prsCreated,
+        results,
+      });
+    };
+
+    it("shows why GitHub refused the PR instead of a bare Error", async () => {
+      failingRun({
+        "owner/repo-a on main": {
+          status: "error",
+          error: "Failed to create PR: HTTP 422: Validation Failed — No commits between main and actions-manager/proj/repo-a/ab12-main",
+        },
+      });
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /create \d+ pr/i }));
+
+      // The reason is the whole point — "❌ Error" on its own sent users to the server log.
+      expect(await screen.findByText(/No commits between main and actions-manager/)).toBeInTheDocument();
+      expect(screen.getByText("owner/repo-a on main")).toBeInTheDocument();
+    });
+
+    it("does not claim success when nothing was created", async () => {
+      failingRun({ "owner/repo-a on main": { status: "error", error: "Nothing to deliver" } });
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /create \d+ pr/i }));
+
+      expect(await screen.findByText(/No pull requests were created/)).toBeInTheDocument();
+      expect(screen.queryByText(/Successfully created 0 pull request/)).not.toBeInTheDocument();
+    });
+
+    it("lists per-file and per-workflow failures, not just the top-level one", async () => {
+      failingRun({
+        "owner/repo-a on main": {
+          status: "error",
+          error: "No workflows committed",
+          workflow_errors: ["build: HTTP 403"],
+          custom_file_errors: ["scripts/deploy.sh: HTTP 409"],
+        },
+      });
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /create \d+ pr/i }));
+
+      const list = await screen.findByTestId("pr-result-errors");
+      expect(list).toHaveTextContent("build: HTTP 403");
+      expect(list).toHaveTextContent("scripts/deploy.sh: HTTP 409");
+    });
+
+    it("keeps a successful target free of an error list", async () => {
+      failingRun(
+        { "owner/repo-a on main": { status: "pr_created", pr_url: "https://x/1", pr_number: 1 } },
+        1,
+      );
+      render(<CreatePRModal {...baseProps} workflows={[{ name: "build", status: "new" }]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /create \d+ pr/i }));
+
+      expect(await screen.findByText(/Successfully created 1 pull request/)).toBeInTheDocument();
+      expect(screen.queryByTestId("pr-result-errors")).not.toBeInTheDocument();
+    });
+
+    describe("prResultFailureReasons", () => {
+      it("collapses a reason repeated across fields", () => {
+        expect(
+          prResultFailureReasons({
+            error: "boom",
+            workflow_errors: ["boom"],
+            custom_file_errors: [],
+          })
+        ).toEqual(["boom"]);
+      });
+
+      it("ignores blank and missing fields", () => {
+        expect(prResultFailureReasons({ error: "   ", workflow_errors: null })).toEqual([]);
+        expect(prResultFailureReasons(undefined)).toEqual([]);
+      });
     });
   });
 });

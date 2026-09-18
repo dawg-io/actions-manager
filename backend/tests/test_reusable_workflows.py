@@ -245,3 +245,57 @@ class TestReusableWorkflows:
             
         finally:
             db.close()
+    def test_edit_to_an_owned_reusable_workflow_saves_with_the_feature_off(self):
+        """A project that already owns a reusable workflow keeps edits to it.
+
+        The toggle gates *authoring new* reusable workflows. A caller project can
+        own one (imported, or left from a previous setting) and the editor now
+        shows it, so dropping the edit here loses the user's work while the save
+        reports success.
+        """
+        client = TestClient(app)
+        base = {
+            "project_name": "owns_reusable",
+            "github_user": "testuser",
+            "selected_repos": ["test-repo"],
+            "workflows": [
+                {"name": "caller", "content": "name: Caller\non: push\njobs:\n  a:\n    runs-on: ubuntu-latest"}
+            ],
+            "branch_regex": "",
+            "branch_option": "default",
+        }
+
+        created = client.post("/api/projects/", json={
+            **base,
+            "rxworkflows": [{"name": "shared", "content": "name: Shared\non:\n  workflow_call:\n"}],
+            "reusable_workflows_enabled": True,
+        })
+        assert created.status_code == 200
+        project_id = created.json()["project_id"]
+
+        # Same project, feature now off, reusable workflow edited.
+        edited = client.post("/api/projects/", json={
+            **base,
+            "rxworkflows": [
+                {"name": "shared", "content": "name: Shared\non:\n  workflow_call:\njobs:\n  b:\n    runs-on: ubuntu-latest\n"},
+                {"name": "brand_new", "content": "name: New\non:\n  workflow_call:\n"},
+            ],
+            "reusable_workflows_enabled": False,
+        })
+        assert edited.status_code == 200
+
+        db = TestingSessionLocal()
+        try:
+            owned = (
+                db.query(Workflow)
+                .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+                .filter(ProjectWorkflow.project_id == project_id,
+                        Workflow.workflow_name == "shared")
+                .one()
+            )
+            assert "runs-on: ubuntu-latest" in owned.workflow_yaml
+
+            # A workflow the project does not own yet still needs the feature on.
+            assert db.query(Workflow).filter(Workflow.workflow_name == "brand_new").first() is None
+        finally:
+            db.close()

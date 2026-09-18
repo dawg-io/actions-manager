@@ -107,7 +107,7 @@ class TestSecureConnectionValidation:
         assert exc_info.value.status_code == 400
         assert "PAT login over non-local HTTP is disabled" in exc_info.value.detail
         assert "ALLOW_INSECURE_HTTP" in exc_info.value.detail
-        
+
     def test_validate_secure_connection_blocks_domain_http(self):
         """Test that domain HTTP connections are blocked"""
         request = Mock(spec=Request)
@@ -119,6 +119,11 @@ class TestSecureConnectionValidation:
         
         assert exc_info.value.status_code == 400
         assert "PAT login over non-local HTTP is disabled" in exc_info.value.detail
+        # A proxy that did not forward the scheme is the usual cause, so the
+        # message names the header and links the fix. The frontend keys its
+        # help link off "non-local HTTP", asserted above.
+        assert "X-Forwarded-Proto" in exc_info.value.detail
+        assert auth.HTTPS_SETUP_DOCS_URL in exc_info.value.detail
         
     @patch.dict(os.environ, {"ALLOW_INSECURE_HTTP": "true"})
     def test_validate_secure_connection_with_override_enabled(self):

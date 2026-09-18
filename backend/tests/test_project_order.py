@@ -306,6 +306,63 @@ class TestNewAndDeletedProjects:
         # Appended last despite having the newest updated_at.
         assert _list_order(client) == ["beta", "alpha", "brandnew"]
 
+    def test_a_project_created_later_stops_moving_once_it_has_been_listed(self, client):
+        """Seeding used to run once per user, so projects created afterwards kept
+        falling back to updated_at and swapped places whenever one was edited."""
+        db = TestingSessionLocal()
+        admin = _make_user(db, ADMIN)
+        _make_projects(db, admin, ["alpha", "beta"])
+        db.close()
+
+        # First listing seeds alpha and beta.
+        _list_order(client)
+
+        db = TestingSessionLocal()
+        owner = db.query(Account).filter(Account.github_user == ADMIN).first()
+        rwx, caller = _make_projects(db, owner, ["rwxproject", "callerproject"])
+        db.close()
+
+        before = _list_order(client)
+        assert before == ["beta", "alpha", "callerproject", "rwxproject"]
+
+        # Editing a workflow in the reusable-workflow project touches its
+        # updated_at; its card must not move past its neighbour.
+        db = TestingSessionLocal()
+        edited = db.query(Project).filter(Project.project_id == rwx.project_id).first()
+        edited.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.close()
+
+        assert _list_order(client) == before
+
+    def test_a_later_project_is_seeded_after_the_existing_positions(self, client):
+        db = TestingSessionLocal()
+        admin = _make_user(db, ADMIN)
+        alpha, beta = _make_projects(db, admin, ["alpha", "beta"])
+        db.close()
+
+        _put_order(client, [beta.project_id, alpha.project_id])
+
+        db = TestingSessionLocal()
+        owner = db.query(Account).filter(Account.github_user == ADMIN).first()
+        (brandnew,) = _make_projects(db, owner, ["brandnew"])
+        db.close()
+
+        _list_order(client)
+
+        db = TestingSessionLocal()
+        positions = {
+            row.project_id: row.position
+            for row in db.query(ProjectDisplayOrder).all()
+        }
+        db.close()
+        # Existing positions untouched, the new project appended after them.
+        assert positions == {
+            beta.project_id: 0,
+            alpha.project_id: 1,
+            brandnew.project_id: 2,
+        }
+
     def test_deleting_a_project_removes_its_ordering_rows(self, client):
         # Removed both by the endpoint's explicit delete and by ON DELETE
         # CASCADE, which actually fires now that SQLite foreign keys are

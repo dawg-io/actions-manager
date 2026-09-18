@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { vi } from "vitest";
-import CustomFiles from "./CustomFiles";
+import CustomFiles, { CustomFilePanel } from "./CustomFiles";
 import * as api from "../api/customFiles";
 
 vi.mock("./PlainFileEditor", () => ({
@@ -179,6 +179,160 @@ describe("CustomFiles", () => {
     expect(screen.getByTestId("custom-file-row")).toBeInTheDocument();
     // No pending-delete badge on a clean synced file
     expect(screen.queryByTestId("pending-delete-badge")).not.toBeInTheDocument();
+  });
+
+  describe("removal scope", () => {
+    const syncedFile = () =>
+      mockFile({ file_status: "synced_with_github", git_hash: "a".repeat(40) });
+
+    const openRemovalDialog = (file: api.CustomFile) => {
+      render(<CustomFiles {...defaultProps} initialFiles={[file]} />);
+      fireEvent.click(screen.getByTestId("custom-file-row"));
+      fireEvent.click(screen.getByTestId("delete-button"));
+    };
+
+    test("delete opens the scope dialog with the safe option preselected", () => {
+      openRemovalDialog(syncedFile());
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByLabelText("Remove from ActionsManager only")).toBeChecked();
+      expect(api.deleteCustomFile).not.toHaveBeenCalled();
+    });
+
+    test("project-scoped removal drops the row and leaves the file in GitHub", async () => {
+      vi.mocked(api.deleteCustomFile).mockResolvedValue({ deleted: true, hard_deleted: true });
+      const onChange = vi.fn();
+      const file = syncedFile();
+
+      render(<CustomFiles {...defaultProps} initialFiles={[file]} onChange={onChange} />);
+      fireEvent.click(screen.getByTestId("custom-file-row"));
+      fireEvent.click(screen.getByTestId("delete-button"));
+      fireEvent.click(screen.getByRole("button", { name: /Remove from ActionsManager/i }));
+
+      await waitFor(() => {
+        expect(api.deleteCustomFile).toHaveBeenCalledWith(42, file.id, "project", "campaign");
+      });
+      // The list updates from the response, with no refetch and no reload.
+      expect(onChange).toHaveBeenCalledWith([]);
+    });
+
+    test("delete-everywhere defaults to a PR Campaign", async () => {
+      vi.mocked(api.deleteCustomFile).mockResolvedValue({
+        deleted: false,
+        pending_delete: true,
+        custom_file: { ...syncedFile(), pending_delete: true },
+        campaign_id: 7,
+        prs_created: 2,
+      });
+      const onChange = vi.fn();
+
+      render(<CustomFiles {...defaultProps} initialFiles={[syncedFile()]} onChange={onChange} />);
+      fireEvent.click(screen.getByTestId("custom-file-row"));
+      fireEvent.click(screen.getByTestId("delete-button"));
+      fireEvent.click(screen.getByLabelText("Delete from ActionsManager and GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /Delete Everywhere/i }));
+
+      await waitFor(() => {
+        expect(api.deleteCustomFile).toHaveBeenCalledWith(42, 1, "project_and_github", "campaign");
+      });
+      // The row stays until the PR merges, so Restore still has something to act on.
+      expect(onChange).toHaveBeenCalledWith([
+        expect.objectContaining({ pending_delete: true }),
+      ]);
+    });
+
+    test("delete-everywhere can commit the removal directly instead", async () => {
+      vi.mocked(api.deleteCustomFile).mockResolvedValue({
+        deleted: true,
+        hard_deleted: true,
+        targets: [{ repo: "acme/app", branch: "main", status: "deleted" }],
+      });
+      const onChange = vi.fn();
+
+      render(<CustomFiles {...defaultProps} initialFiles={[syncedFile()]} onChange={onChange} />);
+      fireEvent.click(screen.getByTestId("custom-file-row"));
+      fireEvent.click(screen.getByTestId("delete-button"));
+      fireEvent.click(screen.getByLabelText("Delete from ActionsManager and GitHub"));
+      fireEvent.click(screen.getByLabelText("Commit directly to the target branch"));
+      fireEvent.click(screen.getByRole("button", { name: /Delete Everywhere/i }));
+
+      await waitFor(() => {
+        expect(api.deleteCustomFile).toHaveBeenCalledWith(42, 1, "project_and_github", "direct");
+      });
+      // Gone from GitHub, so gone from the list — no pending-delete row left behind.
+      expect(onChange).toHaveBeenCalledWith([]);
+    });
+
+    test("reports the new project state so Create PR Campaign enables without a reload", async () => {
+      vi.mocked(api.deleteCustomFile).mockResolvedValue({
+        deleted: false,
+        pending_delete: true,
+        custom_file: { ...syncedFile(), pending_delete: true },
+        campaign_id: 7,
+        prs_created: 2,
+        pr_state: "draft",
+      });
+      const onProjectStateChange = vi.fn();
+
+      render(
+        <CustomFiles
+          {...defaultProps}
+          initialFiles={[syncedFile()]}
+          onChange={vi.fn()}
+          onProjectStateChange={onProjectStateChange}
+        />
+      );
+      fireEvent.click(screen.getByTestId("custom-file-row"));
+      fireEvent.click(screen.getByTestId("delete-button"));
+      fireEvent.click(screen.getByLabelText("Delete from ActionsManager and GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /Delete Everywhere/i }));
+
+      await waitFor(() => expect(onProjectStateChange).toHaveBeenCalledWith("draft"));
+    });
+
+    test("GitHub option is disabled for a file GitHub has never seen", () => {
+      openRemovalDialog(mockFile({ file_status: "new", git_hash: null }));
+
+      expect(screen.getByLabelText("Delete from ActionsManager and GitHub")).toBeDisabled();
+    });
+
+    test("the warning matches the delivery the user picked", () => {
+      openRemovalDialog(syncedFile());
+      fireEvent.click(screen.getByLabelText("Delete from ActionsManager and GitHub"));
+
+      // A pull request can be closed and the file restored until it merges.
+      // Said in both the delivery option and the amber warning.
+      expect(screen.getAllByText(/you can Restore it here until then/).length).toBeGreaterThan(0);
+      expect(screen.queryByText(/cannot be undone/i)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByLabelText("Commit directly to the target branch"));
+
+      // A direct commit really is permanent.
+      expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
+    });
+
+    test("CustomFilePanel tells its parent to clear the selection when the row is gone", async () => {
+      vi.mocked(api.deleteCustomFile).mockResolvedValue({ deleted: true, hard_deleted: true });
+      const onRemoved = vi.fn();
+      const file = syncedFile();
+
+      render(
+        <CustomFilePanel
+          cf={file}
+          allFiles={[file]}
+          projectId={42}
+          githubUser="testuser"
+          onChange={vi.fn()}
+          onRemoved={onRemoved}
+        />
+      );
+      fireEvent.click(screen.getByTestId("delete-button"));
+      fireEvent.click(screen.getByRole("button", { name: /Remove from ActionsManager/i }));
+
+      // Without this the parent keeps an id that no longer exists and the panel
+      // silently renders the "add file" form in place of the removed file.
+      await waitFor(() => expect(onRemoved).toHaveBeenCalled());
+    });
   });
 
   test("prop update replaces previous list (no stale internal state)", () => {

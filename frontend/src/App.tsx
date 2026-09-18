@@ -22,6 +22,7 @@ import type { TourStepId } from "./utils/tour";
 import config from "./config";
 import { isUninitialized } from "./api/setup";
 import PermissionAlert from "./components/PermissionAlert";
+import TokenErrorMessage from "./components/TokenErrorMessage";
 import ToastContainer from "./components/Toast";
 import { getDocsUrl } from "./help/helpLinks";
 
@@ -366,7 +367,7 @@ function App(): React.ReactElement {
                                 </p>
                                 <a
                                   className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline mt-1 inline-block"
-                                  href="https://actionsmanager.io/getting-started/https-setup.html"
+                                  href={getDocsUrl("httpsSetup")}
                                   rel="noreferrer"
                                   target="_blank"
                                 >
@@ -423,7 +424,7 @@ function App(): React.ReactElement {
                         </a>
                         {githubTokenLoginError && (
                           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
-                            {githubTokenLoginError}
+                            <TokenErrorMessage message={githubTokenLoginError} />
                           </div>
                         )}
                         {canRestore && (

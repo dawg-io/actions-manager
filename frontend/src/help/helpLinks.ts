@@ -18,6 +18,7 @@ export const HELP_TOPICS = {
   installation: "/getting-started/installation.html",
   patSetup: "/getting-started/github-pat-setup.html",
   oauthSetup: "/getting-started/github-oauth-setup.html",
+  httpsSetup: "/getting-started/https-setup.html",
 
   // Features
   projects: "/features/projects.html",

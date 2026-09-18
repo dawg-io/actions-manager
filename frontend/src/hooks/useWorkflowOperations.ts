@@ -4,6 +4,7 @@ import { Workflow, RXWorkflow, DetectedBuildResult, BuildType, WorkflowTemplate 
 import { RwxWorkflow, unlinkReusableWorkflow } from '../api/projects';
 import { saveDraftWorkflow, commitAndUpdatePRWorkflow, commitAndUpdatePRLinkedWorkflow, saveDraftLinkedWorkflow, deleteWorkflow, createBlankWorkflow } from '../utils/workflowOperations';
 import { detectBuildTypesForRepos, addWorkflowFromDetection, generateTemplates, selectTemplate } from '../utils/buildDetectionUtils';
+import type { RemovalDelivery, RemovalScope } from '../components/RemovalScopeDialog';
 import { tour } from '../utils/tour';
 
 export interface UseWorkflowOperationsProps {
@@ -35,6 +36,9 @@ export interface UseWorkflowOperationsProps {
   setIsDetecting: (detecting: boolean) => void;
   setIsGeneratingTemplates: (generating: boolean) => void;
   refreshProjectsList?: () => Promise<void>;
+  /** Reloads the project itself, so state seeded by the project-load endpoint
+   *  (drift names above all) is corrected after a removal. */
+  refreshProjectData?: () => Promise<void>;
   onProjectStateChange?: (state: string) => void;
   branchOption?: string;
 }
@@ -69,6 +73,7 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     setIsDetecting,
     setIsGeneratingTemplates,
     refreshProjectsList,
+    refreshProjectData,
     onProjectStateChange,
     branchOption = "default"
   } = props;
@@ -85,10 +90,34 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     }
   }, [user, projectName, accountType, setWorkflowsCount]);
 
-  // Save Draft functionality wrapper
-  const handleSaveDraftWorkflow = useCallback(async (index: number | null, type: 'regular' | 'reusable'): Promise<void> => {
+  // Save Draft functionality wrapper.
+  //
+  // A rename is verified where the user performs it — the editor's name field —
+  // not here. By the time a name reaches this save it has already been through
+  // the impact dialog, so prompting again would ask the same question twice.
+  //
+  // `renamedTo` is that rename. Confirming it is the commit, so the editor calls
+  // this in the same tick as the state update that applies the new name — and
+  // that update is not readable from this render's closure, so `workflows` here
+  // still holds the old one. Saving it would persist the name the user just
+  // replaced. Patching the array is what makes the save see what the user
+  // confirmed; it is not a second source of truth, because React state is still
+  // updated by handleWorkflowChange.
+  const handleSaveDraftWorkflow = useCallback(async (
+    index: number | null,
+    type: 'regular' | 'reusable',
+    renamedTo?: string,
+  ): Promise<void> => {
+    const applyRename = <T extends { name?: string }>(list: T[]): T[] =>
+      renamedTo === undefined || index === null
+        ? list
+        : list.map((w, i) => (i === index ? { ...w, name: renamedTo } : w));
+
     await saveDraftWorkflow(
-      index, type, workflows, rxworkflows, user, projectName, accountType, 
+      index, type,
+      type === 'regular' ? applyRename(workflows) : workflows,
+      type === 'reusable' ? applyRename(rxworkflows) : rxworkflows,
+      user, projectName, accountType,
       markWorkflowAsSaved, fetchWorkflowsCount, refreshProjectsList, onProjectStateChange
     );
   }, [workflows, rxworkflows, user, projectName, accountType, markWorkflowAsSaved, fetchWorkflowsCount, refreshProjectsList, onProjectStateChange]);
@@ -118,13 +147,20 @@ export const useWorkflowOperations = (props: UseWorkflowOperationsProps) => {
     return saveDraftLinkedWorkflow(index, linkedWorkflows, user, projectName, setLinkedWorkflows, refreshProjectsList);
   }, [linkedWorkflows, user, projectName, setLinkedWorkflows, refreshProjectsList]);
 
-  // Delete workflow functionality wrapper
-  const handleDeleteWorkflow = useCallback(async (index: number, type: 'regular' | 'reusable'): Promise<void> => {
-    await deleteWorkflow(
-      index, type, workflows, rxworkflows, user, projectName, selectedRepos, 
-      regexPattern, setWorkflows, setRXWorkflows, setSelectedWorkflowId
-    );
-  }, [workflows, rxworkflows, user, projectName, selectedRepos, regexPattern, setWorkflows, setRXWorkflows, setSelectedWorkflowId]);
+  // Delete workflow functionality wrapper. `scope` is required — an omitted
+  // scope must never silently mean "delete from GitHub too".
+  const handleDeleteWorkflow = useCallback(async (
+    index: number,
+    type: 'regular' | 'reusable',
+    scope: RemovalScope,
+    delivery: RemovalDelivery = 'campaign'
+  ): Promise<void> => {
+    await deleteWorkflow({
+      index, type, workflows, rxworkflows, user, projectName, selectedRepos,
+      regexPattern, scope, delivery, setWorkflows, setRXWorkflows, setSelectedWorkflowId,
+      fetchWorkflowsCount, refreshProjectData,
+    });
+  }, [workflows, rxworkflows, user, projectName, selectedRepos, regexPattern, setWorkflows, setRXWorkflows, setSelectedWorkflowId, fetchWorkflowsCount, refreshProjectData]);
 
   // Unlink a linked reusable workflow from the current project
   const handleUnlinkWorkflow = useCallback(async (workflowId: number): Promise<void> => {

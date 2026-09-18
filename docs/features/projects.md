@@ -166,6 +166,23 @@ first and that arrangement is saved as your starting point.
 
 Access to a project is tied to your GitHub authentication. You can only manage repositories that your configured GitHub token or OAuth session can access.
 
+### Renaming a Project
+
+A project's display name is editable in place from the project sidebar. The project
+code is not — it is fixed at creation, and the workflow filenames delivered in
+[prefix mode]({% link features/workflows.md %}#workflow-names-across-projects) are
+built from it, so a project rename never renames or rewrites a managed file.
+
+It is not completely invisible to your repositories, though. ActionsManager writes the
+project name into each campaign pull request's description, as a link back to the
+project's PR Campaigns view. Pull requests opened before the rename keep the old name,
+and their link no longer resolves; pull requests opened after it carry the new one.
+Rename between campaigns if that matters to your reviewers.
+
+Renaming a project requires **editor** access to it. Project viewers can open the
+project and read it, but the rename is rejected. Project owners and workspace admins
+always qualify.
+
 ## Related Topics
 
 - [Workflows]({% link features/workflows.md %}) — manage workflow content across project repositories

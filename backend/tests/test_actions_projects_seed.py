@@ -2,12 +2,15 @@
 Tests for the default Actions Projects seed migration.
 
 Covers:
-- Fresh DB gets the system account + 7 seeded rows
+- Fresh DB gets the system account + the full seeded catalog
 - Running it twice is a no-op
 - Deleting the seeded rows and re-running does NOT recreate them
   (the system account's existence is the idempotency marker, not row count)
+- branding_icon/branding_color are seeded for actions that declare a branding
+  block, and left NULL for the ones that don't
 """
 
+import json
 import os
 import sys
 
@@ -48,7 +51,7 @@ class TestSeedDefaultActionsProjects:
             assert len(accounts) == 1
 
             projects = db.execute(text("SELECT name, owner, repo FROM actions_projects")).fetchall()
-            assert len(projects) == 7
+            assert len(projects) == len(seed_migration.SEED_ACTIONS)
             slugs = {(row.owner, row.repo) for row in projects}
             assert slugs == {
                 ("actions", "checkout"),
@@ -58,7 +61,33 @@ class TestSeedDefaultActionsProjects:
                 ("actions", "cache"),
                 ("actions", "upload-artifact"),
                 ("actions", "download-artifact"),
+                ("dawg-io", "am-build-vars"),
             }
+        finally:
+            db.close()
+
+    def test_branding_is_seeded_only_for_actions_that_declare_it(self, tmp_path):
+        db_url, engine = _fresh_sqlite_db(tmp_path)
+
+        seed_migration.run_migration(database_url=db_url)
+
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            row = db.execute(text(
+                "SELECT branding_icon, branding_color, inputs_json, ref, source_url"
+                " FROM actions_projects WHERE repo = 'am-build-vars'"
+            )).fetchone()
+            assert (row.branding_icon, row.branding_color) == ("shield", "purple")
+            assert row.ref == "v1.0.0"
+            assert row.source_url == "https://github.com/dawg-io/am-build-vars/blob/v1.0.0/action.yml"
+            assert "load-shared" in {i["name"] for i in json.loads(row.inputs_json)}
+
+            unbranded = db.execute(text(
+                "SELECT branding_icon, branding_color FROM actions_projects WHERE repo = 'checkout'"
+            )).fetchone()
+            assert unbranded.branding_icon is None
+            assert unbranded.branding_color is None
         finally:
             db.close()
 
@@ -72,7 +101,7 @@ class TestSeedDefaultActionsProjects:
         db = Session()
         try:
             count = db.execute(text("SELECT COUNT(*) FROM actions_projects")).scalar()
-            assert count == 7
+            assert count == len(seed_migration.SEED_ACTIONS)
         finally:
             db.close()
 

@@ -149,6 +149,35 @@ export const SAMPLE_WORKFLOW = {
   workflowStatus: "saved",
 };
 
+/**
+ * POST /api/workflows/rename-impact.
+ *
+ * Written out field for field from `RenameImpactResponse` in
+ * backend/workflows.py — NOT from the `RenameImpact` TypeScript interface.
+ * Deriving the fixture from the interface is how `overrides` came to be read
+ * as `override_repos`: the type and every fixture typed from it agreed with
+ * each other and disagreed with the server, and `.length` on the missing array
+ * threw during render, blanking the whole app.
+ */
+export const RENAME_IMPACT = {
+  classification: "delivered",
+  blocked_reason: null,
+  old_filename: "ci.yml",
+  new_filename: "ci-v2.yml",
+  targets: [
+    {
+      repo: "octocat/hello-world",
+      branch: "main",
+      old_file_present: true,
+      new_file_present: false,
+      confirmed_present_at: "2025-01-02T00:00:00+00:00",
+    },
+  ],
+  consumers: [],
+  overrides: [],
+  warnings: [],
+};
+
 // ---- Managed Actions (Actions Projects) test data ----------------------------
 
 export interface ActionInputStub {
@@ -252,6 +281,15 @@ export interface MockState {
   lastProjectCreateRequest?: Record<string, any>;
   failNextSave?: boolean;
   failProjectsList?: boolean;
+  /** Response for POST /api/workflows/rename-impact — override to test a blocked rename. */
+  renameImpact?: Record<string, unknown>;
+  /**
+   * Body of the last POST /api/save-workflows. Whether a rename was actually
+   * committed, and under which name, only leaves the browser in this request —
+   * asserting it is the only way to prove the save carried what the user
+   * confirmed rather than the name it replaced.
+   */
+  lastSaveWorkflowsRequest?: Record<string, any>;
 }
 
 export function createMockState(initial: Partial<MockState> = {}): MockState {
@@ -272,6 +310,7 @@ export function createMockState(initial: Partial<MockState> = {}): MockState {
     campaignExtras: initial.campaignExtras,
     failNextSave: initial.failNextSave ?? false,
     failProjectsList: initial.failProjectsList ?? false,
+    renameImpact: initial.renameImpact ?? RENAME_IMPACT,
   };
 }
 
@@ -575,6 +614,29 @@ export async function installApiMocks(
             target_branch: t.target_branch,
             reason: t.reason ?? "not invertible",
           })),
+      });
+    },
+  );
+
+  // What a rename would do. The editor's name field asks before it takes the
+  // new name, so this answers every rename in the suite.
+  await page.route(
+    apiPath((p) => p === "/api/workflows/rename-impact"),
+    (route) => jsonResponse(route, state.renameImpact ?? RENAME_IMPACT),
+  );
+
+  // The local commit. Confirming a rename performs one, so this is on the
+  // rename path now, not only behind Commit Locally.
+  await page.route(
+    apiPath((p) => p === "/api/save-workflows"),
+    (route) => {
+      if (route.request().method() !== "OPTIONS") {
+        state.lastSaveWorkflowsRequest = route.request().postDataJSON() ?? {};
+      }
+      return jsonResponse(route, {
+        message: "Workflows saved",
+        project_id: state.projects[0]?.project_id ?? 1,
+        pr_state: "draft",
       });
     },
   );

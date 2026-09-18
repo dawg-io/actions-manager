@@ -541,7 +541,7 @@ class TestCodeownersMergedIntoRepoPR:
              patch("workflows.github_get", return_value=not_found), \
              patch("workflows.requests.put", return_value=put_ok), \
              patch("workflows._check_existing_pr", return_value=None), \
-             patch("workflows._create_pull_request", return_value=new_pr):
+             patch("workflows._create_pull_request", return_value=(new_pr, None)):
             results = _process_regular_workflows_update(
                 repo_names=["whatsupdawg/repo-a"],
                 workflows=[],

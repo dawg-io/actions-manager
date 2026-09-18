@@ -11,10 +11,13 @@ Covers:
 - Drift detection behavior for imported workflows
 """
 
+import base64
 import os
 import sys
 import json
 from unittest.mock import patch, MagicMock
+
+import requests
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,6 +31,7 @@ os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("INSTALLATION_MODE", "cloud")
 
 from main import app  # noqa: E402
+import workflow_import  # noqa: E402
 from workflow_import import get_db as import_get_db  # noqa: E402
 from workflows import get_db as wf_get_db, _compare_workflow_content  # noqa: E402
 from projects import get_db as proj_get_db  # noqa: E402
@@ -55,6 +59,24 @@ def override_get_db():
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _stub_github_blob_reads():
+    """Keep unpatched GitHub reads off the network.
+
+    Discovery reads each discovered workflow's blob to flag reusable workflows,
+    so every scanning test would otherwise reach api.github.com. Tests that care
+    about a specific response patch ``workflow_import.requests.get`` themselves -
+    an inner patch still wins over this one.
+    """
+    workflow_import._REUSABLE_BLOB_CACHE.clear()
+    with patch("workflow_import.requests.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=404, json=MagicMock(return_value={})
+        )
+        yield mock_get
+    workflow_import._REUSABLE_BLOB_CACHE.clear()
 
 
 def _setup_project(db, *, use_prefix=True, project_code="TP01"):
@@ -1145,3 +1167,422 @@ class TestImportDefaultTargetRepos:
         assert mock_create_prs.called
         pr_request_arg = mock_create_prs.call_args[0][0]
         assert "owner/repo1" in pr_request_arg.selected_repos
+
+
+# ---------------------------------------------------------------------------
+# Reusable workflow import (issue: reusable workflows silently lost on import)
+# ---------------------------------------------------------------------------
+
+REUSABLE_YAML = "name: Shared\non:\n  workflow_call:\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+CALLER_YAML = "name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+
+
+def _blob_response(content: str):
+    """A GitHub blob/contents response carrying ``content``."""
+    encoded = base64.b64encode(content.encode()).decode()
+    return MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"content": encoded, "sha": "shaREUSE"}),
+    )
+
+
+def _add_rwx_project(db, user_id, name="SharedWorkflows", code="RWX1"):
+    """A Reusable Workflow Project owned by the same user, with its own repo."""
+    project = Project(
+        project_name=name,
+        project_code=code,
+        user_id=user_id,
+        branch_option="default",
+        use_prefix=True,
+        pr_state="new",
+        project_type="rwx",
+        reusable_workflows_enabled=True,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    repo = Repo(repo_name="owner/shared-workflows")
+    db.add(repo)
+    db.commit()
+    db.refresh(repo)
+    db.add(ProjectRepo(project_id=project.project_id, repo_id=repo.repo_id))
+    db.commit()
+    return project.project_id
+
+
+def _import_payload(**overrides):
+    payload = {
+        "github_user": "testuser",
+        "project_name": "TestProject",
+        "workflows": [{
+            "source_repo": "owner/repo1",
+            "source_branch": "main",
+            "workflow_path": ".github/workflows/shared-workflow.yml",
+        }],
+        "import_mode": "save_local_only",
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestDiscoveryFlagsReusableWorkflows:
+    """Discovery labels `workflow_call` files so the UI can route them."""
+
+    def test_discover_flags_reusable_workflow(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        shas = {"shared-workflow.yml": "shaREUSE", "ci.yml": "shaCALL"}
+        blobs = {
+            "shaREUSE": _blob_response(REUSABLE_YAML),
+            "shaCALL": _blob_response(CALLER_YAML),
+        }
+
+        def fake_get(url, **_kwargs):
+            return blobs["shaREUSE" if "shaREUSE" in url else "shaCALL"]
+
+        with patch("workflow_import.get_all_workflow_shas", return_value=shas), \
+             patch("workflow_import.get_default_branch", return_value="main"), \
+             patch("workflow_import.requests.get", side_effect=fake_get):
+            resp = client.get(
+                f"/api/projects/{project_id}/workflow-import/discover",
+                params={"github_user": "testuser", "project_name": "TestProject"},
+            )
+
+        assert resp.status_code == 200
+        by_name = {
+            wf["file_name"]: wf["is_reusable"]
+            for repo_result in resp.json()["results"]
+            for wf in repo_result["workflows"]
+        }
+        assert by_name == {"shared-workflow.yml": True, "ci.yml": False}
+
+    def test_identical_blob_across_repos_is_read_once(self):
+        """The same file in every repo is one blob read, not one per repo."""
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        second = Repo(repo_name="owner/repo2")
+        db.add(second)
+        db.commit()
+        db.refresh(second)
+        db.add(ProjectRepo(project_id=project_id, repo_id=second.repo_id))
+        db.commit()
+        db.close()
+
+        mock_get = MagicMock(return_value=_blob_response(REUSABLE_YAML))
+        with patch("workflow_import.get_all_workflow_shas",
+                   return_value={"shared-workflow.yml": "shaREUSE"}), \
+             patch("workflow_import.get_default_branch", return_value="main"), \
+             patch("workflow_import.requests.get", mock_get):
+            resp = client.get(
+                f"/api/projects/{project_id}/workflow-import/discover",
+                params={"github_user": "testuser", "project_name": "TestProject"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["workflows_found"] == 2
+        assert mock_get.call_count == 1
+
+    def test_unreadable_blob_does_not_fail_the_scan(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        with patch("workflow_import.get_all_workflow_shas",
+                   return_value={"ci.yml": "shaCALL"}), \
+             patch("workflow_import.get_default_branch", return_value="main"), \
+             patch("workflow_import.requests.get",
+                   side_effect=requests.RequestException("boom")):
+            resp = client.get(
+                f"/api/projects/{project_id}/workflow-import/discover",
+                params={"github_user": "testuser", "project_name": "TestProject"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["results"][0]["workflows"][0]["is_reusable"] is False
+
+
+class TestImportReusableIntoCallerProject:
+    """A caller project accepts every workflow file, reusable ones included."""
+
+    def test_reusable_workflow_lands_in_the_caller_project(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(),
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["results"][0]["status"] == "success"
+        assert resp.json()["destination_project_name"] is None
+
+        db = TestingSessionLocal()
+        saved = (
+            db.query(Workflow)
+            .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+            .filter(ProjectWorkflow.project_id == project_id)
+            .one()
+        )
+        assert saved.workflow_name == "shared-workflow"
+        assert saved.reusable_workflow is True
+        db.close()
+
+
+class TestImportRedirectedToReusableProject:
+    """The "file it where it belongs" path from the import panel."""
+
+    def test_reusable_workflow_is_written_to_the_rwx_project(self):
+        db = TestingSessionLocal()
+        user_id, project_id, _repo_id = _setup_project(db)
+        rwx_project_id = _add_rwx_project(db, user_id)
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(destination_project_id=rwx_project_id),
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["results"][0]["status"] == "success"
+        assert body["destination_project_name"] == "SharedWorkflows"
+
+        db = TestingSessionLocal()
+        # The workflow belongs to the RWX project, and the caller project is
+        # left exactly as it was.
+        assert db.query(ProjectWorkflow).filter_by(project_id=project_id).count() == 0
+        saved = (
+            db.query(Workflow)
+            .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+            .filter(ProjectWorkflow.project_id == rwx_project_id)
+            .one()
+        )
+        assert saved.reusable_workflow is True
+        assert db.query(Project).filter_by(project_id=project_id).one().pr_state == "new"
+        assert db.query(Project).filter_by(project_id=rwx_project_id).one().pr_state == "draft"
+        db.close()
+
+    def test_redirect_to_a_caller_project_is_rejected(self):
+        db = TestingSessionLocal()
+        user_id, project_id, _repo_id = _setup_project(db)
+        other = Project(
+            project_name="OtherCaller",
+            project_code="TP02",
+            user_id=user_id,
+            branch_option="default",
+            pr_state="new",
+            project_type="standard",
+        )
+        db.add(other)
+        db.commit()
+        db.refresh(other)
+        other_project_id = other.project_id
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(destination_project_id=other_project_id),
+            )
+
+        assert resp.status_code == 400
+        assert "Reusable Workflow Project" in resp.json()["detail"]
+
+    def test_redirect_rejects_pr_campaign_mode(self):
+        db = TestingSessionLocal()
+        user_id, project_id, _repo_id = _setup_project(db)
+        rwx_project_id = _add_rwx_project(db, user_id)
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(
+                    destination_project_id=rwx_project_id,
+                    import_mode="save_and_create_pr_campaign",
+                ),
+            )
+
+        assert resp.status_code == 400
+        assert "save_local_only" in resp.json()["detail"]
+
+    def test_unknown_destination_is_rejected(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(destination_project_id=999999),
+            )
+
+        assert resp.status_code == 404
+
+
+class TestRedirectDoesNotOverwrite:
+    """A shared reusable workflow is never silently rewritten by an import."""
+
+    def test_name_collision_in_the_destination_is_refused(self):
+        db = TestingSessionLocal()
+        user_id, project_id, _repo_id = _setup_project(db)
+        rwx_project_id = _add_rwx_project(db, user_id)
+        existing_id = _add_managed_workflow(
+            db, rwx_project_id, "shared-workflow", workflow_yaml="name: canonical\non: workflow_call\n"
+        )
+        db.query(Workflow).filter_by(workflow_id=existing_id).update(
+            {"reusable_workflow": True, "workflow_status": "synced_with_github",
+             "workflow_git_hash": "a" * 40}
+        )
+        db.commit()
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(destination_project_id=rwx_project_id),
+            )
+
+        assert resp.status_code == 200
+        result = resp.json()["results"][0]
+        assert result["status"] == "error"
+        assert "already has a workflow named" in result["message"]
+
+        db = TestingSessionLocal()
+        untouched = db.query(Workflow).filter_by(workflow_id=existing_id).one()
+        assert untouched.workflow_yaml == "name: canonical\non: workflow_call\n"
+        assert untouched.workflow_status == "synced_with_github"
+        assert untouched.workflow_git_hash == "a" * 40
+        db.close()
+
+
+class TestBlobClassificationCache:
+    """Blob SHAs are content hashes, so a classification is read once per SHA."""
+
+    def test_second_scan_reads_no_blobs(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        mock_get = MagicMock(return_value=_blob_response(REUSABLE_YAML))
+        params = {"github_user": "testuser", "project_name": "TestProject"}
+        with patch("workflow_import.get_all_workflow_shas",
+                   return_value={"shared-workflow.yml": "shaREUSE"}), \
+             patch("workflow_import.get_default_branch", return_value="main"), \
+             patch("workflow_import.requests.get", mock_get):
+            first = client.get(f"/api/projects/{project_id}/workflow-import/discover", params=params)
+            calls_after_first = mock_get.call_count
+            second = client.get(f"/api/projects/{project_id}/workflow-import/discover", params=params)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert calls_after_first == 1
+        assert mock_get.call_count == 1
+        assert second.json()["results"][0]["workflows"][0]["is_reusable"] is True
+
+    def test_unreadable_blob_is_not_cached(self):
+        """A transient failure must not stick for the life of the process."""
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        params = {"github_user": "testuser", "project_name": "TestProject"}
+        responses = [MagicMock(status_code=500, json=MagicMock(return_value={})),
+                     _blob_response(REUSABLE_YAML)]
+        with patch("workflow_import.get_all_workflow_shas",
+                   return_value={"shared-workflow.yml": "shaREUSE"}), \
+             patch("workflow_import.get_default_branch", return_value="main"), \
+             patch("workflow_import.requests.get", side_effect=responses):
+            first = client.get(f"/api/projects/{project_id}/workflow-import/discover", params=params)
+            second = client.get(f"/api/projects/{project_id}/workflow-import/discover", params=params)
+
+        assert first.json()["results"][0]["workflows"][0]["is_reusable"] is False
+        assert second.json()["results"][0]["workflows"][0]["is_reusable"] is True
+
+
+class TestRedirectedImportNaming:
+    """A redirected import must not carry the source project's prefix along."""
+
+    def test_source_prefix_is_stripped_before_saving_elsewhere(self):
+        db = TestingSessionLocal()
+        user_id, project_id, _repo_id = _setup_project(db, use_prefix=True, project_code="TP01")
+        rwx_project_id = _add_rwx_project(db, user_id)
+        db.close()
+
+        payload = _import_payload(destination_project_id=rwx_project_id)
+        payload["workflows"][0]["workflow_path"] = ".github/workflows/AM_TP01_shared.yml"
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            resp = client.post(f"/api/projects/{project_id}/workflow-import", json=payload)
+
+        assert resp.status_code == 200
+        assert resp.json()["results"][0]["status"] == "success"
+
+        db = TestingSessionLocal()
+        saved = (
+            db.query(Workflow)
+            .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+            .filter(ProjectWorkflow.project_id == rwx_project_id)
+            .one()
+        )
+        assert saved.workflow_name == "shared"
+        db.close()
+
+
+class TestDestinationDoesNotLeakProjectIds:
+    """Missing, unreachable and mismatched destinations answer identically."""
+
+    def test_unknown_and_unreachable_destinations_are_indistinguishable(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        stranger = Account(github_user="stranger", github_email="s@example.com", account_type="free")
+        db.add(stranger)
+        db.commit()
+        db.refresh(stranger)
+        theirs = Project(
+            project_name="TheirShared",
+            project_code="RWX9",
+            user_id=stranger.user_id,
+            branch_option="default",
+            pr_state="new",
+            project_type="rwx",
+            reusable_workflows_enabled=True,
+        )
+        db.add(theirs)
+        db.commit()
+        db.refresh(theirs)
+        theirs_id = theirs.project_id
+        db.close()
+
+        with patch("workflow_import.requests.get",
+                   return_value=_blob_response(REUSABLE_YAML)):
+            missing = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(destination_project_id=999999),
+            )
+            unreachable = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json=_import_payload(destination_project_id=theirs_id),
+            )
+
+        assert missing.status_code == 404
+        assert unreachable.status_code == 404
+        assert missing.json()["detail"] == unreachable.json()["detail"]
+
+        db = TestingSessionLocal()
+        assert db.query(ProjectWorkflow).filter_by(project_id=theirs_id).count() == 0
+        db.close()

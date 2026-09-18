@@ -72,6 +72,8 @@ export interface UnifiedWorkflowItem {
   workflowStatus?: string;
   originalIndex: number;
   type: 'regular' | 'reusable' | 'linked';
+  /** Persisted name as stored in the database, so the editor can tell a rename from a first save. */
+  savedName?: string;
   /** For linked workflows: the source RWX project id */
   rwxProjectId?: number;
   /** For linked workflows: the source RWX project name */
@@ -112,9 +114,12 @@ export interface UnifiedWorkflowsProps {
   onAddRXWorkflow: (addFn: () => void) => void;
   detectedBuildTypes: DetectedBuildResult[];
   
-  // Reusable workflows enabled state
+  // Whether *new* reusable workflows can be authored here. It never gates
+  // whether the reusable workflows a project already owns are listed - see
+  // UnifiedWorkflows.
   reusableWorkflowsEnabled: boolean;
-  repoExists: boolean;
+  /** Project type, so a reusable workflow inside a caller project can be flagged. */
+  projectType?: 'standard' | 'rwx';
 
   // Linked reusable workflows (standard projects only)
   linkedWorkflows?: RwxWorkflow[];
@@ -126,6 +131,9 @@ export interface UnifiedWorkflowsProps {
 
   // Callback to refresh project list
   refreshProjectsList?: () => Promise<void>;
+  /** Reloads the project itself (not just the list), so drift names and other
+   *  state seeded by the project-load endpoint are corrected after a removal. */
+  refreshProjectData?: () => Promise<void>;
   // Callback to notify parent when project PR state changes
   onProjectStateChange?: (state: string) => void;
   // Set of workflow names currently drifted on GitHub (rendered as a badge in the list)

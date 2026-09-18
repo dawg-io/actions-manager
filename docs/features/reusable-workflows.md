@@ -57,6 +57,18 @@ A typical producer-to-consumer update cycle:
 4. **Merge or sync** the PRs individually, in bulk, or via direct commit
 5. **Drift detection confirms** that all consumers are back in sync with the producer
 
+## Importing an Existing Reusable Workflow
+
+Reusable workflows already living in your repositories are brought in through
+**Import Existing** like any other workflow. Because a reusable workflow belongs in a
+producer project, importing one into a **Caller Workflow Project** asks first whether
+to file it into a Reusable Workflow Project instead — and offers to create one if you
+don't have it yet.
+
+See [Importing a reusable workflow]({% link features/workflows.md %}#importing-a-reusable-workflow)
+for that prompt and what each choice does, including what happens to reusable
+workflows a caller project already owns.
+
 ## Inputs and Outputs
 
 Reusable workflows define `inputs:` and `outputs:` that caller workflows must provide. ActionsManager:

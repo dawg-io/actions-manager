@@ -1,9 +1,10 @@
 /* eslint-disable no-restricted-syntax, no-restricted-imports -- Legacy: TODO migrate inline styles and CSS imports to Tailwind CSS classes */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import apiClient from '../api/apiClient';
 import config from '../config';
 import { getRulesetSyncStatus } from '../api/rulesets';
-import ConfirmDialog from './ConfirmDialog';
+import { apiErrorMessage } from '../utils/apiErrorMessage';
+import RemovalScopeDialog, { RemovalScope } from './RemovalScopeDialog';
 import '../styles/RulesetManager.css';
 
 const BACKEND_URL = config.BACKEND_URL;
@@ -31,16 +32,8 @@ interface ApiResponse {
     rulesets?: Ruleset[];
     applied_count?: number;
     error_count?: number;
+    removed_from_repos?: string[];
   };
-}
-
-interface ApiError {
-  response?: {
-    data?: {
-      detail?: string;
-    };
-  };
-  message: string;
 }
 
 interface RulesetSyncStatus {
@@ -66,6 +59,10 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
   const [rulesetSyncStatuses, setRulesetSyncStatuses] = useState<Record<number, RulesetSyncStatus>>({});
   const [loadingSyncStatus, setLoadingSyncStatus] = useState<boolean>(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  // Latest selection, so an in-flight sync-status answer can be discarded when
+  // it no longer describes what the user has selected.
+  const selectedReposRef = useRef<string[]>(selectedRepos);
+  useEffect(() => { selectedReposRef.current = selectedRepos; }, [selectedRepos]);
 
   // Load rulesets when component mounts or project changes
   useEffect(() => {
@@ -195,8 +192,7 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
       }
     } catch (error) {
       console.error('Error uploading ruleset:', error);
-      const err = error as ApiError;
-      setUploadError(err.response?.data?.detail || 'Error uploading ruleset');
+      setUploadError(apiErrorMessage(error, 'Error uploading ruleset'));
     } finally {
       setIsUploading(false);
     }
@@ -206,24 +202,100 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
     setPendingDeleteId(rulesetId);
   };
 
-  const doDeleteRuleset = async (rulesetId: number): Promise<void> => {
+  /**
+   * True only when every repository we checked reports the ruleset missing. An
+   * unchecked ruleset stays deletable from GitHub — the backend treats a
+   * repository without it as nothing to do, so guessing "never applied" here
+   * would only hide the option that fixes a leftover.
+   */
+  const hasNoGithubCopy = (rulesetId: number | null): boolean => {
+    if (rulesetId === null) return false;
+    const syncStatus = rulesetSyncStatuses[rulesetId];
+    if (!syncStatus?.success) return false;
+    const statuses = Object.values(syncStatus.repo_statuses ?? {});
+    // 'permission_denied', 'error' and 'repo_not_found' all come back with
+    // success: true. They mean the check did not answer, not that the ruleset
+    // is absent, so they must not disable the GitHub options.
+    return statuses.length > 0 && statuses.every(repo => repo?.status === 'not_found');
+  };
+
+  /**
+   * Re-read one ruleset's sync status. Shared by every mutation that changes
+   * what GitHub holds, so the panel never reports a pre-action count.
+   *
+   * The answer is dropped if the repository selection changed while it was in
+   * flight: the load effect writes the whole map for the new selection, and a
+   * late single-entry write would overwrite that with a verdict for a selection
+   * it never checked — reporting "synced" for a repository nobody looked at.
+   *
+   * A failed read is also not stored. The panel renders an error branch that
+   * carries no Sync button, and nothing re-runs the load effect, so one
+   * transient failure would strip the only retry short of reloading the page.
+   * Keeping the previous count leaves it briefly stale but still actionable,
+   * and the next selection change corrects it.
+   */
+  const refreshSyncStatus = async (rulesetId: number): Promise<boolean> => {
+    const askedFor = selectedRepos;
+    if (askedFor.length === 0) return false;
+    const asked = askedFor.join('\u0000');
+
+    const syncStatus = await getRulesetSyncStatus(user, rulesetId, askedFor);
+    if (selectedReposRef.current.join('\u0000') !== asked) return false;
+    if (!syncStatus.success) return false;
+
+    setRulesetSyncStatuses(prev => ({ ...prev, [rulesetId]: syncStatus }));
+    return true;
+  };
+
+  /**
+   * A GitHub-only removal keeps the row, so its sync status has to be re-read or
+   * the panel goes on claiming the ruleset is still applied. Every other scope
+   * drops the row, so the stale status is pruned instead — ids are serial, but
+   * leaving it would let a later ruleset read it back.
+   */
+  const refreshAfterRemoval = async (rulesetId: number, scope: RemovalScope): Promise<void> => {
+    if (scope === 'github') {
+      await refreshSyncStatus(rulesetId);
+      return;
+    }
+
+    setRulesetSyncStatuses(prev => {
+      const next = { ...prev };
+      delete next[rulesetId];
+      return next;
+    });
+    await loadRulesets();
+  };
+
+  const doDeleteRuleset = async (rulesetId: number, scope: RemovalScope): Promise<void> => {
     setPendingDeleteId(null);
     setIsLoading(true);
+    setUploadError('');
+    setSuccessMessage('');
     try {
       const response: ApiResponse = await apiClient.delete(`${BACKEND_URL}/api/rulesets/${rulesetId}`, {
-        params: { github_user: user }
+        params: { github_user: user, scope }
       });
 
       if (response.data.success) {
-        setSuccessMessage(response.data.message || 'Ruleset deleted successfully');
-        await loadRulesets();
+        const removed = response.data.removed_from_repos ?? [];
+        const outcome = response.data.message || 'Ruleset deleted successfully';
+        const repoCount = `${removed.length} ${removed.length === 1 ? 'repository' : 'repositories'}`;
+        setSuccessMessage(
+          removed.length > 0 && scope !== 'github'
+            ? `${outcome} and removed from ${repoCount}`
+            : outcome
+        );
+        await refreshAfterRemoval(rulesetId, scope);
       } else {
         setUploadError('Failed to delete ruleset');
       }
     } catch (error) {
       console.error('Error deleting ruleset:', error);
-      const err = error as ApiError;
-      setUploadError(err.response?.data?.detail || 'Error deleting ruleset');
+      setUploadError(apiErrorMessage(error, 'Error deleting ruleset'));
+      // A 502 is partial: the repositories that succeeded have already changed,
+      // so the sync panel is stale even though the removal failed overall.
+      await refreshAfterRemoval(rulesetId, scope);
     } finally {
       setIsLoading(false);
     }
@@ -258,10 +330,16 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
           `Applied to ${response.data.applied_count} repositories, ${response.data.error_count} failed`
         );
       }
+
+      // Apply changes exactly what the sync panel reports, so it has to be
+      // re-read here too. Without this the banner said "Applied to 2
+      // repositories" above a panel still reading "Missing in 1".
+      await refreshSyncStatus(rulesetId);
     } catch (error) {
       console.error('Error applying ruleset:', error);
-      const err = error as ApiError;
-      setUploadError(err.response?.data?.detail || 'Error applying ruleset');
+      setUploadError(apiErrorMessage(error, 'Error applying ruleset'));
+      // Partial application is possible before a throw, same as sync.
+      await refreshSyncStatus(rulesetId);
     } finally {
       setIsLoading(false);
     }
@@ -292,47 +370,84 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
     return syncStatus;
   };
 
+  /**
+   * Repositories the status panel positively reports as lacking the ruleset.
+   *
+   * The backend's `missing_repos` cannot be used: it appends a repository for
+   * 'permission_denied', 'repo_not_found' and plain 'error' as well as
+   * 'not_found' — "treat as missing since we can't verify". Applying to one of
+   * those means applying to a repository that may well already hold the
+   * ruleset, which GitHub rejects with a 422 reported back as a failure. Only
+   * a confirmed absence is a target.
+   */
+  const missingFrom = (status?: RulesetSyncStatus): string[] =>
+    Object.entries(status?.repo_statuses ?? {})
+      .filter(([, repo]) => repo?.status === 'not_found')
+      .map(([repo]) => repo);
+
+  /**
+   * Bring the repositories that are missing the ruleset back in line.
+   *
+   * This used to POST /api/rulesets/{id}/sync, which no route serves, so the
+   * button under "⚠️ Missing in N repositories" had never worked. Sync is an
+   * apply narrowed to the repositories that lack it — its own tooltip says so —
+   * and /apply already does exactly that for a given list.
+   *
+   * Targets come from the status the panel is already showing. Probing again
+   * first doubled the GitHub reads for the same answer (one sequential read per
+   * repository, each way), and storing a failed probe swapped the panel for an
+   * error state that has no Sync button and nothing to re-trigger it. The
+   * mandatory refresh below is what corrects a stale count.
+   */
   const syncRuleset = async (rulesetId: number): Promise<void> => {
     if (!selectedRepos || selectedRepos.length === 0) {
       setUploadError('Please select repositories to sync the ruleset to');
       return;
     }
 
+    const shown = rulesetSyncStatuses[rulesetId];
+    const missingRepos = missingFrom(shown);
+    const uncheckable = (shown?.missing_repos?.length ?? 0) - missingRepos.length;
+
     setIsLoading(true);
     setUploadError('');
     setSuccessMessage('');
 
     try {
-      const repoNames = selectedRepos.map(repo => 
-        typeof repo === 'string' ? repo : (repo as any).full_name || (repo as any).name
-      );
+      if (missingRepos.length === 0) {
+        setSuccessMessage(
+          uncheckable > 0
+            ? `No repository is confirmed to be missing the ruleset. ${uncheckable} could not be checked.`
+            : 'Ruleset is already applied to every selected repository'
+        );
+        await refreshSyncStatus(rulesetId);
+        return;
+      }
 
-      const response: ApiResponse = await apiClient.post(`${BACKEND_URL}/api/rulesets/${rulesetId}/sync`, {
-        repo_names: repoNames,
+      const response: ApiResponse = await apiClient.post(`${BACKEND_URL}/api/rulesets/${rulesetId}/apply`, {
+        repo_names: missingRepos,
         github_user: user
       });
 
+      const appliedCount = response.data.applied_count ?? 0;
+      const note = uncheckable > 0 ? ` (${uncheckable} could not be checked and were skipped)` : '';
       if (response.data.success) {
         setSuccessMessage(
-          `Synced ruleset to ${response.data.applied_count} repositories successfully`
+          `Synced ruleset to ${appliedCount} ${appliedCount === 1 ? 'repository' : 'repositories'}${note}`
         );
-        
-        // Refresh sync status after successful sync
-        const syncStatus = await getRulesetSyncStatus(user, rulesetId, repoNames);
-        setRulesetSyncStatuses(prev => ({
-          ...prev,
-          [rulesetId]: syncStatus
-        }));
-        
       } else {
         setUploadError(
-          `Synced to ${response.data.applied_count} repositories, ${response.data.error_count} failed`
+          `Synced to ${appliedCount} of ${missingRepos.length} repositories, ${response.data.error_count ?? 0} failed${note}`
         );
       }
+
+      await refreshSyncStatus(rulesetId);
     } catch (error) {
       console.error('Error syncing ruleset:', error);
-      const err = error as ApiError;
-      setUploadError(err.response?.data?.detail || 'Error syncing ruleset');
+      setUploadError(apiErrorMessage(error, 'Error syncing ruleset'));
+      // A thrown apply is not an untouched apply: the request can have created
+      // the ruleset on some repositories before failing, so the panel is stale.
+      await refreshSyncStatus(rulesetId);
     } finally {
       setIsLoading(false);
     }
@@ -548,13 +663,17 @@ const RulesetManager: React.FC<RulesetManagerProps> = ({
       </div>
 
       {pendingDeleteId !== null && (
-        <ConfirmDialog
+        <RemovalScopeDialog
           open={true}
-          title="Delete ruleset?"
-          description="This will permanently delete the ruleset from Actions Manager. Repositories that already have rules applied will not be affected."
-          confirmLabel="Delete"
-          destructive
-          onConfirm={() => { void doDeleteRuleset(pendingDeleteId); }}
+          title={`Delete ruleset "${rulesets.find(r => r.ruleset_id === pendingDeleteId)?.ruleset_name ?? ''}"?`}
+          githubLocation="your project's repositories"
+          resourceNoun="ruleset"
+          projectScopeDetail="it stops checking whether the repositories still have it"
+          githubScopeWarning="This action cannot be undone! The ruleset is permanently deleted from your project's repositories, and any branch protection it enforces stops applying."
+          offerGitHubOnly
+          githubOnlyDetail="ActionsManager keeps the ruleset, so you can apply it again without re-importing it"
+          neverSynced={hasNoGithubCopy(pendingDeleteId)}
+          onConfirm={(scope) => { void doDeleteRuleset(pendingDeleteId, scope); }}
           onCancel={() => setPendingDeleteId(null)}
         />
       )}

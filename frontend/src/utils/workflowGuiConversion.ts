@@ -27,6 +27,11 @@ export interface WorkflowEvent {
   cron?: string;
   types?: string[];
   inputs?: { [key: string]: WorkflowCallInput };
+  /** Keys under this event that the GUI does not model - notably a reusable
+   * workflow's `workflow_call.secrets` / `.outputs`, which are part of its
+   * public interface. Kept verbatim so the round trip stays lossless, the way
+   * jobs and steps already preserve theirs. */
+  unsupportedFields?: { [key: string]: any };
 }
 
 export interface WorkflowJob {
@@ -223,6 +228,44 @@ export function guiToYaml(gui: WorkflowGUI): string {
   return yamlStr.replace(/^trigger:/gm, 'on:');
 }
 
+const SUPPORTED_EVENT_FIELDS = new Set(['branches', 'paths', 'tags', 'schedule', 'types', 'inputs']);
+
+// GitHub rejects a workflow that sets both a filter and its `-ignore`
+// counterpart on the same event.
+const FILTER_FOR_IGNORE_KEY: { [key: string]: string } = {
+  'branches-ignore': 'branches',
+  'paths-ignore': 'paths',
+  'tags-ignore': 'tags'
+};
+
+function collectUnsupportedEventFields(eventConfig: any): { [key: string]: any } | undefined {
+  const unsupported: { [key: string]: any } = {};
+  Object.keys(eventConfig).forEach(key => {
+    if (!SUPPORTED_EVENT_FIELDS.has(key)) {
+      unsupported[key] = eventConfig[key];
+    }
+  });
+  return Object.keys(unsupported).length > 0 ? unsupported : undefined;
+}
+
+// A filter the user set in the GUI wins over a preserved `-ignore` counterpart,
+// which would otherwise make the workflow invalid rather than merely lossy.
+function applyUnsupportedEventFields(config: any, unsupportedFields: { [key: string]: any }): void {
+  Object.keys(unsupportedFields).forEach(key => {
+    if (config[FILTER_FOR_IGNORE_KEY[key]]) {
+      return;
+    }
+    config[key] = unsupportedFields[key];
+  });
+}
+
+function hasEventConfig(event: WorkflowEvent): boolean {
+  return Boolean(
+    event.branches || event.paths || event.tags || event.cron || event.types || event.inputs ||
+    (event.unsupportedFields && Object.keys(event.unsupportedFields).length > 0)
+  );
+}
+
 // Parse events from YAML 'on' field
 function parseEvents(onField: any): WorkflowEvent[] {
   if (!onField) {
@@ -242,7 +285,7 @@ function parseEvents(onField: any): WorkflowEvent[] {
     const eventConfig = onField[eventType];
     const event: WorkflowEvent = { type: eventType as any };
 
-    if (eventConfig && typeof eventConfig === 'object') {
+    if (eventConfig && typeof eventConfig === 'object' && !Array.isArray(eventConfig)) {
       if (eventConfig.branches) {
         event.branches = Array.isArray(eventConfig.branches) 
           ? eventConfig.branches 
@@ -287,6 +330,11 @@ function parseEvents(onField: any): WorkflowEvent[] {
           }
         });
       }
+
+      const unsupported = collectUnsupportedEventFields(eventConfig);
+      if (unsupported) {
+        event.unsupportedFields = unsupported;
+      }
     }
 
     events.push(event);
@@ -303,14 +351,14 @@ function serializeEvents(events: WorkflowEvent[]): any {
 
   if (events.length === 1) {
     const event = events[0];
-    if (!event.branches && !event.paths && !event.tags && !event.cron && !event.types && !event.inputs) {
+    if (!hasEventConfig(event)) {
       return event.type;
     }
   }
 
   const result: any = {};
   events.forEach(event => {
-    if (!event.branches && !event.paths && !event.tags && !event.cron && !event.types && !event.inputs) {
+    if (!hasEventConfig(event)) {
       result[event.type] = null;
     } else {
       const config: any = {};
@@ -348,6 +396,11 @@ function serializeEvents(events: WorkflowEvent[]): any {
           }
         });
       }
+
+      if (event.unsupportedFields) {
+        applyUnsupportedEventFields(config, event.unsupportedFields);
+      }
+
       result[event.type] = config;
     }
   });

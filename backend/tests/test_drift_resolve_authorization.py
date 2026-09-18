@@ -410,3 +410,58 @@ class TestStaleWriteProtection:
         body = resp.json()
         assert body["success"] is False
         assert "changed since drift was checked" in body["results"][0]["message"]
+
+
+class TestSaveWorkflowsRequiresEditor:
+    """A save can arm a repository file deletion, so it needs the editor role.
+
+    ``_find_project_by_name`` only proves the caller can *see* the project — it
+    never reads ``ProjectMembership.project_role``. Since a save can now set
+    ``Workflow.renamed_from``, and the next campaign turns that into a DELETE of
+    the old filename in every target repository, a read-only member could arm a
+    deletion. The read-only rename *preview* was already gated at project_editor,
+    so the write that performs the rename was the looser of the two.
+    """
+
+    def _save(self, user, *, name="ci2", original="ci"):
+        return client.post(
+            "/api/save-workflows",
+            json={
+                "github_user": user,
+                "project_name": "proj1",
+                "workflows": [{"name": name, "content": "name: ci\non: push",
+                               "original_name": original}],
+                "rxworkflows": [],
+            },
+            headers={"X-GitHub-User": user},
+        )
+
+    def _workflow(self, state):
+        db = TestingSessionLocal()
+        try:
+            return db.query(Workflow).filter(
+                Workflow.workflow_id == state["workflow_id"]
+            ).first()
+        finally:
+            db.close()
+
+    def test_project_viewer_cannot_save_and_so_cannot_arm_a_deletion(self, db_state):
+        resp = self._save(VIEWER)
+
+        assert resp.status_code == 403, resp.text
+        wf = self._workflow(db_state)
+        assert wf.workflow_name == "ci", "the rename must not have been applied"
+        assert wf.renamed_from is None, "no deletion may be armed for a viewer"
+
+    def test_project_editor_can_still_rename(self, db_state):
+        """The gate must refuse the viewer and nobody else."""
+        resp = self._save(EDITOR)
+
+        assert resp.status_code == 200, resp.text
+        assert self._workflow(db_state).workflow_name == "ci2"
+
+    def test_the_owner_can_still_rename(self, db_state):
+        resp = self._save(OWNER)
+
+        assert resp.status_code == 200, resp.text
+        assert self._workflow(db_state).workflow_name == "ci2"

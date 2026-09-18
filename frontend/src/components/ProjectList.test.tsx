@@ -340,6 +340,71 @@ describe('ProjectList', () => {
       );
     });
 
+    test('explains why automatic drift checks are paused', () => {
+      // #2050: a skipped project keeps its previous verdict and its last-checked
+      // time simply stops moving, which reads as a broken feature unless the
+      // reason is on the card.
+      renderProjectList({
+        projects: [
+          {
+            id: 1,
+            project_name: 'Paused',
+            project_code: 'PSED',
+            updated_at: '2024-01-01T00:00:00Z',
+            pr_state: 'synced',
+            drift_status: 'clean',
+            last_drift_check_at: '2024-03-05T12:30:00Z',
+            drift_error_summary: 'Automatic drift checks are paused: this project\'s owner has a saved GitHub token that cannot be decrypted.',
+          },
+        ],
+      });
+
+      expect(screen.getByTestId('project-drift-reason-1')).toHaveTextContent('cannot be decrypted');
+    });
+
+    test('keeps a long status note from blowing up the card', () => {
+      // drift_error_summary has three producers, and one of them is a raw
+      // str(e) capped only at 500 chars. Unclamped that wraps to ~6 lines in a
+      // sortable list; the full text stays reachable as the title.
+      const longNote = 'Drift detection request failed: ' + 'x'.repeat(400);
+      renderProjectList({
+        projects: [
+          {
+            id: 1,
+            project_name: 'Noisy',
+            project_code: 'NOIS',
+            updated_at: '2024-01-01T00:00:00Z',
+            pr_state: 'synced',
+            drift_status: 'check_failed',
+            last_drift_check_at: '2024-03-05T12:30:00Z',
+            drift_error_summary: longNote,
+          },
+        ],
+      });
+
+      const note = screen.getByTestId('project-drift-reason-1');
+      expect(note).toHaveClass('line-clamp-2');
+      expect(note).toHaveAttribute('title', longNote);
+    });
+
+    test('shows no pause reason for a project that is being checked normally', () => {
+      renderProjectList({
+        projects: [
+          {
+            id: 1,
+            project_name: 'Fine',
+            project_code: 'FINE',
+            updated_at: '2024-01-01T00:00:00Z',
+            pr_state: 'synced',
+            drift_status: 'clean',
+            last_drift_check_at: '2024-03-05T12:30:00Z',
+          },
+        ],
+      });
+
+      expect(screen.queryByTestId('project-drift-reason-1')).not.toBeInTheDocument();
+    });
+
     test('omits the last drift check time when the project has never been checked', () => {
       renderProjectList({
         projects: [

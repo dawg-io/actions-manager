@@ -465,6 +465,16 @@ body.pf-resizing {
   line-height: 1;
 }
 
+/* Purple is the Reusable Workflow Project colour throughout the app, so the
+   same purple marks a reusable workflow that ended up in a caller project. */
+.pf-row-reusable-flag {
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: #c084fc;
+}
+
 /* margin-left:auto pins the dot right whether or not a meta slot is present. */
 .pf-row-dot {
   flex: 0 0 auto;
@@ -1869,4 +1879,34 @@ body.pf-resizing {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
+}
+
+/* Reusable workflow parked in a caller project: it works, but it belongs in a
+   Reusable Workflow Project. Purple matches that project type everywhere else. */
+.workflow-reusable-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid rgba(168, 85, 247, 0.35);
+  background: rgba(168, 85, 247, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.workflow-reusable-notice-dot {
+  flex: 0 0 auto;
+  margin-top: 0.4rem;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: #c084fc;
+}
+
+.workflow-reusable-notice code {
+  padding: 0.05rem 0.25rem;
+  border-radius: 0.2rem;
+  background: rgba(168, 85, 247, 0.16);
+  font-size: 0.95em;
 }

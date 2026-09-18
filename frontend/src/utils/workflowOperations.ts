@@ -2,6 +2,7 @@ import { saveWorkflows, updateWorkflows, deleteWorkflowFromGitHub, deleteWorkflo
 import { saveRxWorkflows } from '../api/rxworkflows';
 import { updateLinkedReusableWorkflow } from '../api/projects';
 import { Workflow, RXWorkflow, UnifiedWorkflowItem } from '../types/workflow';
+import type { RemovalDelivery, RemovalScope } from '../components/RemovalScopeDialog';
 import { WorkflowResult } from '../types/workflowResponse';
 import { RwxWorkflow } from '../api/projects';
 import { normalizeWorkflowStem, setWorkflowYamlName } from './workflowFilename';
@@ -393,35 +394,50 @@ const deleteRegularWorkflow = async (
     workflowName: string;
     regexPattern: string;
     projectName: string;
+    scope: RemovalScope;
+    delivery: RemovalDelivery;
   },
   state: {
     workflows: Workflow[];
     index: number;
     setWorkflows: (workflows: Workflow[]) => void;
   }
-): Promise<void> => {
-  await deleteWorkflowFromGitHub(
-    params.user,
-    params.selectedRepos,
-    params.workflowName,
-    params.regexPattern,
-    params.projectName
-  );
+): Promise<boolean> => {
+  if (params.scope === 'project_and_github') {
+    await deleteWorkflowFromGitHub(
+      params.user,
+      params.selectedRepos,
+      params.workflowName,
+      params.regexPattern,
+      params.projectName,
+      params.delivery
+    );
+    if (params.delivery === 'campaign') {
+      // The campaign carries the removal; the row is marked pending_delete and
+      // dropped only when that campaign merges. Deleting it here would leave
+      // the campaign delivering a file nothing in ActionsManager still tracks,
+      // and Restore would have nothing to restore.
+      return false;
+    }
+  }
   await deleteWorkflowFromDatabase(params.user, params.projectName, params.workflowName);
   const newWorkflows = state.workflows.filter((_, i) => i !== state.index);
   state.setWorkflows(newWorkflows);
+  return true;
 };
 
 // Helper function to delete reusable workflow
 const deleteReusableWorkflow = async (
   user: string,
-  selectedRepos: string[],
   workflowName: string,
   projectName: string,
+  scope: RemovalScope,
   index: number,
   setRXWorkflows: (workflows: RXWorkflow[] | ((prev: RXWorkflow[]) => RXWorkflow[])) => void
 ): Promise<void> => {
-  await deleteReusableWorkflowFromGitHub(user, workflowName, projectName);
+  if (scope === 'project_and_github') {
+    await deleteReusableWorkflowFromGitHub(user, workflowName, projectName);
+  }
   await deleteWorkflowFromDatabase(user, projectName, workflowName);
   setRXWorkflows(prev => {
     const newWorkflows = Array.isArray(prev) ? [...prev] : [];
@@ -430,32 +446,80 @@ const deleteReusableWorkflow = async (
 };
 
 // Delete workflow functionality
-export const deleteWorkflow = async (
-  index: number,
-  type: 'regular' | 'reusable',
-  workflows: Workflow[],
-  rxworkflows: RXWorkflow[],
-  user: string,
-  projectName: string,
-  selectedRepos: string[],
-  regexPattern: string,
-  setWorkflows: (workflows: Workflow[]) => void,
-  setRXWorkflows: (workflows: RXWorkflow[] | ((prev: RXWorkflow[]) => RXWorkflow[])) => void,
-  setSelectedWorkflowId: (id: string | null) => void
-): Promise<void> => {
+export interface DeleteWorkflowParams {
+  index: number;
+  type: 'regular' | 'reusable';
+  workflows: Workflow[];
+  rxworkflows: RXWorkflow[];
+  user: string;
+  projectName: string;
+  selectedRepos: string[];
+  regexPattern: string;
+  /** Required, not defaulted: an omitted scope must never silently mean "delete from GitHub too". */
+  scope: RemovalScope;
+  /** How a GitHub-scoped removal reaches the repositories. Ignored for scope 'project'. */
+  delivery: RemovalDelivery;
+  setWorkflows: (workflows: Workflow[]) => void;
+  setRXWorkflows: (workflows: RXWorkflow[] | ((prev: RXWorkflow[]) => RXWorkflow[])) => void;
+  setSelectedWorkflowId: (id: string | null) => void;
+  fetchWorkflowsCount?: () => Promise<void>;
+  /**
+   * Reloads the project itself, not just the projects list. The server drops the
+   * removed workflow's drift rows, so anything seeded from the project-load
+   * endpoint — `drifted_workflow_names` above all — is stale until this runs.
+   */
+  refreshProjectData?: () => Promise<void>;
+}
+
+/** What the removal did, as a sentence for a toast. */
+export function describeWorkflowRemoval(
+  name: string,
+  scope: RemovalScope,
+  delivery: RemovalDelivery,
+  removed: boolean
+): string {
+  if (scope !== 'project_and_github') {
+    return `Workflow "${name}" removed from ActionsManager. Nothing was deleted from GitHub.`;
+  }
+  if (!removed) {
+    return `PR Campaign opened to remove "${name}" from GitHub. Track and merge it under PR Campaigns.`;
+  }
+  return `Workflow "${name}" deleted from ActionsManager and GitHub.`;
+}
+
+export const deleteWorkflow = async ({
+  index,
+  type,
+  workflows,
+  rxworkflows,
+  user,
+  projectName,
+  selectedRepos,
+  regexPattern,
+  scope,
+  delivery,
+  setWorkflows,
+  setRXWorkflows,
+  setSelectedWorkflowId,
+  fetchWorkflowsCount,
+  refreshProjectData,
+}: DeleteWorkflowParams): Promise<void> => {
   const workflow = type === 'regular' ? workflows[index] : rxworkflows[index];
-  
+
   if (!workflow) return;
 
   try {
+    let removed = true;
     if (type === 'regular') {
-      await deleteRegularWorkflow(
+      removed = await deleteRegularWorkflow(
         {
           user,
           selectedRepos,
           workflowName: workflow.name,
           regexPattern,
           projectName,
+          scope,
+          delivery,
         },
         {
           workflows,
@@ -464,14 +528,20 @@ export const deleteWorkflow = async (
         }
       );
     } else {
-      await deleteReusableWorkflow(user, selectedRepos, workflow.name, projectName, index, setRXWorkflows);
+      await deleteReusableWorkflow(user, workflow.name, projectName, scope, index, setRXWorkflows);
     }
-    
-    setSelectedWorkflowId(null);
-    toast.success(`Workflow "${workflow.name}" deleted successfully.`);
+
+    if (removed) setSelectedWorkflowId(null);
+    toast.success(describeWorkflowRemoval(workflow.name, scope, delivery, removed));
   } catch (error: any) {
     handleDeleteError(error);
+    return;
   }
+
+  // After the toast: the workflow is already gone, so these only correct what the
+  // removal invalidated. Both swallow their own errors, and neither depends on
+  // the other, so they run together.
+  await Promise.all([fetchWorkflowsCount?.(), refreshProjectData?.()]);
 };
 
 // Workflow creation utilities

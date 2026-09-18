@@ -52,6 +52,14 @@ const DOCS_BUILD_METRICS_PROJECT = {
   selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
 } as const;
 
+/** The same synced project, for scenes that only need one to exist. The
+ *  "workflow removal scope" scene above predates this and still inlines it. */
+const DOCS_SYNCED_PROJECT = DOCS_BUILD_METRICS_PROJECT;
+
+/** `confirmed_present_at` as the server renders it: _utc_iso emits +00:00,
+ *  never a Z. */
+const DOCS_CONFIRMED_PRESENT_AT = DOCS_LAST_CHECKED.replace("Z", "+00:00");
+
 /** A fortnight of plausible build history: mostly green, with a bad Tuesday
  *  on deploy-production so the trend and the failures view have something
  *  real to show. */
@@ -234,6 +242,131 @@ test.describe("docs screenshots", () => {
     await page.getByRole("dialog").waitFor({ timeout: 5000 });
     await page.waitForTimeout(500);
     await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-editor-expanded.png" });
+  });
+
+  test("workflow removal scope choice", async ({ page }) => {
+    const project = makeProject({
+      project_name: "Payments Platform",
+      project_code: "PAY",
+      github_user: DOCS_USER,
+      last_modified_by: DOCS_USER,
+      updated_at: "2026-07-24T00:00:00Z",
+      pr_state: "synced",
+      selected_repos: ["acme-corp/payments-service", "acme-corp/payments-worker"],
+      // Delivered, so the dialog offers the GitHub option rather than
+      // disabling it for a workflow GitHub has never seen.
+      workflows: [
+        makeWorkflow({
+          name: "build-and-test.yml",
+          lastModifiedBy: DOCS_USER,
+          workflowStatus: "synced_with_github",
+        }),
+        makeWorkflow({ name: "deploy-production.yml", lastModifiedBy: DOCS_USER }),
+      ],
+    });
+    await installApiMocks(page, createMockState({ projects: [project] }));
+    await seedDocsUserProfile(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page
+      .getByText("build-and-test.yml", { exact: false })
+      .first()
+      .waitFor({ timeout: 15000 });
+    await page.getByText("build-and-test.yml", { exact: false }).first().click();
+    await page.waitForTimeout(500);
+
+    await page.getByLabel("More options").click();
+    await page.getByRole("menuitem", { name: /Delete workflow/ }).click();
+    await page.getByRole("dialog").waitFor({ timeout: 5000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-removal-scope.png" });
+  });
+
+  test("workflow rename impact", async ({ page }) => {
+    const project = makeProject({
+      ...DOCS_SYNCED_PROJECT,
+      // The dialog renders purely from the mocked rename-impact response below,
+      // so nothing in this project state decides what it lists. The workflow
+      // rows only have to exist for the editor to open on one.
+      workflows: [
+        makeWorkflow({
+          name: "build-and-test.yml",
+          lastModifiedBy: DOCS_USER,
+          workflowStatus: "synced_with_github",
+        }),
+        makeWorkflow({ name: "deploy-production.yml", lastModifiedBy: DOCS_USER }),
+      ],
+    });
+    await installApiMocks(
+      page,
+      createMockState({
+        projects: [project],
+        // Overrides the shared RENAME_IMPACT fixture's octocat/hello-world
+        // single target: the doc image should show the delivered-to-several
+        // -repositories case, plus an override, since that is what the section
+        // describes.
+        //
+        // Field for field from `RenameImpactResponse`, per the shared fixture's
+        // warning. In particular `warnings` is NOT empty: the server appends the
+        // build-metrics note on every rename (_rename_impact_warnings), so a
+        // published image without it would show a dialog no user ever sees. The
+        // text is copied from the backend verbatim. `confirmed_present_at` uses
+        // +00:00 for the same reason — _utc_iso never emits a Z.
+        renameImpact: {
+          classification: "delivered",
+          blocked_reason: null,
+          old_filename: "build-and-test.yml",
+          new_filename: "build-and-verify.yml",
+          targets: [
+            {
+              repo: "acme-corp/payments-service",
+              branch: "main",
+              old_file_present: true,
+              new_file_present: false,
+              confirmed_present_at: DOCS_CONFIRMED_PRESENT_AT,
+            },
+            {
+              repo: "acme-corp/payments-worker",
+              branch: "main",
+              old_file_present: true,
+              new_file_present: false,
+              confirmed_present_at: DOCS_CONFIRMED_PRESENT_AT,
+            },
+          ],
+          consumers: [],
+          overrides: ["acme-corp/payments-worker"],
+          warnings: [
+            "Build metrics recorded under the old filename stay attached to it, so this " +
+              "workflow's run history will show a break at the rename.",
+          ],
+        },
+      })
+    );
+    await seedDocsUserProfile(page);
+
+    await page.goto(`/project/${DOCS_USER}/${encodeURIComponent("Payments Platform")}`);
+    await page
+      .getByText("build-and-test.yml", { exact: false })
+      .first()
+      .waitFor({ timeout: 15000 });
+    await page.getByText("build-and-test.yml", { exact: false }).first().click();
+    await page.waitForTimeout(500);
+
+    // By aria-label, not data-testid: the project sidebar renders the same
+    // EditableNameField for the project name, so the test id matches twice.
+    await page.getByRole("button", { name: "Edit workflow filename" }).click();
+    const nameInput = page.getByRole("textbox", { name: "workflow filename" });
+    await nameInput.fill("build-and-verify");
+    await page.getByRole("button", { name: "Save workflow filename" }).click();
+
+    await page.getByRole("dialog").waitFor({ timeout: 5000 });
+    // The dialog opens on its loading state and swaps the body in when the
+    // impact arrives — capture the answer, not the spinner.
+    await page.getByTestId("rename-targets").waitFor({ timeout: 5000 });
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-rename-impact.png" });
   });
 
   test("PR campaign dashboard", async ({ page }) => {

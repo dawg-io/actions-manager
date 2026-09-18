@@ -647,20 +647,48 @@ describe('UnifiedWorkflowEditor', () => {
       expect(btn).toBeDisabled();
     });
 
-    test('Delete workflow menu item shows confirm dialog and then calls deleteWorkflow', async () => {
+    test('Delete workflow menu item shows the removal-scope dialog, defaulting to project only', async () => {
       const user = userEvent.setup();
       render(<UnifiedWorkflowEditor {...defaultProps} />);
       fireEvent.click(screen.getByLabelText('More options'));
       fireEvent.click(screen.getByText(/Delete workflow/));
 
-      // ConfirmDialog should now be visible - check for dialog element
       expect(screen.getByRole('dialog')).toBeInTheDocument();
+      // The safe option is preselected, so a reflexive confirm cannot delete
+      // the file from GitHub.
+      expect(screen.getByLabelText('Remove from ActionsManager only')).toBeChecked();
 
-      // Click the confirm button in the dialog
-      const confirmBtn = screen.getByRole('button', { name: /Delete workflow/i });
-      await user.click(confirmBtn);
+      await user.click(screen.getByRole('button', { name: /Remove from ActionsManager/i }));
 
-      expect(defaultProps.deleteWorkflow).toHaveBeenCalledWith(0, 'regular');
+      expect(defaultProps.deleteWorkflow).toHaveBeenCalledWith(0, 'regular', 'project', 'campaign');
+    });
+
+    test('Choosing the GitHub option deletes from both', async () => {
+      const user = userEvent.setup();
+      render(<UnifiedWorkflowEditor {...defaultProps} />);
+      fireEvent.click(screen.getByLabelText('More options'));
+      fireEvent.click(screen.getByText(/Delete workflow/));
+
+      await user.click(screen.getByLabelText('Delete from ActionsManager and GitHub'));
+      await user.click(screen.getByRole('button', { name: /Delete Everywhere/i }));
+
+      expect(defaultProps.deleteWorkflow).toHaveBeenCalledWith(0, 'regular', 'project_and_github', 'campaign');
+    });
+
+    test('GitHub option stays available for a locally-created workflow', () => {
+      // A "new" workflow with no hash is not proof GitHub has no copy: an
+      // imported workflow also lands as new with a zeroed hash, so disabling
+      // the option here would block deleting a file that really is in GitHub.
+      render(
+        <UnifiedWorkflowEditor
+          {...defaultProps}
+          selectedWorkflow={{ ...mockRegularWorkflow, workflowStatus: 'new', gitHash: undefined }}
+        />
+      );
+      fireEvent.click(screen.getByLabelText('More options'));
+      fireEvent.click(screen.getByText(/Delete workflow/));
+
+      expect(screen.getByLabelText('Delete from ActionsManager and GitHub')).toBeEnabled();
     });
 
     test('Delete workflow cancellation does not call deleteWorkflow', async () => {
@@ -687,7 +715,7 @@ describe('UnifiedWorkflowEditor', () => {
       fireEvent.click(screen.getByText(/Delete workflow/));
 
       expect(
-        screen.getByText('Delete workflow "AM_TEST_test-workflow.yml"?')
+        screen.getByText('Remove workflow "AM_TEST_test-workflow.yml"?')
       ).toBeInTheDocument();
     });
 
@@ -697,7 +725,7 @@ describe('UnifiedWorkflowEditor', () => {
       fireEvent.click(screen.getByText(/Delete workflow/));
 
       expect(
-        screen.getByText('Delete workflow "test-workflow.yml"?')
+        screen.getByText('Remove workflow "test-workflow.yml"?')
       ).toBeInTheDocument();
     });
 
@@ -1305,5 +1333,47 @@ describe('UnifiedWorkflowEditor editor-mode toggle', () => {
     await user.click(guiBtn());
 
     expect(setEditMode).toHaveBeenCalledWith('gui');
+  });
+});
+
+describe('reusable workflow in a caller project', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('explains that a reusable workflow belongs in a Reusable Workflow Project', () => {
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        selectedWorkflow={mockReusableWorkflow}
+        projectType="standard"
+      />
+    );
+
+    expect(screen.getByTestId('reusable-in-caller-notice')).toBeInTheDocument();
+  });
+
+  test('says nothing inside a Reusable Workflow Project', () => {
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        selectedWorkflow={mockReusableWorkflow}
+        projectType="rwx"
+      />
+    );
+
+    expect(screen.queryByTestId('reusable-in-caller-notice')).not.toBeInTheDocument();
+  });
+
+  test('says nothing for a linked reusable workflow, which already lives elsewhere', () => {
+    render(
+      <UnifiedWorkflowEditor
+        {...defaultProps}
+        selectedWorkflow={mockLinkedWorkflow}
+        projectType="standard"
+      />
+    );
+
+    expect(screen.queryByTestId('reusable-in-caller-notice')).not.toBeInTheDocument();
   });
 });

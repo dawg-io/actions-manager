@@ -25,8 +25,7 @@ interface UnifiedWorkflowListProps {
   loadingStatuses: boolean;
   workflowStatuses: Record<string, any>;
   selectedRepos: string[];
-  reusableWorkflowsEnabled: boolean;
-  repoExists: boolean;
+  projectType?: 'standard' | 'rwx';
   setIsCollapsed: (collapsed: boolean) => void;
   handleSelectWorkflow: (workflowId: string) => void;
   /** Opens the Add Project File dialog (Workflow / Reusable Workflow / Link Reusable Workflow / Custom File / CODEOWNERS). */
@@ -144,6 +143,8 @@ interface FileRowProps {
   drifted?: boolean;
   modified?: boolean;
   pendingDelete?: boolean;
+  /** Reusable workflow sitting in a caller project - marked with a purple dot. */
+  reusableInCaller?: boolean;
   testId?: string;
 }
 
@@ -162,6 +163,7 @@ const FileRow: React.FC<FileRowProps> = ({
   drifted,
   modified,
   pendingDelete,
+  reusableInCaller,
   testId,
 }) => (
   <li>
@@ -185,6 +187,14 @@ const FileRow: React.FC<FileRowProps> = ({
       )}
       {pendingDelete && (
         <span className="pf-row-pending-delete" title="Pending Deletion" aria-hidden="true">🗑</span>
+      )}
+      {reusableInCaller && (
+        <span
+          className="pf-row-reusable-flag"
+          data-testid="reusable-in-caller-badge"
+          title="Reusable workflow - better suited to a Reusable Workflow Project"
+          aria-hidden="true"
+        />
       )}
       {modified && <span className="pf-row-modified" title="Unsaved changes" aria-hidden="true">•</span>}
       <span className={`pf-row-dot ${statusClassName}`} title={statusLabel} aria-hidden="true" />
@@ -286,8 +296,7 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
   loadingStatuses,
   workflowStatuses,
   selectedRepos,
-  reusableWorkflowsEnabled,
-  repoExists,
+  projectType = 'standard',
   setIsCollapsed,
   handleSelectWorkflow,
   addWorkflowFn,
@@ -331,11 +340,23 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
 
   const isDrifted = (name?: string) => !!(name && driftedWorkflowNames?.has(name));
 
+  /** Extract nested ternary operation - the row's leading state word, if any. */
+  const getTypeLabel = (workflow: UnifiedWorkflowItem, reusableInCaller: boolean): string | null => {
+    if (workflow.type === 'linked') return 'Linked workflow';
+    if (reusableInCaller) return 'Reusable workflow';
+    return null;
+  };
+
   const regularWorkflows = unifiedWorkflows.filter(w => w.type === 'regular');
   const reusableWorkflows = unifiedWorkflows.filter(w => w.type === 'reusable');
   const linkedWorkflows = unifiedWorkflows.filter(w => w.type === 'linked');
 
-  const showReusableSection = reusableWorkflowsEnabled && repoExists && reusableWorkflows.length > 0;
+  // Owning a reusable workflow is reason enough to list it. Gating this on the
+  // authoring toggle stranded imported reusable workflows in caller projects.
+  const showReusableSection = reusableWorkflows.length > 0;
+  // A caller project can hold reusable workflows, but they belong in a Reusable
+  // Workflow Project - flag them so the row says so at a glance.
+  const flagsReusable = projectType !== 'rwx';
   const showCodeownersSection = !!codeownersRepos && codeownersRepos.length > 0;
 
   /**
@@ -357,10 +378,13 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
     const fullFilename = `${namePrefix}${filename}`;
     const status = getRowStatus(workflow.workflowStatus, workflow.isModified);
     const drifted = workflow.type !== 'linked' && isDrifted(workflow.name);
+    // A linked workflow already lives in its RWX project, so only one this
+    // project owns outright is out of place here.
+    const reusableInCaller = flagsReusable && workflow.type === 'reusable';
     // aria-label replaces the button's content, so every indicator rendered as an
     // aria-hidden glyph has to be spelled out here or it is lost to assistive tech.
     const stateParts = buildStateParts({
-      typeLabel: workflow.type === 'linked' ? 'Linked workflow' : null,
+      typeLabel: getTypeLabel(workflow, reusableInCaller),
       status: status.label,
       drifted,
       modified: workflow.isModified,
@@ -388,6 +412,7 @@ const UnifiedWorkflowList: React.FC<UnifiedWorkflowListProps> = ({
         onSelect={() => handleSelectWorkflow(workflow.id)}
         drifted={drifted}
         modified={workflow.isModified}
+        reusableInCaller={reusableInCaller}
         testId={workflow.type === 'linked' ? 'linked-rwx-workflow-card' : undefined}
       />
     );

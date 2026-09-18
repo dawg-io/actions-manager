@@ -172,7 +172,28 @@ http {
     fastcgi_temp_path /app/nginx/cache/fastcgi_temp;
     uwsgi_temp_path /app/nginx/cache/uwsgi_temp;
     scgi_temp_path /app/nginx/cache/scgi_temp;
-    
+
+    # Carry through the scheme an outer reverse proxy (Traefik, Caddy, nginx)
+    # terminated TLS on. $scheme is this container's own hop, which is always
+    # http because the proxy forwards plaintext to the published port — sending
+    # that as X-Forwarded-Proto would overwrite the proxy's "https" and tell the
+    # backend an HTTPS deployment was insecure, blocking PAT login. Falls back
+    # to $scheme when nothing upstream set the header.
+    #
+    # Matched on the first value, not the whole string: chained proxies append,
+    # so the header arrives as "https, http" and an exact match would miss it
+    # and silently fall back to http.
+    #
+    # This trusts whoever reaches this port to be honest about the scheme, so
+    # the published port belongs behind your proxy, not open to untrusted
+    # networks. A client that reaches it directly can claim https for its own
+    # request; it cannot affect anyone else's, since the header is read per
+    # request.
+    map $http_x_forwarded_proto $am_forwarded_proto {
+        default   $scheme;
+        ~*^https  https;
+    }
+
     # Include site configs
     include /etc/nginx/sites-enabled/*;
 }
@@ -193,7 +214,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $am_forwarded_proto;
         proxy_cache_bypass $http_upgrade;
     }
 
@@ -206,7 +227,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $am_forwarded_proto;
         proxy_cache_bypass $http_upgrade;
     }
 
@@ -219,7 +240,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $am_forwarded_proto;
     }
 
     # Proxy docs (MUST be before frontend catch-all)
@@ -227,12 +248,14 @@ server {
         proxy_pass http://127.0.0.1:8000/docs;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $am_forwarded_proto;
     }
 
     location /openapi.json {
         proxy_pass http://127.0.0.1:8000/openapi.json;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $am_forwarded_proto;
     }
 
     # Health check (MUST be before frontend catch-all). Proxies to the
@@ -244,6 +267,7 @@ server {
         proxy_pass http://127.0.0.1:8000/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $am_forwarded_proto;
     }
 
     # Serve frontend static files (MUST be last - catch-all)

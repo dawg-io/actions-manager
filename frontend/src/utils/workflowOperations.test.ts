@@ -312,6 +312,53 @@ describe('workflowOperations', () => {
   });
 
   describe('deleteWorkflow', () => {
+    test('campaign delivery keeps the row until the campaign merges', async () => {
+      const workflows: Workflow[] = [
+        { name: 'test-workflow', content: 'test', isReusable: false }
+      ];
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+
+      (deleteWorkflowFromGitHub as Mock).mockResolvedValue({});
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
+
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows: [], user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project_and_github',
+        delivery: 'campaign',
+        setWorkflows, setRXWorkflows: vi.fn(), setSelectedWorkflowId,
+      });
+
+      expect(deleteWorkflowFromGitHub).toHaveBeenCalledWith(
+        'user', ['owner/repo'], 'test-workflow', '', 'project', 'campaign'
+      );
+      // The campaign carries the removal; deleting the row now would leave it
+      // delivering a file nothing in ActionsManager still tracks.
+      expect(deleteWorkflowFromDatabase).not.toHaveBeenCalled();
+      expect(setWorkflows).not.toHaveBeenCalled();
+      expect(setSelectedWorkflowId).not.toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith(
+        expect.stringContaining('PR Campaign opened')
+      );
+    });
+
+    test('project-scoped removal never reaches GitHub, whatever the delivery', async () => {
+      const workflows: Workflow[] = [
+        { name: 'test-workflow', content: 'test', isReusable: false }
+      ];
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
+
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows: [], user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project',
+        delivery: 'direct',
+        setWorkflows: vi.fn(), setRXWorkflows: vi.fn(), setSelectedWorkflowId: vi.fn(),
+      });
+
+      expect(deleteWorkflowFromGitHub).not.toHaveBeenCalled();
+      expect(deleteWorkflowFromDatabase).toHaveBeenCalled();
+    });
+
     test('should delete regular workflow', async () => {
       const workflows: Workflow[] = [
         { name: 'test-workflow', content: 'test', isReusable: false }
@@ -324,13 +371,15 @@ describe('workflowOperations', () => {
       (deleteWorkflowFromGitHub as Mock).mockResolvedValue({});
       (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
 
-      await deleteWorkflow(
-        0, 'regular', workflows, rxworkflows, 'user', 'project',
-        ['owner/repo'], '', setWorkflows, setRXWorkflows, setSelectedWorkflowId
-      );
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows, user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project_and_github',
+        delivery: 'direct',
+        setWorkflows, setRXWorkflows, setSelectedWorkflowId,
+      });
 
       expect(deleteWorkflowFromGitHub).toHaveBeenCalledWith(
-        'user', ['owner/repo'], 'test-workflow', '', 'project'
+        'user', ['owner/repo'], 'test-workflow', '', 'project', 'direct'
       );
       expect(deleteWorkflowFromDatabase).toHaveBeenCalledWith(
         'user', 'project', 'test-workflow'
@@ -338,8 +387,76 @@ describe('workflowOperations', () => {
       expect(setWorkflows).toHaveBeenCalledWith([]);
       expect(setSelectedWorkflowId).toHaveBeenCalledWith(null);
       expect(toast.success).toHaveBeenCalledWith(
-        expect.stringContaining('deleted successfully')
+        expect.stringContaining('deleted from ActionsManager and GitHub')
       );
+    });
+
+    test('project-scoped removal leaves the workflow file in GitHub', async () => {
+      const workflows: Workflow[] = [
+        { name: 'test-workflow', content: 'test', isReusable: false }
+      ];
+      const setWorkflows = vi.fn();
+      const setSelectedWorkflowId = vi.fn();
+
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
+
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows: [], user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project',
+        delivery: 'direct',
+        setWorkflows, setRXWorkflows: vi.fn(), setSelectedWorkflowId,
+      });
+
+      expect(deleteWorkflowFromGitHub).not.toHaveBeenCalled();
+      expect(deleteWorkflowFromDatabase).toHaveBeenCalledWith(
+        'user', 'project', 'test-workflow'
+      );
+      expect(setWorkflows).toHaveBeenCalledWith([]);
+      expect(toast.success).toHaveBeenCalledWith(
+        expect.stringContaining('Nothing was deleted from GitHub')
+      );
+    });
+
+    test('project-scoped removal leaves the reusable workflow file in GitHub', async () => {
+      const rxworkflows: RXWorkflow[] = [
+        { name: 'rx-workflow', content: 'test', isReusable: true }
+      ];
+      const setRXWorkflows = vi.fn();
+
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
+
+      await deleteWorkflow({
+        index: 0, type: 'reusable', workflows: [], rxworkflows, user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project',
+        delivery: 'direct',
+        setWorkflows: vi.fn(), setRXWorkflows, setSelectedWorkflowId: vi.fn(),
+      });
+
+      expect(deleteReusableWorkflowFromGitHub).not.toHaveBeenCalled();
+      expect(deleteWorkflowFromDatabase).toHaveBeenCalledWith(
+        'user', 'project', 'rx-workflow'
+      );
+    });
+
+    test('refreshes the project rollups the removal invalidates', async () => {
+      const workflows: Workflow[] = [
+        { name: 'test-workflow', content: 'test', isReusable: false }
+      ];
+      const fetchWorkflowsCount = vi.fn().mockResolvedValue(undefined);
+      const refreshProjectData = vi.fn().mockResolvedValue(undefined);
+
+      (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
+
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows: [], user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project',
+        delivery: 'direct',
+        setWorkflows: vi.fn(), setRXWorkflows: vi.fn(), setSelectedWorkflowId: vi.fn(),
+        fetchWorkflowsCount, refreshProjectData,
+      });
+
+      expect(fetchWorkflowsCount).toHaveBeenCalled();
+      expect(refreshProjectData).toHaveBeenCalled();
     });
 
     test('should delete reusable workflow', async () => {
@@ -354,10 +471,12 @@ describe('workflowOperations', () => {
       (deleteReusableWorkflowFromGitHub as Mock).mockResolvedValue({});
       (deleteWorkflowFromDatabase as Mock).mockResolvedValue({});
 
-      await deleteWorkflow(
-        0, 'reusable', workflows, rxworkflows, 'user', 'project',
-        ['owner/repo'], '', setWorkflows, setRXWorkflows, setSelectedWorkflowId
-      );
+      await deleteWorkflow({
+        index: 0, type: 'reusable', workflows, rxworkflows, user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project_and_github',
+        delivery: 'direct',
+        setWorkflows, setRXWorkflows, setSelectedWorkflowId,
+      });
 
       expect(deleteReusableWorkflowFromGitHub).toHaveBeenCalledWith(
         'user', 'rx-workflow', 'project'
@@ -400,10 +519,12 @@ describe('workflowOperations', () => {
       delete (globalThis as any).location;
       (globalThis as any).location = { reload: vi.fn() };
 
-      await deleteWorkflow(
-        0, 'regular', workflows, rxworkflows, 'user', 'project',
-        ['owner/repo'], '', setWorkflows, setRXWorkflows, setSelectedWorkflowId
-      );
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows, user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project_and_github',
+        delivery: 'direct',
+        setWorkflows, setRXWorkflows, setSelectedWorkflowId,
+      });
 
       expect(toast.error).toHaveBeenCalledWith(
         expect.stringContaining('Authentication required')
@@ -424,10 +545,12 @@ describe('workflowOperations', () => {
       };
       (deleteWorkflowFromGitHub as Mock).mockRejectedValue(error);
 
-      await deleteWorkflow(
-        0, 'regular', workflows, rxworkflows, 'user', 'project',
-        ['owner/repo'], '', setWorkflows, setRXWorkflows, setSelectedWorkflowId
-      );
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows, user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project_and_github',
+        delivery: 'direct',
+        setWorkflows, setRXWorkflows, setSelectedWorkflowId,
+      });
 
       expect(toast.error).toHaveBeenCalledWith(
         expect.stringContaining('Workflow or project not found')
@@ -441,10 +564,12 @@ describe('workflowOperations', () => {
       const setRXWorkflows = vi.fn();
       const setSelectedWorkflowId = vi.fn();
 
-      await deleteWorkflow(
-        0, 'regular', workflows, rxworkflows, 'user', 'project',
-        ['owner/repo'], '', setWorkflows, setRXWorkflows, setSelectedWorkflowId
-      );
+      await deleteWorkflow({
+        index: 0, type: 'regular', workflows, rxworkflows, user: 'user', projectName: 'project',
+        selectedRepos: ['owner/repo'], regexPattern: '', scope: 'project_and_github',
+        delivery: 'direct',
+        setWorkflows, setRXWorkflows, setSelectedWorkflowId,
+      });
 
       expect(deleteWorkflowFromGitHub).not.toHaveBeenCalled();
     });

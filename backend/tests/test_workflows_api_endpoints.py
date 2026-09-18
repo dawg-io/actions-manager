@@ -339,8 +339,13 @@ class TestWorkflowAPIEndpoints:
         finally:
             db.close()
 
-    def test_save_workflows_rename_cleans_up_accidental_duplicate(self):
-        """If the new name already exists (accidental duplicate), rename removes it."""
+    def test_save_workflows_rename_onto_an_existing_name_is_refused(self):
+        """Renaming onto a name another workflow holds must not destroy that workflow.
+
+        This used to succeed and delete the colliding row, whose YAML was the
+        user's and is not recoverable. The rename is refused instead, so the
+        user resolves the collision deliberately.
+        """
         client = TestClient(app)
 
         # Simulate the broken state: both old and new names exist
@@ -384,7 +389,8 @@ class TestWorkflowAPIEndpoints:
             "rxworkflows": []
         }
         response = client.post("/api/save-workflows", json=rename_payload)
-        assert response.status_code == 200
+        assert response.status_code == 409, response.text
+        assert "already has a workflow named" in response.json()["detail"]
 
         db = TestingSessionLocal()
         try:
@@ -393,13 +399,16 @@ class TestWorkflowAPIEndpoints:
                 Workflow.reusable_workflow.isnot(True),
                 Workflow.workflow_name.in_(["dup-old", "dup-new"])
             ).all()
-            assert len(all_wf) == 1, "Only the renamed workflow should remain"
-            assert all_wf[0].workflow_name == "dup-new"
+            by_name = {w.workflow_name: w for w in all_wf}
+            assert set(by_name) == {"dup-old", "dup-new"}, "neither workflow may be destroyed"
+            assert by_name["dup-new"].workflow_yaml == "name: New\non: push", (
+                "the colliding workflow's YAML was overwritten"
+            )
         finally:
             db.close()
 
-    def test_save_workflows_rename_removes_all_duplicates(self):
-        """Rename cleanup must remove ALL duplicate entries, not just the first one."""
+    def test_save_workflows_rename_refuses_rather_than_removing_several_duplicates(self):
+        """Several rows under the new name is still a collision, not a cleanup job."""
         db = TestingSessionLocal()
         try:
             # Simulate broken state: old name + two duplicates under the new name
@@ -449,7 +458,7 @@ class TestWorkflowAPIEndpoints:
             "rxworkflows": [],
         }
         response = TestClient(app).post("/api/save-workflows", json=rename_payload)
-        assert response.status_code == 200
+        assert response.status_code == 409, response.text
 
         db = TestingSessionLocal()
         try:
@@ -462,11 +471,21 @@ class TestWorkflowAPIEndpoints:
                 )
                 .all()
             )
-            assert len(remaining) == 1, "All duplicates should be removed; only one renamed entry should remain"
+            assert len(remaining) == 2, "both colliding rows must survive a refused rename"
+            still_there = (
+                db.query(Workflow)
+                .join(ProjectWorkflow)
+                .filter(
+                    ProjectWorkflow.project_id == self.project_id,
+                    Workflow.workflow_name == "multi-old",
+                )
+                .first()
+            )
+            assert still_there is not None, "the workflow being renamed must keep its old name"
         finally:
             db.close()
 
-    def test_save_workflows_rename_migrates_linked_reusable_workflows(self):
+    def test_save_workflows_rename_refuses_and_leaves_linked_reusable_workflows_alone(self):
         """LinkedReusableWorkflow rows on an accidental duplicate must be migrated, not orphaned."""
         db = TestingSessionLocal()
         try:
@@ -530,29 +549,30 @@ class TestWorkflowAPIEndpoints:
             ],
         }
         response = TestClient(app).post("/api/save-workflows", json=rename_payload)
-        assert response.status_code == 200
+        assert response.status_code == 409, response.text
 
         db = TestingSessionLocal()
         try:
-            renamed_wf = (
-                db.query(Workflow)
-                .join(ProjectWorkflow)
-                .filter(
-                    ProjectWorkflow.project_id == self.project_id,
-                    Workflow.workflow_name.ilike("rx-new"),
-                )
-                .first()
-            )
-            assert renamed_wf is not None, "Renamed workflow must exist"
-
-            # The LinkedReusableWorkflow must now point to the surviving (renamed) workflow
+            # Nothing was renamed, so nothing needed re-pointing: the link still
+            # names the row it always named, and no row was deleted out from
+            # under it.
             link = db.query(LinkedReusableWorkflow).filter_by(
                 standard_project_id=self.linked_project_id
             ).first()
             assert link is not None, "LinkedReusableWorkflow row must still exist"
-            assert link.workflow_id == renamed_wf.workflow_id, (
-                "LinkedReusableWorkflow must be re-pointed to the renamed workflow, not deleted"
+            target = db.query(Workflow).filter_by(workflow_id=link.workflow_id).first()
+            assert target is not None, "the linked workflow must not have been deleted"
+
+            original = (
+                db.query(Workflow)
+                .join(ProjectWorkflow)
+                .filter(
+                    ProjectWorkflow.project_id == self.project_id,
+                    Workflow.workflow_name == "rx-old",
+                )
+                .first()
             )
+            assert original is not None, "the workflow being renamed must keep its old name"
         finally:
             db.close()
 

@@ -176,6 +176,23 @@ class Workflow(Base):
     
     workflow_status = Column(String(30), nullable=False, default="new")  # Workflow lifecycle status: new, committed_locally, under_review, synced_with_github
 
+    # Marks the workflow for removal from GitHub on the next delivery, the way
+    # CustomFile.pending_delete does. The row is deleted once the campaign that
+    # carries the removal merges.
+    pending_delete = Column(Boolean, nullable=False, default=False)
+
+    # The name this workflow was last delivered to GitHub under, set when a
+    # rename happens on a workflow that was already delivered. A rename in Git
+    # is a remove plus an add, so delivery needs both halves: without this the
+    # old name is gone the moment workflow_name is reassigned, and the file sits
+    # in every repository under a name nothing tracks.
+    #
+    # Held until the campaign carrying the rename MERGES, not until it is
+    # committed. A campaign that is closed unmerged leaves the old file on
+    # GitHub, so the next one still has to remove it — which is why
+    # _cancel_pending_deletes has no counterpart here.
+    renamed_from = Column(String(255), nullable=True)
+
     # Audit: track who last modified this workflow
     last_modified_by = Column(String(255), nullable=True)  # GitHub username of last editor
 
@@ -276,6 +293,25 @@ class ActionsProject(Base):
     last_modified_by = Column(String(255), nullable=True)  # GitHub username of last editor
 
     user = relationship("Account", back_populates="actions_projects")
+
+
+class SeededActionsCatalogEntry(Base):
+    """Records that a default Actions Project was once offered to this install.
+
+    Seeding is deliberately one-shot: a default the user deletes must never come
+    back on restart. The seed account's existence covers the batch that shipped
+    with the original seed migration, but a default added to SEED_ACTIONS in a
+    later release needs its own marker - without one it either never reaches an
+    install that is already seeded, or it reappears after every deletion.
+
+    One row per ``owner/repo`` slug, written when the entry is offered and never
+    removed. Deleting the ActionsProject row does not delete the marker; that is
+    the whole point.
+    """
+    __tablename__ = "seeded_actions_catalog_entries"
+
+    slug = Column(String(511), primary_key=True)
+    seeded_at = Column(DateTime, default=func.now())
 
 
 class ActionGroup(Base):

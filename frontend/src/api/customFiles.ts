@@ -1,4 +1,5 @@
 import apiClient from "./apiClient";
+import type { RemovalDelivery, RemovalScope } from "../components/RemovalScopeDialog";
 
 export interface CustomFile {
   id: number;
@@ -37,8 +38,43 @@ export const createCustomFile = (projectId: number, data: CreateCustomFilePayloa
 export const updateCustomFile = (projectId: number, id: number, data: UpdateCustomFilePayload): Promise<{ custom_file: CustomFile }> =>
   apiClient.put(`/api/projects/${projectId}/custom-files/${id}`, data).then((r) => r.data);
 
-export const deleteCustomFile = (projectId: number, id: number): Promise<{ deleted: boolean; hard_deleted?: boolean; pending_delete?: boolean; custom_file?: CustomFile }> =>
-  apiClient.delete(`/api/projects/${projectId}/custom-files/${id}`).then((r) => r.data);
+/**
+ * `scope` is required on purpose. The server defaults to `project_and_github`
+ * for wire compatibility, so an omitted argument here would silently delete the
+ * file from GitHub — the opposite of what the UI preselects.
+ */
+/** One (repo, branch) the deletion reached, as the server reported it. */
+export interface CustomFileDeleteTarget {
+  repo: string;
+  branch: string | null;
+  status: "deleted" | "absent" | "error";
+  error?: string | null;
+  pr_url?: string;
+  pr_number?: number;
+}
+
+export interface DeleteCustomFileResponse {
+  deleted: boolean;
+  hard_deleted?: boolean;
+  pending_delete?: boolean;
+  custom_file?: CustomFile;
+  targets?: CustomFileDeleteTarget[];
+  /** Set when the removal was delivered as a PR Campaign. */
+  campaign_id?: number | null;
+  prs_created?: number;
+  /** The project's pr_state after the removal, so the caller need not reload to get it. */
+  pr_state?: string | null;
+}
+
+export const deleteCustomFile = (
+  projectId: number,
+  id: number,
+  scope: RemovalScope,
+  delivery: RemovalDelivery = "campaign"
+): Promise<DeleteCustomFileResponse> =>
+  apiClient
+    .delete(`/api/projects/${projectId}/custom-files/${id}`, { params: { scope, delivery } })
+    .then((r) => r.data);
 
 export const restoreCustomFile = (projectId: number, id: number): Promise<{ custom_file: CustomFile }> =>
   apiClient.post(`/api/projects/${projectId}/custom-files/${id}/restore`).then((r) => r.data);

@@ -655,7 +655,7 @@ def _resolve(payload: RollbackPreviewRequest, db: Session, github_user: Optional
     # the caller can *see* the project is not enough — _get_project_and_token
     # never reads ProjectMembership.project_role. Same reasoning as drift
     # resolution, which writes to GitHub for the same reason.
-    wf._require_drift_editor(db, user, project)
+    wf._require_project_editor(db, user, project)
     campaign = db.query(ProjectPRCampaign).filter(
         ProjectPRCampaign.campaign_id == _parse_campaign_id(payload.campaign_id),
         ProjectPRCampaign.project_id == project.project_id,

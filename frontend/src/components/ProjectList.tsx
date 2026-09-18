@@ -759,6 +759,7 @@ const ProjectList: React.FC<ProjectListProps> = ({
                 : "text-text-secondary dark:text-secondary-dark";
               const driftIndicator = getDriftIndicator(project);
               const driftCheckedAtLabel = getDriftCheckedAtLabel(project);
+              const driftStatusNote = project.drift_error_summary || null;
               const projectFields = project as Project & Record<string, unknown>;
               const projectColorKey = normalizeProjectColorKey(project.project_color);
               const projectColorStyles = PROJECT_COLOR_STYLES[projectColorKey];
@@ -845,6 +846,15 @@ const ProjectList: React.FC<ProjectListProps> = ({
                               className="mt-0.5 text-[11px] text-text-secondary/70 dark:text-secondary-dark/70"
                             >
                               {driftCheckedAtLabel}
+                            </p>
+                          )}
+                          {driftStatusNote && (
+                            <p
+                              data-testid={`project-drift-reason-${rowId}`}
+                              title={driftStatusNote}
+                              className="mt-0.5 line-clamp-2 text-[11px] text-amber-700 dark:text-amber-300"
+                            >
+                              {driftStatusNote}
                             </p>
                           )}
                         </div>

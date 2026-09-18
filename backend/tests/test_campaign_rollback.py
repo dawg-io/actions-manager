@@ -381,7 +381,7 @@ class TestNonInvertible:
         _add_pr(db_session, project, campaign)
 
         with patch("workflows.user_tokens", {TEST_USER: "fake-token"}), \
-             patch("workflows._require_drift_editor",
+             patch("workflows._require_project_editor",
                    side_effect=HTTPException(status_code=403, detail="Insufficient project role")):
             response = client.post("/api/campaign-rollback", json={
                 "github_user": TEST_USER, "project_name": TEST_PROJECT,

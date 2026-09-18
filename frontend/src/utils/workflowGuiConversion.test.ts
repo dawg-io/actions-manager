@@ -612,6 +612,191 @@ jobs:
       expect(guiAgain.events[0].type).toBe('push');
       expect(guiAgain.events[0].tags).toEqual(['v*']);
     });
+
+    // Regression tests: parseEvents modelled only a fixed set of keys under
+    // `on:` and, unlike parseJobs/parseSteps, kept nothing else. A reusable
+    // workflow's `workflow_call.secrets` and `.outputs` - its public interface
+    // - were silently dropped the moment it was opened in GUI mode and saved,
+    // breaking every caller and drifting every repo already holding the file.
+    const REUSABLE_WITH_SECRETS = `name: Reusable Deploy
+on:
+  workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm publish
+`;
+
+    const REUSABLE_WITH_OUTPUTS = `name: Reusable Build
+on:
+  workflow_call:
+    outputs:
+      image-tag:
+        description: Published image tag
+        value: \${{ jobs.build.outputs.tag }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run build
+`;
+
+    const REUSABLE_WITH_BOTH = `name: Reusable Release
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: string
+    outputs:
+      image-tag:
+        description: Published image tag
+        value: \${{ jobs.release.outputs.tag }}
+    secrets:
+      NPM_TOKEN:
+        required: true
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm publish
+`;
+
+    test('should round-trip workflow_call secrets byte-identically', () => {
+      expect(guiToYaml(yamlToGui(REUSABLE_WITH_SECRETS))).toBe(REUSABLE_WITH_SECRETS);
+    });
+
+    test('should round-trip workflow_call outputs byte-identically', () => {
+      expect(guiToYaml(yamlToGui(REUSABLE_WITH_OUTPUTS))).toBe(REUSABLE_WITH_OUTPUTS);
+    });
+
+    test('should round-trip workflow_call secrets and outputs together byte-identically', () => {
+      expect(guiToYaml(yamlToGui(REUSABLE_WITH_BOTH))).toBe(REUSABLE_WITH_BOTH);
+    });
+
+    test('should keep workflow_call secrets and outputs when a step is edited', () => {
+      const gui = yamlToGui(REUSABLE_WITH_BOTH);
+      gui.jobs[0].steps[0].run = 'npm publish --provenance';
+
+      const editedYaml = guiToYaml(gui);
+
+      expect(editedYaml).toBe(REUSABLE_WITH_BOTH.replace('npm publish', 'npm publish --provenance'));
+      expect(yamlToGui(editedYaml).events[0].unsupportedFields).toEqual({
+        outputs: {
+          'image-tag': {
+            description: 'Published image tag',
+            value: '${{ jobs.release.outputs.tag }}'
+          }
+        },
+        secrets: { NPM_TOKEN: { required: true } }
+      });
+    });
+
+    test('should leave a workflow without workflow_call unaffected', () => {
+      const originalYaml = `name: CI
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+`;
+
+      const gui = yamlToGui(originalYaml);
+
+      expect(gui.events[0].unsupportedFields).toBeUndefined();
+      expect(guiToYaml(gui)).toBe(originalYaml);
+    });
+
+    test('should keep unmodelled push filters such as paths-ignore', () => {
+      const originalYaml = `name: Docs
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - docs/**
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+`;
+
+      expect(guiToYaml(yamlToGui(originalYaml))).toBe(originalYaml);
+    });
+
+    test('should drop a preserved -ignore filter when the GUI sets its counterpart', () => {
+      // GitHub rejects an event carrying both `branches` and `branches-ignore`,
+      // so preserving the ignore variant must not turn a lossy save into an
+      // invalid workflow: the filter the user just set in the GUI wins.
+      const originalYaml = `name: CI
+on:
+  push:
+    branches-ignore:
+      - gh-pages
+    paths-ignore:
+      - docs/**
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm ci
+`;
+
+      const gui = yamlToGui(originalYaml);
+      const edited = {
+        ...gui,
+        events: [{ ...gui.events[0], branches: ['main'], paths: ['src/**'] }]
+      };
+
+      const editedYaml = guiToYaml(edited);
+
+      expect(editedYaml).toContain('branches:');
+      expect(editedYaml).toContain('paths:');
+      expect(editedYaml).not.toContain('branches-ignore');
+      expect(editedYaml).not.toContain('paths-ignore');
+    });
+
+    test('should keep unmodelled keys that appear before the modelled ones', () => {
+      // Preserved keys are re-emitted after the modelled ones, so a workflow
+      // that lists them first comes back reordered - lossless, but not
+      // byte-identical. Pinning that so the difference is a decision, not a
+      // surprise.
+      const originalYaml = `name: Reusable
+on:
+  workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: true
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: string
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm publish
+`;
+
+      const convertedYaml = guiToYaml(yamlToGui(originalYaml));
+
+      expect(convertedYaml).toContain('NPM_TOKEN');
+      expect(convertedYaml).toContain('environment');
+      expect(convertedYaml.indexOf('inputs:')).toBeLessThan(convertedYaml.indexOf('secrets:'));
+    });
   });
 
   describe('yamlToGuiResult', () => {

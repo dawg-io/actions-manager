@@ -38,7 +38,7 @@ Paste one of these into the add flow and ActionsManager fetches and parses the a
 
 ## The default catalog
 
-Every install starts with 7 pre-seeded, commonly used actions:
+Every install starts with 8 pre-seeded, commonly used actions:
 
 - `actions/checkout`
 - `actions/setup-node`
@@ -47,8 +47,11 @@ Every install starts with 7 pre-seeded, commonly used actions:
 - `actions/cache`
 - `actions/upload-artifact`
 - `actions/download-artifact`
+- `dawg-io/am-build-vars` — reads per-repository build variables from a committed `am-build-vars.yml`, exports them as env vars, and shares them across jobs, workflows and runs
 
 Any user can remove entries they don't want. Removal is **permanent** — deleted defaults are not re-seeded and won't reappear on restart.
+
+When a later release adds an action to the defaults, an install that is already running picks it up on its next start, once. ActionsManager records each default it has offered, so a new one arrives exactly one time and a default you deleted stays deleted — including one you delete after it arrives this way.
 
 ## Shared across your workspace
 

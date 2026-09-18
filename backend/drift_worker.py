@@ -176,9 +176,23 @@ NO_CREDENTIAL_REASON = (
     "access token. Check Now still works."
 )
 
+# Distinct from the above on purpose: a token *is* stored, so "no saved token"
+# would send the owner looking for a missing credential that is right there.
+UNREADABLE_CREDENTIAL_REASON = (
+    "Automatic drift checks are paused: this project's owner has a saved "
+    "GitHub token that cannot be decrypted, which usually means SECRET_KEY "
+    "changed since it was saved. Check that SECRET_KEY survives container "
+    "updates, then save the personal access token again to re-encrypt it "
+    "under the current key."
+)
 
-def _checkable_owner(db: Session, project: Project) -> Optional[str]:
-    """The project owner's username, or None if they have no usable credential.
+
+def _checkable_owner(db: Session, project: Project) -> tuple[Optional[str], Optional[str]]:
+    """The project owner's username, or None plus why they cannot be checked.
+
+    Exactly one of the two is set: a username with no reason, or a reason with
+    no username. The caller still defaults the reason rather than asserting it,
+    so a future branch that forgets one cannot write a null over a real one.
 
     Resolved through the normal credential store, which prefers a saved PAT and
     falls back to an in-memory OAuth session token. A worker has no request
@@ -190,22 +204,46 @@ def _checkable_owner(db: Session, project: Project) -> Optional[str]:
 
     owner = db.query(Account).filter(Account.user_id == project.user_id).first()
     if not owner or not owner.github_user:
-        return None
-    return owner.github_user if user_tokens.get(owner.github_user) else None
+        return None, NO_CREDENTIAL_REASON
+    username = owner.github_user
+    if user_tokens.get(username):
+        return username, None
+    if user_tokens.has_unreadable_saved_token(username):
+        return None, UNREADABLE_CREDENTIAL_REASON
+    return None, NO_CREDENTIAL_REASON
 
 
-def _record_skip(db: Session, project: Project) -> None:
+def _record_skip(db: Session, project: Project, reason: str) -> None:
     """Say why a project was passed over, without pretending it was checked.
 
-    ``last_drift_check_at`` and ``drift_status`` are both left alone on purpose.
-    Advancing the timestamp would make an unchecked project read as freshly
-    verified, and overwriting the status would throw away a real previous
-    answer — a project that genuinely was drifting still is.
+    ``last_drift_check_at`` is left alone on purpose: advancing it would make an
+    unchecked project read as freshly verified.
+
+    ``drift_status`` keeps a real verdict — a project that genuinely was
+    drifting still is — but ``check_failed`` is not a verdict. It means a check
+    could not reach one, which is the same answer a skip gives without spending
+    the call. Leaving it would keep every project reading "Needs Attention" for
+    a check that is no longer even attempted, which is the #2050 symptom
+    surviving its own fix on upgrade. It becomes "unknown" ("Not checked"), and
+    the reason below says why.
+
+    The failure streak goes with it. Backoff exists to space out *failing*
+    checks, and a skip is not one; leaving a streak the bug inflated would hold
+    the project out of the candidate set for hours after its credential is
+    repaired.
     """
-    if project.drift_error_summary == NO_CREDENTIAL_REASON:
-        return  # already recorded; don't write on every tick
-    project.drift_error_summary = NO_CREDENTIAL_REASON
-    db.commit()
+    changed = False
+    if project.drift_status == "check_failed":
+        project.drift_status = "unknown"
+        changed = True
+    if project.drift_check_failure_count:
+        project.drift_check_failure_count = 0
+        changed = True
+    if project.drift_error_summary != reason:
+        project.drift_error_summary = reason
+        changed = True
+    if changed:  # don't write on every tick once it is all recorded
+        db.commit()
 
 
 def sweep_projects_for_drift(db: Session, now: Optional[datetime] = None) -> int:
@@ -225,16 +263,16 @@ def sweep_projects_for_drift(db: Session, now: Optional[datetime] = None) -> int
         if checked >= batch_size:
             break
 
-        username = _checkable_owner(db, project)
-        if username is None:
-            # Deliberately leaves last_drift_check_at alone: claiming a check
-            # happened when none did is exactly the stale-"clean" problem this
-            # feature exists to prevent. Record the reason so the staleness is
-            # explained rather than silent.
-            _record_skip(db, project)
-            continue
-
         try:
+            username, skip_reason = _checkable_owner(db, project)
+            if username is None:
+                # Deliberately leaves last_drift_check_at alone: claiming a
+                # check happened when none did is exactly the stale-"clean"
+                # problem this feature exists to prevent. Record the reason so
+                # the staleness is explained rather than silent.
+                _record_skip(db, project, skip_reason or NO_CREDENTIAL_REASON)
+                continue
+
             run_project_drift_check(db, username, project)
             checked += 1
         except Exception as exc:  # noqa: BLE001 - one bad project must not stop the sweep

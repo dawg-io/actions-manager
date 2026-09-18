@@ -21,13 +21,15 @@ from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
 import auth as auth_module
 from auth import user_tokens
+from reusable_workflow_detection import is_reusable_workflow_yaml
 from models import (
-    Workflow, ProjectWorkflow, Account, Repo, ProjectRepo,
+    Workflow, ProjectWorkflow, Account, Project, Repo, ProjectRepo,
     WorkflowVersion, WorkspaceMember,
 )
 from workflows import (
@@ -74,6 +76,7 @@ class DiscoveredWorkflow(BaseModel):
     file_name: str
     path: str
     blob_sha: Optional[str] = None
+    is_reusable: bool = False
 
 
 class DiscoveryRepoResult(BaseModel):
@@ -110,6 +113,7 @@ class PreviewResponse(BaseModel):
     file_name: str
     content: str
     blob_sha: Optional[str] = None
+    is_reusable: bool = False
 
 
 class ImportWorkflowItem(BaseModel):
@@ -127,6 +131,13 @@ class ImportRequest(BaseModel):
     workflows: List[ImportWorkflowItem]
     import_mode: str = "save_local_only"  # save_local_only | save_and_create_pr_campaign
     target_repos: Optional[List[str]] = None  # Only used for PR campaign mode
+    # Reusable workflows discovered in a caller project's repositories can be
+    # filed into a Reusable Workflow Project instead. The source repository is
+    # still validated against the project being viewed; only the destination of
+    # the saved row changes. Addressed by id, not name: project names are unique
+    # only per owner, and the privileged lookup path falls back to a global name
+    # match, so a name can resolve to a project the user did not pick.
+    destination_project_id: Optional[int] = None
 
 
 class ImportResult(BaseModel):
@@ -145,6 +156,10 @@ class ImportResponse(BaseModel):
     results: List[ImportResult]
     pr_state: Optional[str] = None
     pr_results: Optional[dict] = None
+    # Set when the workflows were filed into a different project than the one
+    # being viewed, so the UI can say where they went.
+    destination_project_name: Optional[str] = None
+    destination_project_id: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +177,7 @@ _VALID_WORKFLOW_DIR = ".github/workflows/"
 _PATH_TRAVERSAL_PATTERN = re.compile(r"\.\.")
 _ALREADY_MANAGED_WARNING = "All discovered workflows are already managed by this project."
 _ERR_PROJECT_ID_MISMATCH = "Project ID does not match authenticated project"
+_ERR_DESTINATION_NOT_FOUND = "Destination project not found or access denied"
 
 
 def _validate_workflow_path(path: str) -> str:
@@ -244,6 +260,101 @@ def _get_authenticated_user_and_project(request: Request, db: Session, github_us
     return token, project
 
 
+def _resolve_import_destination(request: Request, db: Session, payload: "ImportRequest", project):
+    """Resolve which project the imported workflow rows are written to.
+
+    Defaults to the project being viewed. When the caller picks a different
+    destination it must be a Reusable Workflow Project they can write to: this
+    is the "file this reusable workflow where it belongs" path, not a general
+    cross-project import. The source repository is still validated against the
+    viewed project by the caller.
+
+    The destination is looked up by id and then authorized through the same
+    helper the viewed project uses, so a caller cannot reach a project the
+    name-based lookup would not have given them.
+    """
+    requested_id = payload.destination_project_id
+    if requested_id is None or requested_id == project.project_id:
+        return project
+
+    # "Missing", "not yours" and "resolved to a different project" all answer
+    # the same way, so the response never tells an authenticated caller which
+    # project ids exist. The picker only offers projects the caller can already
+    # see, so this costs a legitimate user nothing.
+    candidate = db.query(Project).filter(Project.project_id == requested_id).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail=_ERR_DESTINATION_NOT_FOUND)
+
+    try:
+        _token, destination = _get_authenticated_user_and_project(
+            request, db, payload.github_user, candidate.project_name, require_write=True
+        )
+    except HTTPException as exc:
+        if exc.status_code in (403, 404):
+            raise HTTPException(
+                status_code=404, detail=_ERR_DESTINATION_NOT_FOUND
+            ) from exc
+        raise
+
+    # The name lookup can resolve to a different project of the same name, which
+    # is exactly the ambiguity the id is here to avoid - refuse rather than
+    # write somewhere the caller did not pick.
+    if destination.project_id != requested_id:
+        raise HTTPException(status_code=404, detail=_ERR_DESTINATION_NOT_FOUND)
+    if (destination.project_type or "standard") != "rwx":
+        raise HTTPException(
+            status_code=400,
+            detail="Workflows can only be redirected to a Reusable Workflow Project",
+        )
+    if payload.import_mode != "save_local_only":
+        raise HTTPException(
+            status_code=400,
+            detail="Importing into another project supports save_local_only",
+        )
+    return destination
+
+
+def _strip_source_project_prefix(project, workflow_stem: str) -> str:
+    """Drop the viewed project's ``AM_{code}_`` prefix from a discovered name.
+
+    Discovery reads files as GitHub stores them, so in prefix mode a stem still
+    carries this project's prefix. ``create_or_update_workflow`` only strips the
+    *destination's* prefix, so a redirected import would otherwise store - and
+    later deliver - a doubly-prefixed name.
+    """
+    if not getattr(project, "use_prefix", False):
+        return workflow_stem
+
+    project_code = (getattr(project, "project_code", "") or "").strip()
+    if not project_code:
+        return workflow_stem
+
+    prefix = f"am_{project_code}_".lower()
+    if workflow_stem.lower().startswith(prefix):
+        return workflow_stem[len(prefix):] or workflow_stem
+    return workflow_stem
+
+
+def _destination_already_owns(db: Session, project_id: int, workflow_stem: str) -> bool:
+    """Whether the destination project already owns a workflow of this name.
+
+    A redirected import would otherwise land on ``create_or_update_workflow``'s
+    update branch and replace the destination's copy - zeroing its git hash and
+    dropping it out of ``synced_with_github`` - which for a reusable workflow
+    several caller projects link to means silently rewriting a shared asset.
+    """
+    return (
+        db.query(Workflow.workflow_id)
+        .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+        .filter(
+            ProjectWorkflow.project_id == project_id,
+            func.lower(Workflow.workflow_name) == workflow_stem.lower(),
+        )
+        .first()
+        is not None
+    )
+
+
 def _get_project_repos(db: Session, project_id: int) -> List[Repo]:
     """Get all repos associated with a project."""
     return (
@@ -285,6 +396,67 @@ def _get_discovered_workflow_match_names(file_name: str, project) -> set[str]:
                 if stripped_stem:
                     match_names.add(stripped_stem)
     return match_names
+
+
+# A GitHub blob SHA is a hash of the content, so "is this blob a reusable
+# workflow" is fixed for the life of that SHA. Caching it means re-opening the
+# import panel, or scanning repos that share a workflow file, costs no further
+# reads. Bounded so a long-lived worker cannot accumulate an entry per workflow
+# file the workspace has ever scanned.
+_REUSABLE_BLOB_CACHE: dict = {}
+_REUSABLE_BLOB_CACHE_MAX = 5000
+
+
+def _cache_reusable_blob(blob_sha: str, is_reusable: bool) -> None:
+    """Remember a blob's classification, clearing the cache if it grows too big."""
+    if len(_REUSABLE_BLOB_CACHE) >= _REUSABLE_BLOB_CACHE_MAX:
+        _REUSABLE_BLOB_CACHE.clear()
+    _REUSABLE_BLOB_CACHE[blob_sha] = is_reusable
+
+
+def _fetch_blob_text(owner: str, repo: str, blob_sha: str, headers: dict) -> Optional[str]:
+    """Return a blob's decoded text, or None when it cannot be read.
+
+    Classification is advisory - a blob we cannot read is reported as a plain
+    workflow rather than failing the whole discovery scan.
+    """
+    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/blobs/{blob_sha}"
+    try:
+        response = requests.get(url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
+    except requests.RequestException:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        # ValueError covers a malformed JSON body, bad base64 (binascii.Error)
+        # and a non-UTF-8 blob (UnicodeDecodeError) - all subclasses.
+        return base64.b64decode(response.json().get("content", "")).decode("utf-8")
+    except ValueError:
+        return None
+
+
+def _flag_reusable_workflows(pending: List[tuple], headers: dict) -> None:
+    """Set ``is_reusable`` on each discovered workflow, in place.
+
+    ``pending`` holds ``(entry, owner, repo)`` triples. Byte-identical files
+    share a blob SHA, so the case this product exists for - the same file in
+    every repo of a project - costs one content read for the whole scan rather
+    than one per repository, and none at all once cached.
+
+    A blob that cannot be read is left unflagged rather than cached, so a
+    transient failure does not stick for the life of the process.
+    """
+    for entry, owner, repo in pending:
+        if not entry.blob_sha:
+            continue
+        if entry.blob_sha not in _REUSABLE_BLOB_CACHE:
+            content = _fetch_blob_text(owner, repo, entry.blob_sha, headers)
+            if content is None:
+                continue
+            _cache_reusable_blob(entry.blob_sha, is_reusable_workflow_yaml(content))
+        entry.is_reusable = _REUSABLE_BLOB_CACHE[entry.blob_sha]
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +502,9 @@ def discover_workflows(
     workflow_by_path: dict = {}  # {filename: [{repo, branch, sha}]}
     total_workflows = 0
     managed_workflow_names = _get_managed_workflow_names(db, project.project_id)
+    # Every row we are going to return, with the repo each one's blob lives in,
+    # so reusable classification runs once per distinct blob after the scan.
+    pending_classification: List[tuple] = []
 
     for repo in repos:
         owner, repo_name_short = _validate_repo_format(repo.repo_name)
@@ -376,13 +551,15 @@ def discover_workflows(
                 continue
 
             path = f"{_VALID_WORKFLOW_DIR}{filename}"
-            discovered.append(DiscoveredWorkflow(
+            entry = DiscoveredWorkflow(
                 repo_name=repo.repo_name,
                 branch=branch,
                 file_name=filename,
                 path=path,
                 blob_sha=sha,
-            ))
+            )
+            discovered.append(entry)
+            pending_classification.append((entry, owner, repo_name_short))
 
             # Track for cross-repo matching
             if filename not in workflow_by_path:
@@ -400,6 +577,10 @@ def discover_workflows(
             workflows=discovered,
             warning=_ALREADY_MANAGED_WARNING if yaml_workflows_found > 0 and not discovered else None,
         ))
+
+    # Flag the reusable workflows so the import UI can label them and offer to
+    # file them into a Reusable Workflow Project instead.
+    _flag_reusable_workflows(pending_classification, headers)
 
     # Build cross-repo matches
     cross_repo_matches = []
@@ -492,6 +673,7 @@ def preview_workflow(
         file_name=file_name,
         content=content,
         blob_sha=blob_sha,
+        is_reusable=is_reusable_workflow_yaml(content),
     )
 
 
@@ -525,6 +707,9 @@ def import_workflows(
 
     if not payload.workflows:
         raise HTTPException(status_code=400, detail="At least one workflow must be specified for import")
+
+    destination = _resolve_import_destination(request, db, payload, project)
+    redirected = destination.project_id != project.project_id
 
     headers = {
         "Authorization": f"token {token}",
@@ -583,26 +768,41 @@ def import_workflows(
             # Extract workflow name (stem without extension)
             file_name = validated_path.split("/")[-1]
             workflow_stem = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+            workflow_stem = _strip_source_project_prefix(project, workflow_stem)
 
             # Use existing create_or_update_workflow to save locally
             # This reuses the exact same logic as the /api/save-workflows endpoint
+            if redirected and _destination_already_owns(db, destination.project_id, workflow_stem):
+                import_results.append(ImportResult(
+                    workflow_path=item.workflow_path,
+                    source_repo=item.source_repo,
+                    status="error",
+                    message=(
+                        f"'{destination.project_name}' already has a workflow named "
+                        f"'{workflow_stem}'. Rename one of them, or edit it there instead "
+                        f"of importing over it."
+                    ),
+                ))
+                continue
+
             workflow_schema = WorkflowSchema(name=workflow_stem, content=content)
-            from reusable_workflow_detection import is_reusable_workflow_yaml
             is_reusable = is_reusable_workflow_yaml(content)
 
             create_or_update_workflow(
-                db, workflow_schema, project.project_id,
+                db, workflow_schema, destination.project_id,
                 is_reusable=is_reusable,
                 last_modified_by=payload.github_user,
             )
 
-            # Store import metadata in version metadata
+            # Store import metadata in version metadata.
+            # Case-insensitive equality rather than ILIKE: '_' is a single-char
+            # wildcard in SQL LIKE and workflow names routinely contain it.
             saved_wf = (
                 db.query(Workflow)
                 .join(ProjectWorkflow)
                 .filter(
-                    ProjectWorkflow.project_id == project.project_id,
-                    Workflow.workflow_name.ilike(workflow_stem),
+                    ProjectWorkflow.project_id == destination.project_id,
+                    func.lower(Workflow.workflow_name) == workflow_stem.lower(),
                 )
                 .first()
             )
@@ -657,12 +857,14 @@ def import_workflows(
     success_count = sum(1 for r in import_results if r.status == "success")
 
     # Transition project state: new/synced → draft (same as save-workflows),
-    # but only when at least one workflow was imported successfully.
-    if success_count > 0 and project.pr_state in ("new", "synced"):
-        project.pr_state = "draft"
-        project.last_modified_by = payload.github_user
+    # but only when at least one workflow was imported successfully. The
+    # project that gained the workflows is the one whose state moves, which is
+    # the destination when the import was redirected to an RWX project.
+    if success_count > 0 and destination.pr_state in ("new", "synced"):
+        destination.pr_state = "draft"
+        destination.last_modified_by = payload.github_user
         db.commit()
-        db.refresh(project)
+        db.refresh(destination)
 
     # If save_and_create_pr_campaign, invoke existing PR creation logic
     pr_results = None
@@ -696,8 +898,16 @@ def import_workflows(
 
     error_count = sum(1 for r in import_results if r.status == "error")
 
-    if payload.import_mode == "save_local_only":
+    campaign_failed = isinstance(pr_results, dict) and bool(pr_results.get("error"))
+
+    if redirected:
+        message = f"Imported {success_count} workflow(s) into '{destination.project_name}'."
+    elif payload.import_mode == "save_local_only":
         message = f"Imported {success_count} workflow(s) locally."
+    elif campaign_failed or pr_results is None:
+        # Saying a campaign was created when none was is worse than saying
+        # nothing: the workflows are saved either way, the PRs are not.
+        message = f"Imported {success_count} workflow(s) locally. No PR Campaign was created."
     else:
         message = f"Imported {success_count} workflow(s) and created PR Campaign."
 
@@ -710,4 +920,6 @@ def import_workflows(
         results=import_results,
         pr_state=project.pr_state,
         pr_results=pr_results,
+        destination_project_name=destination.project_name if redirected else None,
+        destination_project_id=destination.project_id if redirected else None,
     )

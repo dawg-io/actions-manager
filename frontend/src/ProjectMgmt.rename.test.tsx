@@ -20,6 +20,9 @@ const mockUseParams = vi.fn();
 
 // Capture Sidebar's onProjectNameSave so tests can trigger a rename
 let capturedOnProjectNameSave: ((name: string) => void) | null = null;
+// Capture the Sidebar's props so tests can assert what it was handed without
+// re-rendering — the point is that a rename reaches it with no remount.
+let capturedSidebarProps: any = null;
 
 vi.mock(
   "react-router",
@@ -73,6 +76,7 @@ vi.mock("./api/codeowners", () => ({
 vi.mock("./components/Sidebar", () => ({
   default: function Sidebar(props: any) {
     capturedOnProjectNameSave = props.onProjectNameSave;
+    capturedSidebarProps = props;
     return <div data-testid="sidebar" />;
   },
 }));
@@ -331,6 +335,38 @@ describe("ProjectMgmt – rename navigates to new URL (stale-name regression)", 
     await waitFor(() => {
       expect(screen.getByTestId("project-name-in-list")).toHaveTextContent("new-name");
     });
+  });
+
+  test("the renamed project reaches the sidebar immediately, and the key does not change", async () => {
+    // The rename is what the user sees first in the sidebar, which is also where
+    // the rename control lives. It must update from local state on the same
+    // render pass — no reload, no remount, no second fetch.
+    const user = userEvent.setup();
+    (updateProjectName as Mock).mockResolvedValue({
+      project_id: 42,
+      project_name: "new-name",
+      project_code: "OLD",
+    });
+
+    renderWithProject();
+
+    await waitFor(() => expect(screen.getByTestId("sidebar")).toBeInTheDocument());
+    expect(capturedSidebarProps.projectName).toBe("old-name");
+    const loadCallsBefore = (loadProject as Mock).mock.calls.length;
+
+    act(() => {
+      capturedOnProjectNameSave!("new-name");
+    });
+    await user.click(await screen.findByTestId("confirm-rename-btn"));
+
+    await waitFor(() => {
+      expect(capturedSidebarProps.projectName).toBe("new-name");
+    });
+
+    // The project key is immutable, so it must be untouched by the rename.
+    expect(capturedSidebarProps.projectCode).toBe("OLD");
+    // And nothing refetched the project to achieve it.
+    expect((loadProject as Mock).mock.calls.length).toBe(loadCallsBefore);
   });
 
   test("navigate is NOT called when the rename API call fails", async () => {
