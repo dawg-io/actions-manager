@@ -502,28 +502,50 @@ const PRCreationProgress: React.FC<PRCreationProgressProps> = ({
   </div>
 );
 
+/** Everything the backend reported about why a target failed, deduped and flattened. */
+export function prResultFailureReasons(value: any): string[] {
+  const reasons = [
+    value?.error,
+    ...(value?.workflow_errors || []),
+    ...(value?.custom_file_errors || []),
+  ].filter((r: unknown): r is string => typeof r === "string" && r.trim() !== "");
+  return Array.from(new Set(reasons));
+}
+
 const PRCreationResults: React.FC<{ results: any }> = ({ results }) => (
   <div className="results-section">
-    <div className="success-message">
-      ✅ Successfully created {results.prs_created} pull request(s)!
+    <div className={results.prs_created ? "success-message" : "warning-message"}>
+      {results.prs_created
+        ? `✅ Successfully created ${results.prs_created} pull request(s)!`
+        : "⚠️ No pull requests were created."}
     </div>
     <div className="results-details">
       {Object.entries(results.results || {}).map(([key, value]: [string, any]) => {
         const status = value.status || "unknown";
         const prUrl = value.pr_url;
         const prNumber = value.pr_number;
+        // Without these the user sees a red chip and has to read the server log to
+        // find out GitHub refused the PR — and why.
+        const reasons = status === "error" ? prResultFailureReasons(value) : [];
         return (
           <div key={key} className="result-item">
-            <span className={`result-status ${status}`}>
-              {status === "pr_created" && "✅ Created"}
-              {status === "pr_updated" && "✅ Updated"}
-              {status === "error" && "❌ Error"}
-            </span>
-            <span className="result-repo">{key}</span>
-            {prUrl && (
-              <a href={prUrl} target="_blank" rel="noopener noreferrer" className="result-link">
-                PR #{prNumber} →
-              </a>
+            <div className="result-item-row">
+              <span className={`result-status ${status}`}>
+                {status === "pr_created" && "✅ Created"}
+                {status === "pr_updated" && "✅ Updated"}
+                {status === "error" && "❌ Error"}
+              </span>
+              <span className="result-repo">{key}</span>
+              {prUrl && (
+                <a href={prUrl} target="_blank" rel="noopener noreferrer" className="result-link">
+                  PR #{prNumber} →
+                </a>
+              )}
+            </div>
+            {reasons.length > 0 && (
+              <ul className="result-errors" data-testid="pr-result-errors">
+                {reasons.map((reason) => <li key={reason}>{reason}</li>)}
+              </ul>
             )}
           </div>
         );

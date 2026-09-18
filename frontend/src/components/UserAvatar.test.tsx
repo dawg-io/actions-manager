@@ -272,6 +272,37 @@ describe('UserAvatar Component', () => {
     expect((screen.getByLabelText('GitHub personal access token') as HTMLInputElement).value).toBe('');
   });
 
+  test('links the HTTPS setup guide when saving a token trips the connection guard', async () => {
+    // The same 400 that blocks PAT login blocks the token save, and this panel
+    // renders the detail verbatim — so it needs the guide link too.
+    (saveGitHubToken as Mock).mockRejectedValue(new Error(
+      'PAT login over non-local HTTP is disabled for security. '
+      + 'Use HTTPS or set ALLOW_INSECURE_HTTP=true to override. '
+      + 'Already behind an HTTPS reverse proxy? It must forward X-Forwarded-Proto: https. '
+      + 'Setup guide: https://actionsmanager.io/getting-started/https-setup.html'
+    ));
+
+    const props: UserAvatarProps = {
+      avatarUrl: null,
+      username: 'testuser',
+      accountType: 'free',
+      githubAccountType: 'User',
+      onLogout: vi.fn()
+    };
+
+    renderWithTheme(<UserAvatar {...props} />);
+    openUserMenu('User menu for testuser');
+    fireEvent.click(screen.getByRole('button', { name: 'Manage authentication' }));
+    fireEvent.change(screen.getByLabelText('GitHub personal access token'), {
+      target: { value: 'github_pat_1234567890' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save token' }));
+
+    const guide = await screen.findByRole('link', { name: /HTTPS setup guide/ });
+    expect(guide).toHaveAttribute('href', 'https://actionsmanager.io/getting-started/https-setup.html');
+    expect(screen.queryByText(/Setup guide: https/)).toBeNull();
+  });
+
   test('should handle empty username', () => {
     const mockOnLogout = vi.fn();
     const props: UserAvatarProps = {

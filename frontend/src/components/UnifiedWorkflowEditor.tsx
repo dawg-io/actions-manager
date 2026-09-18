@@ -12,6 +12,9 @@ import OpenInGitHubModal from './OpenInGitHubModal';
 import EditableNameField from './EditableNameField';
 import WorkflowStatusBadge, { WorkflowStatus } from './WorkflowStatusBadge';
 import ConfirmDialog from './ConfirmDialog';
+import RemovalScopeDialog, { RemovalDelivery, RemovalScope } from './RemovalScopeDialog';
+import RenameImpactDialog from './RenameImpactDialog';
+import { useRenameConfirmation, collectRenames } from '../hooks/useRenameConfirmation';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { WorkflowGUI, guiToYaml } from '../utils/workflowGuiConversion';
 import { UnifiedWorkflowItem, ProjectPRState } from '../types/workflow';
@@ -152,24 +155,57 @@ interface UnifiedWorkflowEditorProps {
   setRegularGuiWorkflow: (workflow: WorkflowGUI) => void;
   setGuiWorkflow: (workflow: WorkflowGUI) => void;
   handleWorkflowChange: (field: string, value: string) => void;
-  saveDraftWorkflow: (index: number | null, type: 'regular' | 'reusable') => void;
+  saveDraftWorkflow: (index: number | null, type: 'regular' | 'reusable', renamedTo?: string) => void;
   /** Draft save for linked reusable workflows – persists content to the RWX project DB. */
   saveDraftLinkedWorkflow?: (index: number) => Promise<void>;
   commitAndUpdatePR?: (index: number | null, type: 'regular' | 'reusable') => Promise<boolean>;
   /** Separate callback for linked reusable workflows – routes save to RWX project. */
   commitAndUpdatePRLinked?: (index: number) => Promise<boolean>;
-  deleteWorkflow: (index: number, type: 'regular' | 'reusable') => void;
+  deleteWorkflow: (index: number, type: 'regular' | 'reusable', scope: RemovalScope, delivery: RemovalDelivery) => void;
   /** Unlink a linked reusable workflow from this project (removes association only). */
   unlinkWorkflow?: (workflowId: number) => Promise<void>;
   /** Opens the workflow-creation dialog — surfaced in the empty state when nothing is selected. */
   addWorkflowFn?: () => void;
   /** Opens the existing-workflow import panel — surfaced in the empty state when nothing is selected. */
   onImportExisting?: () => void;
+  /** Project type, so a reusable workflow inside a caller project can be flagged. */
+  projectType?: 'standard' | 'rwx';
 }
+
+/**
+ * Why a reusable workflow in a caller project is worth moving.
+ *
+ * A component rather than an inline conditional so UnifiedWorkflowEditor stays
+ * under SonarQube's cognitive-complexity ceiling - the same reason EditorSurface
+ * is one. A linked workflow already lives in the RWX project that owns it, so
+ * only one this project owns outright prompts the suggestion.
+ */
+const ReusableInCallerNotice: React.FC<{
+  workflow: UnifiedWorkflowItem;
+  projectType?: 'standard' | 'rwx';
+}> = ({ workflow, projectType }) => {
+  if (projectType === 'rwx' || workflow.type !== 'reusable') return null;
+
+  return (
+    <div className="workflow-reusable-notice" data-testid="reusable-in-caller-notice">
+      <span className="workflow-reusable-notice-dot" aria-hidden="true" />
+      <span>
+        This is a reusable workflow — it is triggered by{' '}
+        <code>workflow_call</code>, not by an event of its own. It works here, but a
+        Reusable Workflow Project versions it once and lets every caller project link
+        to it instead of keeping a copy.
+      </span>
+    </div>
+  );
+};
 
 interface WorkflowEditorHeaderProps {
   selectedWorkflow: UnifiedWorkflowItem;
   projectCode: string | null;
+  /** Needed to ask the backend what a rename typed into the name field would do. */
+  projectName: string;
+  /** Names the caller on that request; it answers 401 unidentified. */
+  user: string;
   editMode: 'yaml' | 'gui';
   projectPRState?: ProjectPRState;
   usePrefix?: boolean;
@@ -180,11 +216,11 @@ interface WorkflowEditorHeaderProps {
   /** Repositories linked to this project (format: "owner/repo"). Used for "Open in GitHub" links. */
   selectedRepos?: string[];
   handleWorkflowChange: (field: string, value: string) => void;
-  saveDraftWorkflow: (index: number | null, type: 'regular' | 'reusable') => void;
+  saveDraftWorkflow: (index: number | null, type: 'regular' | 'reusable', renamedTo?: string) => void;
   /** Draft save for linked reusable workflows – persists content to the RWX project DB. */
   onSaveDraftLinked?: () => void;
   onCommitAndUpdatePR?: () => void;
-  deleteWorkflow: (index: number, type: 'regular' | 'reusable') => void;
+  deleteWorkflow: (index: number, type: 'regular' | 'reusable', scope: RemovalScope, delivery: RemovalDelivery) => void;
   onRequestDelete?: (index: number, type: 'regular' | 'reusable', name: string) => void;
   /** Called when user confirms unlinking a linked reusable workflow. */
   onUnlinkWorkflow?: (workflowId: number) => void;
@@ -215,6 +251,8 @@ interface WorkflowEditorContentProps {
 const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   selectedWorkflow,
   projectCode,
+  projectName,
+  user,
   editMode,
   projectPRState = "new",
   usePrefix = true,
@@ -397,6 +435,49 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
   // mode) and the `.yml` suffix that surround the editable input.
   const displayedWorkflowFilename = `${securePrefix}${editableNameValue}.yml`;
 
+  // Renaming is verified here, at the moment the user commits the new name —
+  // not later, at the save that persists it. Renaming changes the delivered
+  // filename: the old file stays in every repository under its old name and a
+  // caller's `uses:` line still points at it. The save enforces the same
+  // refusals, but a 409 arriving after the user has moved on is not a
+  // verification, and prompting again at every later save is just noise.
+  const renameGuard = useRenameConfirmation(user, projectName);
+
+  // Drop a pending confirmation whenever the workflow under it changes.
+  //
+  // Keyed on the persisted name and kind, NOT on selectedWorkflow.id: that id is
+  // positional (`regular-${index}`), so a refetch that leaves a DIFFERENT
+  // workflow at the same index never changed it and this never fired — the
+  // exact hazard the guard exists for. The dialog then described one workflow
+  // while confirming renamed whichever now occupied the slot, and handed the
+  // backend that one's savedName as original_name: a rename the user never
+  // previewed, on a workflow they never chose.
+  const renameSubject = `${selectedWorkflow.type}:${selectedWorkflow.savedName ?? selectedWorkflow.name}`;
+  useEffect(() => { renameGuard.cancel(); }, [renameSubject, renameGuard.cancel]);
+
+  const handleNameSave = (newValue: string) => {
+    // In prefix mode the value already excludes the locked prefix and ".yml"
+    // suffix; in no-prefix mode the user may have typed the extension, which
+    // normalizeWorkflowStem strips.
+    const newName = normalizeWorkflowStem(newValue);
+    const renames = collectRenames(
+      [{ name: newName, savedName: selectedWorkflow.savedName }], isReusable
+    );
+    void renameGuard.confirmThen(renames, async () => {
+      handleWorkflowChange('name', newName);
+      // Confirming the rename *is* the commit. Having agreed to a dialog that
+      // spells out what the rename does, nobody expects to then have to press
+      // Commit Locally for it to be saved at all.
+      //
+      // Only for a real rename: naming a workflow that was never saved shows no
+      // dialog, and there is nothing to agree to. It also may have no content
+      // yet, which this save rejects.
+      if (renames.length > 0) {
+        saveDraftWorkflow(selectedWorkflow.originalIndex, editableType, newName);
+      }
+    });
+  };
+
   const validateWorkflowFilenameDraft = (draftValue: string) => {
     const trimmed = (draftValue ?? '').trim();
     if (!trimmed) return 'Workflow name cannot be empty.';
@@ -444,12 +525,7 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
               value={editableNameValue}
               prefix={editableNamePrefix}
               suffix={editableNameSuffix}
-              onSave={(newValue) => {
-                // In prefix mode the value already excludes the locked prefix
-                // and ".yml" suffix; in no-prefix mode the user may have typed
-                // the extension, which normalizeWorkflowStem strips.
-                handleWorkflowChange('name', normalizeWorkflowStem(newValue));
-              }}
+              onSave={handleNameSave}
               validate={validateWorkflowFilenameDraft}
               ariaLabel="workflow filename"
               inputId="workflow-filename"
@@ -540,13 +616,15 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
                     <button
                       className="more-menu-item more-menu-item--danger"
                       role="menuitem"
-                      onClick={() => { 
+                      onClick={() => {
                         if (onRequestDelete) {
                           onRequestDelete(selectedWorkflow.originalIndex, editableType, selectedWorkflow.name);
                         } else {
-                          deleteWorkflow(selectedWorkflow.originalIndex, editableType);
+                          // Fallback for a caller that wired no dialog, so the
+                          // user picked nothing: take the reviewable delivery.
+                          deleteWorkflow(selectedWorkflow.originalIndex, editableType, 'project_and_github', 'campaign');
                         }
-                        setMoreMenuOpen(false); 
+                        setMoreMenuOpen(false);
                       }}
                       title="Delete this workflow"
                     >
@@ -708,6 +786,15 @@ const WorkflowEditorHeader: React.FC<WorkflowEditorHeaderProps> = ({
         </div>
       </div>
 
+      {/* What renaming this workflow would do, before the new name is taken. */}
+      <RenameImpactDialog
+        open={renameGuard.renameOpen}
+        items={renameGuard.renameItems}
+        loading={renameGuard.renameLoading}
+        onConfirm={() => { void renameGuard.confirm(); }}
+        onCancel={renameGuard.cancel}
+      />
+
       {/* Open in GitHub Modal */}
       <OpenInGitHubModal
         isOpen={githubModalOpen}
@@ -778,12 +865,13 @@ const WorkflowEditorContent: React.FC<WorkflowEditorContentProps> = ({
       setGuiWorkflow(newWorkflow);
     }
 
-    // Sync name changes from GUI editor to workflow state
-    // But only if the new name is not empty and different from current
-    // This prevents erasing the name if GUI state gets reset to default
-    if (newWorkflow.name && newWorkflow.name !== selectedWorkflow.name) {
-      handleWorkflowChange('name', newWorkflow.name);
-    }
+    // The GUI's name box edits the workflow's YAML `name:` label, which
+    // guiToYaml writes into the content below. It used to be copied into the
+    // workflow's `name` as well — and that field IS the delivered filename, so
+    // editing a label silently renamed the file: no impact dialog, no blocked
+    // reasons, and once a save carries original_name the old file is queued for
+    // deletion from every repository. Renaming is the name field above, which
+    // validates the value and asks first.
 
     try {
       const yamlContent = guiToYaml(newWorkflow);
@@ -975,6 +1063,55 @@ const ExpandedEditorDialog: React.FC<ExpandedEditorDialogProps> = ({
   </Dialog>
 );
 
+type PendingWorkflowDelete = { index: number; type: 'regular' | 'reusable'; name: string };
+
+const REUSABLE_NOT_OURS_REASON =
+  "This reusable workflow lives in its Reusable Workflow Project's repository, not this " +
+  "project's, so it cannot be deleted from GitHub here. Delete it from the project that owns it.";
+
+/**
+ * The removal-scope dialog for a workflow. Renders nothing until one is pending,
+ * so the editor does not carry the decision itself.
+ */
+const WorkflowRemovalDialog: React.FC<{
+  pending: PendingWorkflowDelete | null;
+  // Widened to match displayFilenameFor, which the editor may hand either.
+  projectCode?: string | null;
+  usePrefix: boolean;
+  projectType?: 'standard' | 'rwx';
+  onConfirm: (index: number, type: 'regular' | 'reusable', scope: RemovalScope, delivery: RemovalDelivery) => void;
+  onClose: () => void;
+}> = ({ pending, projectCode, usePrefix, projectType, onConfirm, onClose }) => {
+  if (!pending) return null;
+
+  // A reusable workflow in a caller project lives in the Reusable Workflow
+  // Project's repository, not one of this project's. Deleting it there would
+  // remove the copy every other caller linking that project depends on, so the
+  // server refuses — say so rather than offering an option that cannot work.
+  const notOurRepo = pending.type === 'reusable' && projectType !== 'rwx';
+
+  return (
+    <RemovalScopeDialog
+      open={true}
+      // The delete control is rendered only for a workflow this project owns
+      // (linked ones offer Unlink instead), so the project's prefix always
+      // applies to the file this removes.
+      title={`Remove workflow "${displayFilenameFor({ name: pending.name }, projectCode, usePrefix)}"?`}
+      githubLocation="your project's repositories"
+      githubScopeDisabledReason={notOurRepo ? REUSABLE_NOT_OURS_REASON : undefined}
+      // Reusable workflows keep the single-question dialog: their GitHub option
+      // is disabled, so there is no delivery to choose.
+      offerDelivery={pending.type === 'regular'}
+      // Workflows have no Restore button — custom files do. Closing the pull
+      // request is what cancels the removal, and the server unmarks the
+      // workflow when it does.
+      campaignReversal="closing that pull request cancels the removal"
+      onConfirm={(scope, delivery) => { onConfirm(pending.index, pending.type, scope, delivery); onClose(); }}
+      onCancel={onClose}
+    />
+  );
+};
+
 const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   selectedWorkflow,
   editMode,
@@ -1002,12 +1139,13 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
   deleteWorkflow,
   unlinkWorkflow,
   addWorkflowFn,
-  onImportExisting
+  onImportExisting,
+  projectType = 'standard'
 }) => {
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [showUnlockModal, setShowUnlockModal] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<{ index: number; type: 'regular' | 'reusable'; name: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingWorkflowDelete | null>(null);
   const [pendingUnlink, setPendingUnlink] = useState<{ workflowId: number; name: string } | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [pendingCollapse, setPendingCollapse] = useState(false);
@@ -1165,6 +1303,8 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
         <WorkflowEditorHeader
           selectedWorkflow={selectedWorkflow}
           projectCode={projectCode}
+          projectName={projectName}
+          user={user}
           editMode={editMode}
           projectPRState={projectPRState}
           usePrefix={usePrefix}
@@ -1184,6 +1324,7 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
           onInsertResource={handleInsertResource}
           onExpand={() => setIsExpanded(true)}
         />
+        <ReusableInCallerNotice workflow={selectedWorkflow} projectType={projectType} />
         {/* Mounted here OR in the expanded dialog, never both. Two live
             copies duplicated every step-row DOM id, so StepDetailPanel's
             document.getElementById(...).focus() on close hit the hidden
@@ -1270,20 +1411,14 @@ const UnifiedWorkflowEditor: React.FC<UnifiedWorkflowEditorProps> = ({
         </div>
       )}
 
-      {pendingDelete && (
-        <ConfirmDialog
-          open={true}
-          // The delete control is rendered only for a workflow this project
-          // owns (linked ones offer Unlink instead), so the project's prefix
-          // always applies to the file this removes.
-          title={`Delete workflow "${displayFilenameFor({ name: pendingDelete.name }, projectCode, usePrefix)}"?`}
-          description="This will remove the workflow from your project and all GitHub repositories. This action cannot be undone."
-          confirmLabel="Delete workflow"
-          destructive
-          onConfirm={() => { deleteWorkflow(pendingDelete.index, pendingDelete.type); setPendingDelete(null); }}
-          onCancel={() => setPendingDelete(null)}
-        />
-      )}
+      <WorkflowRemovalDialog
+        pending={pendingDelete}
+        projectCode={projectCode}
+        usePrefix={usePrefix}
+        projectType={projectType}
+        onConfirm={deleteWorkflow}
+        onClose={() => setPendingDelete(null)}
+      />
 
       {pendingUnlink && (
         <ConfirmDialog

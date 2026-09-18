@@ -60,8 +60,6 @@ const baseProps = {
   loadingStatuses: false,
   workflowStatuses: {},
   selectedRepos: [],
-  reusableWorkflowsEnabled: true,
-  repoExists: true,
   setIsCollapsed: vi.fn(),
   handleSelectWorkflow: vi.fn(),
 };
@@ -193,7 +191,7 @@ describe('UnifiedWorkflowList', () => {
         'page'
       );
       expect(
-        screen.getByRole('button', { name: 'AM_PROJ_my-reusable.yml, No status' })
+        screen.getByRole('button', { name: 'AM_PROJ_my-reusable.yml, Reusable workflow, No status' })
       ).not.toHaveAttribute('aria-current');
     });
 
@@ -650,16 +648,45 @@ describe('UnifiedWorkflowList', () => {
       expect(screen.getByText('No workflows yet')).toBeInTheDocument();
     });
 
-    it('hides the Reusable Workflows section when reusable workflows are disabled', () => {
+    it('lists every reusable workflow the project owns', () => {
+      // Hiding them behind the reusable-authoring toggle stranded imported
+      // reusable workflows: the row stayed in the database with nothing
+      // rendering it, so the import looked like it had done nothing.
       render(
         <UnifiedWorkflowList
           {...baseProps}
-          reusableWorkflowsEnabled={false}
           unifiedWorkflows={[regularWorkflow, reusableWorkflow]}
         />
       );
 
-      expect(screen.queryByRole('region', { name: 'Reusable Workflows' })).not.toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Reusable Workflows' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'AM_PROJ_my-reusable.yml, Reusable workflow, No status' })
+      ).toBeInTheDocument();
+    });
+
+    it('flags a reusable workflow sitting in a caller project', () => {
+      render(
+        <UnifiedWorkflowList
+          {...baseProps}
+          projectType="standard"
+          unifiedWorkflows={[regularWorkflow, reusableWorkflow]}
+        />
+      );
+
+      expect(screen.getByTestId('reusable-in-caller-badge')).toBeInTheDocument();
+    });
+
+    it('does not flag reusable workflows in a Reusable Workflow Project', () => {
+      render(
+        <UnifiedWorkflowList
+          {...baseProps}
+          projectType="rwx"
+          unifiedWorkflows={[regularWorkflow, reusableWorkflow]}
+        />
+      );
+
+      expect(screen.queryByTestId('reusable-in-caller-badge')).not.toBeInTheDocument();
     });
 
     it('does not mark the CODEOWNERS row selected when no selection is supplied', () => {

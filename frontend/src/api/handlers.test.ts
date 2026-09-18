@@ -54,6 +54,27 @@ describe("handleSaveProject", () => {
       null
     );
 
+  it("sends original_name for a renamed workflow so the save renames it", async () => {
+    // Dropping savedName here was one of three layers that turned a project
+    // save of a renamed workflow into a duplicate: the old workflow stayed and
+    // a second appeared under the new name.
+    mockedSaveProject.mockResolvedValue({ success: true, project_id: 7 } as never);
+
+    await handleSaveProject(
+      "testuser", "My Project", ["org/repo1"],
+      [{ name: "ci-v2", content: "name: x", savedName: "ci" }],
+      [{ name: "shared", content: "name: y", savedName: "shared" }],
+      null, null, "", "default", 30, 7
+    );
+
+    const payload = mockedSaveProject.mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(payload.workflows).toEqual([
+      { name: "ci-v2", content: "name: x", original_name: "ci" },
+    ]);
+    // Unchanged names carry no original_name: that would be a rename to itself.
+    expect(payload.rxworkflows).toEqual([{ name: "shared", content: "name: y" }]);
+  });
+
   it("returns error for empty project name", async () => {
     const result = await callWith({ projectName: "" });
     expect(result).toEqual({ success: false, error: "Enter a valid project name." });

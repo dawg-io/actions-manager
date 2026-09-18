@@ -339,6 +339,31 @@ class TestDockerfile:
         dockerfile = REPO_ROOT / "frontend" / "Dockerfile"
         assert dockerfile.exists(), "frontend/Dockerfile not found"
 
+    def test_nginx_preserves_upstream_forwarded_proto(self):
+        """The container's own nginx must not overwrite the outer proxy's scheme.
+
+        nginx listens on plain HTTP inside the container, so $scheme is always
+        "http" there. Deriving X-Forwarded-Proto from it discards the "https"
+        an outer proxy (Traefik, Caddy, nginx) sent, and the backend then blocks
+        PAT login on a perfectly good HTTPS deployment.
+        """
+        dockerfile = (REPO_ROOT / "Dockerfile.self-hosted").read_text()
+
+        assert "map $http_x_forwarded_proto $am_forwarded_proto {" in dockerfile, (
+            "nginx.conf must map the upstream X-Forwarded-Proto so an outer "
+            "proxy's scheme survives"
+        )
+        assert "~*^https  https;" in dockerfile, (
+            "the map must match the first value so a chained proxy's "
+            '"https, http" is not treated as plain http'
+        )
+        assert "proxy_set_header X-Forwarded-Proto $scheme;" not in dockerfile, (
+            "X-Forwarded-Proto must come from $am_forwarded_proto, not $scheme"
+        )
+        assert "proxy_set_header X-Forwarded-Proto $am_forwarded_proto;" in dockerfile, (
+            "proxying locations must forward the mapped scheme"
+        )
+
     def test_self_hosted_dockerfile_removes_backend_env_files(self):
         """Verify self-hosted Dockerfile removes backend .env files.
 

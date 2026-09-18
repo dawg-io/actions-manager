@@ -39,6 +39,19 @@ Quick reference for common errors and their solutions.
 
 ---
 
+### "PAT login over non-local HTTP is disabled"
+
+**Symptoms:** Signing in with a PAT is rejected even though the browser shows HTTPS.
+
+**Causes:** Your reverse proxy terminates TLS and forwards plain HTTP to the container, so the backend only learns the original scheme from the `X-Forwarded-Proto` header. Either the proxy is not sending it, or the image predates the fix that stopped the container's own nginx from overwriting it.
+
+**Solutions:**
+1. Confirm your proxy forwards `X-Forwarded-Proto: https` — Caddy and Traefik do this automatically; a hand-written nginx proxy needs `proxy_set_header X-Forwarded-Proto $scheme;`
+2. Pull the latest image and restart
+3. See [HTTPS Setup]({% link getting-started/https-setup.md %}) for per-proxy examples and a stop-gap override
+
+---
+
 ### "Sign in with GitHub" button not appearing
 
 **Symptoms:** The OAuth login button is missing from the login page.

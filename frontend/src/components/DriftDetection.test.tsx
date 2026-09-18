@@ -307,9 +307,12 @@ describe("DriftDetection", () => {
       await user.click(screen.getByTestId("delete-everywhere-button"));
       await user.click(await screen.findByRole("button", { name: /Delete everywhere/i }));
 
+      // "direct", explicitly: the row is deleted immediately below, so a
+      // campaign would be left carrying a removal for a workflow that no longer
+      // exists in ActionsManager.
       await waitFor(() =>
         expect(vi.mocked(deleteWorkflowFromGitHub)).toHaveBeenCalledWith(
-          "testuser", ["org/repo", "org/repo2"], "Build", "", "proj",
+          "testuser", ["org/repo", "org/repo2"], "Build", "", "proj", "direct",
         ),
       );
       await waitFor(() =>

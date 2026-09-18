@@ -5,12 +5,16 @@ import PlainFileEditor, { PlainFileEditorLanguage } from "./PlainFileEditor";
 import {
   CustomFile,
   CreateCustomFilePayload,
+  DeleteCustomFileResponse,
   createCustomFile,
   updateCustomFile,
   deleteCustomFile,
   restoreCustomFile,
   validateFilePath,
 } from "../api/customFiles";
+import { toast } from "../utils/toast";
+import RemovalScopeDialog, { RemovalDelivery, RemovalScope } from "./RemovalScopeDialog";
+import { apiErrorMessage } from "../utils/apiErrorMessage";
 import "../styles/UnifiedWorkflows.css";
 
 export function detectLanguage(filePath: string): PlainFileEditorLanguage {
@@ -27,12 +31,65 @@ interface CustomFilesProps {
   githubUser: string;
   initialFiles?: CustomFile[];
   onChange?: (files: CustomFile[]) => void;
+  /** See CustomFilePanelProps.onProjectStateChange. */
+  onProjectStateChange?: (state: string) => void;
 }
 
 const ZERO_HASH = "0".repeat(40);
 
 export function isNeverSynced(cf: CustomFile): boolean {
   return cf.git_hash === null || cf.git_hash === ZERO_HASH;
+}
+
+/**
+ * True when the file has never been delivered, so GitHub holds no copy to delete.
+ *
+ * Only "new" is conclusive: any edit clears git_hash (custom_files.py sets it to
+ * null on a content or path change), so a never-synced hash cannot tell a file
+ * GitHub has never seen from a delivered one that was edited afterwards.
+ */
+export function hasNoGithubCopy(cf: CustomFile): boolean {
+  return isNeverSynced(cf) && cf.file_status === "new";
+}
+
+/** What the deletion did on GitHub, as a sentence for a toast. */
+export function describeRemoval(file: CustomFile, result: DeleteCustomFileResponse): string {
+  if (result.campaign_id) {
+    const prs = result.prs_created ?? 0;
+    return `PR Campaign opened to remove "${file.file_path}" — ${prs} pull request${prs === 1 ? "" : "s"}. Track and merge it under PR Campaigns.`;
+  }
+  const deleted = (result.targets ?? []).filter((t) => t.status === "deleted");
+  if (deleted.length > 0) {
+    return `"${file.file_path}" deleted from ActionsManager and ${deleted.length} branch${deleted.length === 1 ? "" : "es"} on GitHub.`;
+  }
+  return `"${file.file_path}" removed from ActionsManager. Nothing was deleted from GitHub.`;
+}
+
+/**
+ * Applies a removal to the file list. Returns the server's response so the caller
+ * can report what happened; `hard_deleted` means the row is gone outright, and
+ * anything else means deletion pull requests are open against it.
+ */
+async function removeCustomFile(
+  projectId: number,
+  file: CustomFile,
+  scope: RemovalScope,
+  delivery: RemovalDelivery,
+  files: CustomFile[],
+  applyChange: (next: CustomFile[]) => void,
+): Promise<DeleteCustomFileResponse> {
+  const result = await deleteCustomFile(projectId, file.id, scope, delivery);
+  if (result.hard_deleted) {
+    applyChange(files.filter((f) => f.id !== file.id));
+  } else {
+    applyChange(files.map((f) => (f.id === file.id ? result.custom_file! : f)));
+  }
+  return result;
+}
+
+/** The server returns a structured 502 when only some repositories could be reached. */
+function deleteErrorMessage(e: any): string {
+  return apiErrorMessage(e, "Failed to delete file");
 }
 
 // ── Form component ────────────────────────────────────────────────────────────
@@ -152,11 +209,12 @@ FileForm.displayName = 'FileForm';
 // ── Main component ─────────────────────────────────────────────────────────────
 
 // ponytail: fully controlled — no internal files state; parent (ProjectMgmt) owns customFiles
-const CustomFiles: React.FC<CustomFilesProps> = ({ projectId, githubUser, initialFiles: files = [], onChange }) => {
+const CustomFiles: React.FC<CustomFilesProps> = ({ projectId, githubUser, initialFiles: files = [], onChange, onProjectStateChange }) => {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [mode, setMode] = useState<'view' | 'edit' | 'add'>('view');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<CustomFile | null>(null);
 
   const selectedFile = files.find(f => f.id === selectedId) ?? null;
 
@@ -195,22 +253,20 @@ const CustomFiles: React.FC<CustomFilesProps> = ({ projectId, githubUser, initia
     }
   };
 
-  const handleDelete = async (cf: CustomFile) => {
-    if (!globalThis.confirm(isNeverSynced(cf) && cf.file_status === "new"
-      ? `Delete "${cf.file_path}"? This will remove it permanently.`
-      : `Mark "${cf.file_path}" for deletion? It will be removed from GitHub on the next delivery.`
-    )) return;
+  const handleDeleteConfirmed = async (scope: RemovalScope, delivery: RemovalDelivery) => {
+    const cf = pendingDelete;
+    if (!cf) return;
+    setPendingDelete(null);
     try {
-      const result = await deleteCustomFile(projectId, cf.id);
+      const result = await removeCustomFile(projectId, cf, scope, delivery, files, (next) => onChange?.(next));
       if (result.hard_deleted) {
-        onChange?.(files.filter((f) => f.id !== cf.id));
         setSelectedId(null);
         setMode('view');
-      } else {
-        onChange?.(files.map((f) => (f.id === cf.id ? result.custom_file! : f)));
       }
+      if (result.pr_state) onProjectStateChange?.(result.pr_state);
+      toast.success(describeRemoval(cf, result));
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to delete file");
+      toast.error(deleteErrorMessage(e));
     }
   };
 
@@ -322,7 +378,7 @@ const CustomFiles: React.FC<CustomFilesProps> = ({ projectId, githubUser, initia
                 Restore
               </button>
             ) : (
-              <button className="btn btn-danger" onClick={() => handleDelete(cf)} data-testid="delete-button">
+              <button type="button" className="btn btn-danger" onClick={() => setPendingDelete(cf)} data-testid="delete-button">
                 Delete
               </button>
             )}
@@ -453,6 +509,18 @@ const CustomFiles: React.FC<CustomFilesProps> = ({ projectId, githubUser, initia
       <div className="unified-workflows-editor">
         {renderRightPanel()}
       </div>
+
+      {pendingDelete && (
+        <RemovalScopeDialog
+          open={true}
+          title={`Remove "${pendingDelete.file_path}"?`}
+          githubLocation="your project's repositories"
+          neverSynced={hasNoGithubCopy(pendingDelete)}
+          offerDelivery
+          onConfirm={handleDeleteConfirmed}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 };
@@ -470,6 +538,14 @@ export interface CustomFilePanelProps {
   onChange: (files: CustomFile[]) => void;
   /** Called after a new file is created so the nav can select it. */
   onAfterAdd?: (newId: number) => void;
+  /** Called when the file is gone from the list, so the nav can clear its selection. */
+  onRemoved?: () => void;
+  /**
+   * Called with the project's pr_state after a removal. Removing a file can
+   * promote a synced project to draft, and that only reaches the Create PR
+   * Campaign button if the mutation reports it.
+   */
+  onProjectStateChange?: (state: string) => void;
 }
 
 export const CustomFilePanel: React.FC<CustomFilePanelProps> = ({
@@ -479,10 +555,13 @@ export const CustomFilePanel: React.FC<CustomFilePanelProps> = ({
   githubUser,
   onChange,
   onAfterAdd,
+  onRemoved,
+  onProjectStateChange,
 }) => {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [resetKey, setResetKey] = useState(0);
+  const [pendingDelete, setPendingDelete] = useState<CustomFile | null>(null);
   const formRef = React.useRef<HTMLFormElement>(null);
 
   const cfId = cf?.id ?? null;
@@ -515,20 +594,19 @@ export const CustomFilePanel: React.FC<CustomFilePanelProps> = ({
     }
   };
 
-  const handleDelete = async (file: CustomFile) => {
-    if (!globalThis.confirm(isNeverSynced(file) && file.file_status === "new"
-      ? `Delete "${file.file_path}"? This will remove it permanently.`
-      : `Mark "${file.file_path}" for deletion? It will be removed from GitHub on the next delivery.`
-    )) return;
+  const handleDeleteConfirmed = async (scope: RemovalScope, delivery: RemovalDelivery) => {
+    const file = pendingDelete;
+    if (!file) return;
+    setPendingDelete(null);
     try {
-      const result = await deleteCustomFile(projectId, file.id);
-      if (result.hard_deleted) {
-        onChange(allFiles.filter((f) => f.id !== file.id));
-      } else {
-        onChange(allFiles.map((f) => (f.id === file.id ? result.custom_file! : f)));
-      }
+      const result = await removeCustomFile(projectId, file, scope, delivery, allFiles, onChange);
+      // Without this the parent keeps selecting an id that no longer exists, and
+      // this panel renders the "add file" form in its place.
+      if (result.hard_deleted) onRemoved?.();
+      if (result.pr_state) onProjectStateChange?.(result.pr_state);
+      toast.success(describeRemoval(file, result));
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to delete file");
+      toast.error(deleteErrorMessage(e));
     }
   };
 
@@ -670,7 +748,7 @@ export const CustomFilePanel: React.FC<CustomFilePanelProps> = ({
             <button type="button" className="btn btn-primary" disabled={saving} onClick={() => formRef.current?.requestSubmit()} data-testid="save-button">
               {saving ? "Saving…" : "💾 Commit Locally"}
             </button>
-            <button className="btn btn-danger" onClick={() => handleDelete(cf)} data-testid="delete-button">
+            <button type="button" className="btn btn-danger" onClick={() => setPendingDelete(cf)} data-testid="delete-button">
               Delete
             </button>
           </div>
@@ -696,6 +774,18 @@ export const CustomFilePanel: React.FC<CustomFilePanelProps> = ({
           hideButtons
         />
       </div>
+
+      {pendingDelete && (
+        <RemovalScopeDialog
+          open={true}
+          title={`Remove "${pendingDelete.file_path}"?`}
+          githubLocation="your project's repositories"
+          neverSynced={hasNoGithubCopy(pendingDelete)}
+          offerDelivery
+          onConfirm={handleDeleteConfirmed}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 };

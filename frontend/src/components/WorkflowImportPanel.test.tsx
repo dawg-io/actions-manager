@@ -6,12 +6,18 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { WorkflowImportPanel } from './WorkflowImportPanel';
 import { deriveWorkflowStatusLabel } from '../utils/workflowImportStatus';
 import { discoverWorkflows, previewWorkflow, importWorkflows } from '../api/workflowImport';
+import { fetchProjects } from '../api/projects';
 
 // Mock the API module
 vi.mock('../api/workflowImport', () => ({
   discoverWorkflows: vi.fn(),
   previewWorkflow: vi.fn(),
   importWorkflows: vi.fn(),
+}));
+
+// The panel looks up Reusable Workflow Projects to offer as destinations.
+vi.mock('../api/projects', () => ({
+  fetchProjects: vi.fn(),
 }));
 
 describe('WorkflowImportPanel', () => {
@@ -561,5 +567,225 @@ describe('deriveWorkflowStatusLabel', () => {
       hasDrift: true,
     });
     expect(label).not.toBe('Drift Detected');
+  });
+});
+
+describe('WorkflowImportPanel reusable workflow routing', () => {
+  const baseProps = {
+    projectId: 1,
+    projectName: 'TestProject',
+    githubUser: 'testuser',
+    selectedRepos: ['owner/repo1'],
+    onImportComplete: vi.fn(),
+    onClose: vi.fn(),
+  };
+
+  const reusableWf = {
+    repo_name: 'owner/repo1',
+    branch: 'main',
+    file_name: 'shared-workflow.yml',
+    path: '.github/workflows/shared-workflow.yml',
+    blob_sha: 'shaREUSE',
+    is_reusable: true,
+  };
+
+  const callerWf = {
+    repo_name: 'owner/repo1',
+    branch: 'main',
+    file_name: 'ci.yml',
+    path: '.github/workflows/ci.yml',
+    blob_sha: 'shaCALL',
+    is_reusable: false,
+  };
+
+  const discoveryWith = (workflows: any[]) => ({
+    repositories_scanned: 1,
+    workflows_found: workflows.length,
+    results: [
+      { repo_name: 'owner/repo1', branch: 'main', workflows, warning: null, error: null },
+    ],
+    cross_repo_matches: [],
+  });
+
+  const importOk = {
+    message: 'Imported 1 workflow(s) locally.',
+    import_mode: 'save_local_only',
+    results: [],
+    pr_state: 'draft',
+    pr_results: null,
+  };
+
+  /** Discover, then tick Select All. */
+  const openAndSelectAll = async (props: Record<string, unknown> = {}) => {
+    render(<WorkflowImportPanel {...baseProps} {...props} />);
+    await waitFor(() => expect(screen.getByTestId('workflow-list')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select All/ }));
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    vi.mocked(importWorkflows).mockResolvedValue(importOk as any);
+  });
+
+  it('marks reusable workflows in the scan and leaves caller workflows unmarked', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf, callerWf]) as any);
+
+    render(<WorkflowImportPanel {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('workflow-list')).toBeInTheDocument());
+
+    expect(
+      screen.getByTestId('reusable-dot-owner/repo1-.github/workflows/shared-workflow.yml')
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('reusable-dot-owner/repo1-.github/workflows/ci.yml')
+    ).not.toBeInTheDocument();
+  });
+
+  it('asks where a reusable workflow should go instead of importing straight away', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { project_id: 42, project_name: 'SharedWorkflows', project_type: 'rwx' },
+    ] as any);
+
+    await openAndSelectAll();
+    fireEvent.click(screen.getByTestId('save-local-button'));
+
+    expect(screen.getByTestId('reusable-decision')).toBeInTheDocument();
+    expect(importWorkflows).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByTestId('reusable-destination')).toHaveValue('42')
+    );
+  });
+
+  it('files the reusable workflow into the chosen Reusable Workflow Project', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { project_id: 42, project_name: 'SharedWorkflows', project_type: 'rwx' },
+    ] as any);
+
+    await openAndSelectAll();
+    fireEvent.click(screen.getByTestId('save-local-button'));
+    await waitFor(() => expect(screen.getByTestId('import-into-rwx-button')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('import-into-rwx-button'));
+
+    await waitFor(() => expect(importWorkflows).toHaveBeenCalledTimes(1));
+    const [, , , items, mode, targetRepos, destination] = vi.mocked(importWorkflows).mock.calls[0];
+    expect(items).toHaveLength(1);
+    expect(items[0].workflow_path).toBe('.github/workflows/shared-workflow.yml');
+    expect(mode).toBe('save_local_only');
+    expect(targetRepos).toBeUndefined();
+    expect(destination).toBe(42);
+  });
+
+  it('splits a mixed selection between this project and the reusable project', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf, callerWf]) as any);
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { project_id: 42, project_name: 'SharedWorkflows', project_type: 'rwx' },
+    ] as any);
+
+    await openAndSelectAll();
+    fireEvent.click(screen.getByTestId('save-local-button'));
+    await waitFor(() => expect(screen.getByTestId('import-into-rwx-button')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('import-into-rwx-button'));
+
+    await waitFor(() => expect(importWorkflows).toHaveBeenCalledTimes(2));
+    const [hereCall, movedCall] = vi.mocked(importWorkflows).mock.calls;
+    expect(hereCall[3].map((i: any) => i.workflow_path)).toEqual(['.github/workflows/ci.yml']);
+    expect(hereCall[6]).toBeUndefined();
+    expect(movedCall[3].map((i: any) => i.workflow_path)).toEqual([
+      '.github/workflows/shared-workflow.yml',
+    ]);
+    expect(movedCall[6]).toBe(42);
+  });
+
+  it('offers to create a Reusable Workflow Project when none exists', async () => {
+    const onCreateReusableProject = vi.fn();
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+
+    await openAndSelectAll({ onCreateReusableProject });
+    fireEvent.click(screen.getByTestId('save-local-button'));
+
+    expect(screen.getByTestId('no-rwx-project')).toBeInTheDocument();
+    expect(screen.queryByTestId('reusable-destination')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('create-rwx-project-button'));
+    expect(onCreateReusableProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('imports into the caller project when the user chooses to keep it here', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+
+    await openAndSelectAll();
+    fireEvent.click(screen.getByTestId('save-local-button'));
+    fireEvent.click(screen.getByTestId('import-here-anyway-button'));
+
+    await waitFor(() => expect(importWorkflows).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(importWorkflows).mock.calls[0];
+    expect(call[3]).toHaveLength(1);
+    expect(call[6]).toBeUndefined();
+  });
+
+  it('does not interrupt an import inside a Reusable Workflow Project', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+
+    await openAndSelectAll({ projectType: 'rwx' });
+    fireEvent.click(screen.getByTestId('save-local-button'));
+
+    await waitFor(() => expect(importWorkflows).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('reusable-decision')).not.toBeInTheDocument();
+  });
+
+  it('does not claim there is no reusable project while the lookup is in flight', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+    vi.mocked(fetchProjects).mockReturnValue(new Promise(() => {}) as any);
+
+    await openAndSelectAll();
+    fireEvent.click(screen.getByTestId('save-local-button'));
+
+    expect(screen.getByTestId('rwx-lookup-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('no-rwx-project')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('create-rwx-project-button')).not.toBeInTheDocument();
+  });
+
+  it('warns that a redirected import creates no PR campaign', async () => {
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf]) as any);
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { project_id: 42, project_name: 'SharedWorkflows', project_type: 'rwx' },
+    ] as any);
+
+    await openAndSelectAll();
+    fireEvent.click(screen.getByTestId('save-and-pr-button'));
+
+    expect(screen.getByTestId('reusable-campaign-note')).toBeInTheDocument();
+  });
+
+  it('keeps the first import when the redirected one fails, and still refreshes', async () => {
+    const onImportComplete = vi.fn();
+    vi.mocked(discoverWorkflows).mockResolvedValue(discoveryWith([reusableWf, callerWf]) as any);
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { project_id: 42, project_name: 'SharedWorkflows', project_type: 'rwx' },
+    ] as any);
+    vi.mocked(importWorkflows)
+      .mockResolvedValueOnce({
+        message: 'Imported 1 workflow(s) locally.',
+        import_mode: 'save_local_only',
+        results: [],
+        pr_state: 'draft',
+        pr_results: null,
+      } as any)
+      .mockRejectedValueOnce(new Error('Destination project not found or access denied'));
+
+    await openAndSelectAll({ onImportComplete });
+    fireEvent.click(screen.getByTestId('save-local-button'));
+    await waitFor(() => expect(screen.getByTestId('import-into-rwx-button')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('import-into-rwx-button'));
+
+    await waitFor(() => expect(importWorkflows).toHaveBeenCalledTimes(2));
+    // The caller workflow really was written, so the parent must refetch or the
+    // project view stays stale until a manual reload.
+    await waitFor(() => expect(onImportComplete).toHaveBeenCalledWith('draft'));
+    expect(screen.getByTestId('import-error')).toHaveTextContent('Imported 1 workflow(s) locally.');
+    expect(screen.getByTestId('import-error')).toHaveTextContent('The rest failed');
   });
 });

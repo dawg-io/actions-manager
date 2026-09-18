@@ -29,6 +29,11 @@ docs/vendor/
 *.db
 *.sqlite
 *.sqlite3
+# SQLite's side-car files. *.db does not match these, so a pytest run caught
+# mid-transaction left an untracked *.db-journal behind every time.
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Environment files
 .env

@@ -97,7 +97,7 @@ vi.mock('../hooks/useWorkflowOperations', () => ({
 const ORIGINAL_YAML =
   'name: Original\non: push\njobs:\n  original-job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo original\n';
 
-function renderSubject() {
+function renderSubject(overrides: Record<string, unknown> = {}) {
   const setWorkflows = vi.fn();
   const props: any = {
     user: 'test-user',
@@ -114,7 +114,7 @@ function renderSubject() {
     onAddRXWorkflow: vi.fn(),
     detectedBuildTypes: [],
     reusableWorkflowsEnabled: false,
-    repoExists: true,
+    ...overrides,
   };
 
   const view = render(<UnifiedWorkflows {...props} />);
@@ -218,5 +218,38 @@ describe('UnifiedWorkflows YAML/GUI mode switching', () => {
 
     expect(screen.getByTestId('edit-mode')).toHaveTextContent('yaml');
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('reusable workflows owned by a caller project', () => {
+  const REUSABLE_YAML = 'name: Shared\non:\n  workflow_call:\njobs:\n  build:\n    runs-on: ubuntu-latest\n';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Regression: a reusable workflow imported into a caller project was written
+  // to the database and then dropped from the rendered list, so the import
+  // looked like it had done nothing and could not be retried.
+  test('lists a reusable workflow even when reusable authoring is off', () => {
+    renderSubject({
+      rxworkflows: [{ name: 'shared-workflow', content: REUSABLE_YAML }],
+      reusableWorkflowsEnabled: false,
+      projectType: 'standard',
+    });
+
+    expect(screen.getByTestId('select-reusable-0')).toBeInTheDocument();
+    expect(screen.getByText('shared-workflow')).toBeInTheDocument();
+  });
+
+  test('still lists it for a Reusable Workflow Project', () => {
+    renderSubject({
+      rxworkflows: [{ name: 'shared-workflow', content: REUSABLE_YAML }],
+      reusableWorkflowsEnabled: true,
+      projectType: 'rwx',
+    });
+
+    expect(screen.getByTestId('select-reusable-0')).toBeInTheDocument();
   });
 });

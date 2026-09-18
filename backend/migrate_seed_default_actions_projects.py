@@ -1,14 +1,16 @@
 """
-Seed migration: pre-populate the shared Actions Projects catalog with the 7
-actions already hand-curated in frontend/src/utils/actionInputSchemas.ts, so
-every install starts with the common list already there instead of empty.
+Seed migration: pre-populate the shared Actions Projects catalog with a small
+set of commonly used actions, so every install starts with the common list
+already there instead of empty.
 
 Actions Projects are a shared, workspace-wide catalog (not per-user) - see
 backend/actions_projects.py. These seeded rows are owned by a reserved system
 account rather than any real user. That account's existence is the
 idempotency marker: once it exists, this migration is a no-op on every
-future run, even if a user later deletes some or all of the 7 rows - removal
-is permanent, it should never silently reappear on restart.
+future run, even if a user later deletes some or all of the rows - removal
+is permanent, it should never silently reappear on restart. That also means
+this migration alone never delivers an entry added to SEED_ACTIONS later:
+migrate_seed_catalog_entries does that, once per entry, per install.
 """
 
 import json
@@ -21,9 +23,10 @@ from models import Account, ActionsProject, SEED_ACCOUNT_GITHUB_USER
 
 SEED_ACCOUNT_EMAIL = "seed@actionsmanager.internal"
 
-# Ported from frontend/src/utils/actionInputSchemas.ts's ACTION_INPUT_CATALOG.
-# ActionInput has no `type`/`options` field (matches how action.yml itself
-# never declares a formal type) - only description/required/default carry over.
+# The actions/* entries were ported from the frontend's original hand-curated
+# catalog. ActionInput has no `type`/`options` field (matches how action.yml
+# itself never declares a formal type) - only description/required/default
+# carry over. branding_* is optional and only set for actions that declare it.
 SEED_ACTIONS = [
     {
         "name": "Checkout Repository",
@@ -116,11 +119,55 @@ SEED_ACTIONS = [
             {"name": "merge-multiple", "description": "Merge multiple matched artifacts into a single directory", "required": False, "default": "false"},
         ],
     },
+    {
+        "name": "AM Build Vars",
+        "description": "Share build variables across jobs, workflows and runs",
+        "owner": "dawg-io", "repo": "am-build-vars", "ref": "v1.0.0",
+        "branding_icon": "shield", "branding_color": "purple",
+        "inputs": [
+            {"name": "config-file", "description": "Explicit path to the build variables file (empty auto-discovers am-build-vars.yml)", "required": False, "default": ""},
+            {"name": "defaults", "description": "Fleet-wide default values as a YAML mapping, overridden per key by the config file", "required": False, "default": ""},
+            {"name": "export-env", "description": "Whether to write every resolved key into $GITHUB_ENV for later steps in the job", "required": False, "default": "true"},
+            {"name": "fail-on-missing", "description": "Whether to fail the step when the config file does not exist", "required": False, "default": "false"},
+            {"name": "share", "description": "Values to publish to the shared store, as a YAML mapping", "required": False, "default": ""},
+            {"name": "share-env", "description": "Names of environment variables to capture and publish to the shared store", "required": False, "default": ""},
+            {"name": "load-shared", "description": "Whether to read the shared store for this scope and apply it (needs actions: read)", "required": False, "default": "false"},
+            {"name": "share-scope", "description": "Namespace for shared variables; steps sharing a scope see each other's values", "required": False, "default": "${{ github.ref_name }}"},
+            {"name": "share-token", "description": "Token used to look the shared store artifact up through the REST API", "required": False, "default": "${{ github.token }}"},
+            {"name": "share-retention-days", "description": "How long the shared store artifact is kept, in days (empty uses the repository default)", "required": False, "default": ""},
+        ],
+    },
 ]
 
 
+def build_seed_row(action: dict, user_id: int) -> ActionsProject:
+    """Build the ActionsProject row for one SEED_ACTIONS entry.
+
+    Shared with migrate_seed_catalog_entries, which back-fills an entry added
+    here after an install was already seeded - both must produce the same row.
+    """
+    return ActionsProject(
+        user_id=user_id,
+        name=action["name"],
+        description=action["description"],
+        source_url=f"https://github.com/{action['owner']}/{action['repo']}/blob/{action['ref']}/action.yml",
+        owner=action["owner"],
+        repo=action["repo"],
+        ref=action["ref"],
+        yaml_path="action.yml",
+        inputs_json=json.dumps(action["inputs"]),
+        branding_icon=action.get("branding_icon"),
+        branding_color=action.get("branding_color"),
+        last_modified_by=SEED_ACCOUNT_GITHUB_USER,
+    )
+
+
 def run_migration(database_url: str | None = None):
-    """Seed the 7 default Actions Projects exactly once, ever."""
+    """Seed the default Actions Projects into a fresh database, once, ever.
+
+    An install that already has the seed account is finished here - a default
+    added to SEED_ACTIONS later reaches it through migrate_seed_catalog_entries.
+    """
     db_url = database_url or get_migration_database_url() or APP_DATABASE_URL
     engine = create_engine(db_url)
     Session = sessionmaker(bind=engine)
@@ -153,19 +200,7 @@ def run_migration(database_url: str | None = None):
         db.flush()
 
         for action in SEED_ACTIONS:
-            source_url = f"https://github.com/{action['owner']}/{action['repo']}/blob/{action['ref']}/action.yml"
-            db.add(ActionsProject(
-                user_id=seed_account.user_id,
-                name=action["name"],
-                description=action["description"],
-                source_url=source_url,
-                owner=action["owner"],
-                repo=action["repo"],
-                ref=action["ref"],
-                yaml_path="action.yml",
-                inputs_json=json.dumps(action["inputs"]),
-                last_modified_by=SEED_ACCOUNT_GITHUB_USER,
-            ))
+            db.add(build_seed_row(action, seed_account.user_id))
 
         db.commit()
         print(f"✅ Seeded {len(SEED_ACTIONS)} default Actions Projects")

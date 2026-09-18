@@ -18,6 +18,7 @@ import {
   Input,
 } from './ui';
 import { getDocsUrl } from '../help/helpLinks';
+import TokenErrorMessage from './TokenErrorMessage';
 import { tour } from '../utils/tour';
 
 // Define the props interface for the UserAvatar component
@@ -417,7 +418,7 @@ const UserAvatar: React.FC<UserAvatarProps> = ({
 
                   {tokenFeedback && (
                     <p className="text-xs leading-snug text-text-secondary dark:text-secondary-dark">
-                      {tokenFeedback}
+                      <TokenErrorMessage message={tokenFeedback} />
                     </p>
                   )}
                 </div>

@@ -885,7 +885,9 @@ const DriftDetection: React.FC<DriftDetectionProps> = ({
       // of the project's repos that still share this workflow. Repos where the
       // file is already absent are skipped server-side.
       const repos = Array.from(new Set([detail.repo, ...(detail.affected_repos ?? [])]));
-      await deleteWorkflowFromGitHub(user, repos, detail.workflow_name, "", projectName);
+      // Direct, not a campaign: the row is deleted immediately below, and a
+      // campaign needs it to survive until the removal PR merges.
+      await deleteWorkflowFromGitHub(user, repos, detail.workflow_name, "", projectName, "direct");
       await deleteWorkflowFromDatabase(user, projectName, detail.workflow_name);
 
       setConfirmDeleteEverywhere(null);

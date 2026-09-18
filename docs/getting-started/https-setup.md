@@ -193,3 +193,28 @@ docker compose -f docker-compose.self-hosted.yml restart
 ```
 
 `APP_URL` derives the frontend URL, backend URL, OAuth callback, and WebSocket URL (`wss://` for an `https://` `APP_URL`) automatically — you don't need to set them individually. See [Installation]({% link getting-started/installation.md %}) for the full environment variable reference.
+
+## Troubleshooting: PAT login still blocked behind HTTPS
+
+If the browser shows a padlock but signing in with a token fails with:
+
+> PAT login over non-local HTTP is disabled for security.
+
+then the backend is not being told the request arrived over HTTPS. Your proxy terminates TLS and forwards plain HTTP to port 8080, so the backend can only learn the original scheme from the `X-Forwarded-Proto` header.
+
+**Check your proxy sends it.** Caddy and Traefik set `X-Forwarded-Proto: https` automatically — no configuration needed. A hand-written nginx proxy must set it explicitly:
+
+```nginx
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+**Check your image is recent enough.** Older images ran an internal nginx that overwrote the header with its own (always plain HTTP) scheme, so the proxy's `https` never reached the backend no matter what the proxy sent. If your proxy demonstrably sets the header and login is still refused, that is the symptom. Pull the current image and restart:
+
+```bash
+docker compose -f docker-compose.self-hosted.yml pull
+docker compose -f docker-compose.self-hosted.yml up -d
+```
+
+**Keep the published port private.** ActionsManager reads the scheme from the header your proxy sends, so port 8080 should be reachable only by that proxy — bind it to loopback (`127.0.0.1:8080:8080`) or keep it on an internal Docker network. Anything that can reach the port directly can claim its own connection is HTTPS.
+
+**As a stop-gap**, `ALLOW_INSECURE_HTTP=true` unblocks PAT login while you sort the header out. It disables the check entirely, so understand what it exposes: the hop from your proxy to the container is plain HTTP, and tokens cross it in cleartext. That is contained if the proxy runs on the container's own host, and a genuine interception risk if it reaches the container across a network. Fixing the header is the real answer.

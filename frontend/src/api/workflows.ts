@@ -3,6 +3,7 @@ import apiClient from "./apiClient";
 import config from "../config";
 import { Workflow } from "../types/workflow";
 import { WorkflowUpdateResponse } from "../types/workflowResponse";
+import type { RemovalDelivery } from "../components/RemovalScopeDialog";
 import { toast } from "../utils/toast";
 
 const BACKEND_URL = config.BACKEND_URL;
@@ -35,6 +36,75 @@ interface WorkflowsCountResponse {
 }
 
 // ===== API Functions =====
+
+/** One (repo, branch) a rename would have to reconcile. */
+export interface RenameImpactTarget {
+  repo: string;
+  branch: string;
+  /** null means GitHub could not be asked — never treat it as "absent". */
+  old_file_present: boolean | null;
+  new_file_present: boolean | null;
+  confirmed_present_at: string | null;
+}
+
+/** A caller workflow whose `uses:` line names the reusable workflow by filename. */
+export interface RenameImpactConsumer {
+  project_name: string;
+  workflow_name: string;
+  uses_line: string;
+}
+
+export interface RenameImpact {
+  /**
+   * never_delivered | delivered | unknown | blocked.
+   * "unknown" means GitHub could not be asked; it must not be shown as if the
+   * rename were known to be safe.
+   */
+  classification: string;
+  blocked_reason: string | null;
+  old_filename: string;
+  new_filename: string;
+  targets: RenameImpactTarget[];
+  consumers: RenameImpactConsumer[];
+  /** Repositories with a per-repo branch override. Named to match the wire field. */
+  overrides: string[];
+  warnings: string[];
+}
+
+/**
+ * What renaming a workflow would do, without doing any of it.
+ *
+ * Read-only: no project state changes and no pull request is opened. The same
+ * refusals the save path enforces are computed here, so the dialog and the
+ * save agree about what is allowed.
+ */
+export const getRenameImpact = async (
+  user: string,
+  projectName: string,
+  workflowName: string,
+  newName: string,
+  isReusable: boolean
+): Promise<RenameImpact> => {
+  const response: AxiosResponse<RenameImpact> = await apiClient.post(
+    `${BACKEND_URL}/api/workflows/rename-impact`,
+    {
+      // Belt and braces only. The server's own middleware strips any client
+      // X-GitHub-User and re-pins it to the session user before the route runs,
+      // and the route prefers that header over this field — so this never
+      // decides identity in a configured instance. (An earlier comment here
+      // claimed apiClient sets no header and the route 401s without this; the
+      // first half is true of apiClient, the second is not, since the header
+      // arrives from the middleware. saveWorkflows posts to a route with the
+      // identical pattern and sends nothing.)
+      github_user: user,
+      project_name: projectName,
+      workflow_name: workflowName,
+      new_name: newName,
+      is_reusable: isReusable,
+    }
+  );
+  return response.data;
+};
 
 // Save workflows to DB
 export const saveWorkflows = async (
@@ -125,7 +195,11 @@ export const deleteWorkflowFromGitHub = async (
   selectedRepos: string[],
   workflowName: string,
   regexPattern: string,
-  projectName: string
+  projectName: string,
+  // Required: the backend defaults to "direct", so a default here would silently
+  // disagree with it. Callers that delete the row straight afterwards must pass
+  // "direct" — a campaign needs the row to survive until it merges.
+  delivery: RemovalDelivery
 ): Promise<DeleteWorkflowResponse> => {
   if (!workflowName?.trim()) {
     console.log("🛑 Skipping GitHub delete for empty workflow entry.");
@@ -139,6 +213,7 @@ export const deleteWorkflowFromGitHub = async (
       workflow_name: workflowName,
       regex_pattern: regexPattern,
       project_name: projectName,
+      delivery,
     };
 
     console.log("📌 Debug: Sending Workflow Delete Request to GitHub:", requestData);
@@ -244,7 +319,8 @@ export const handleDeleteWorkflow = async (
       selectedRepos,
       workflowToDelete.name,
       regexPattern,
-      projectName
+      projectName,
+      "direct"
     );
 
     // Then delete from database

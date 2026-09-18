@@ -37,10 +37,12 @@ from models import (
 from database import get_db
 from workflows import (
     cleanup_orphaned_workflows,
+    create_or_update_workflow,
     format_workflow_name,
     resolve_branch_config_for_repo,
     _normalize_reusable_workflow_name,
     _reusable_workflow_ids_locked_by_open_campaign,
+    _utc_iso,
 )
 from tier_service import check_project_limit, check_project_type_limit, check_repo_limit, check_private_visibility_scope
 from authorization import check_project_access, is_project_admin
@@ -62,6 +64,7 @@ _ERROR_RESPONSES = {
     401: {"description": _ERR_AUTH_REQUIRED},
     403: {"description": "Access denied"},
     404: {"description": "Not found"},
+    409: {"description": "Name is held by a workflow queued for removal"},
     422: {"description": "Request failed validation"},
     500: {"description": "Internal server error"},
 }
@@ -276,6 +279,12 @@ def _find_project_by_name(db: Session, project_name: str, caller_member, github_
 class WorkflowSchema(BaseModel):
     name: str
     content: str
+    # Previous name when renaming. Without it declared, Pydantic v2's default
+    # extra="ignore" dropped the field before create_or_update_workflow could
+    # see it, so a rename saved through this endpoint was not a rename at all:
+    # the lookup missed under the new name and a second workflow was created,
+    # leaving the old one behind.
+    original_name: str | None = None
 
 # ✅ Define Schema for Project
 class ProjectSchema(BaseModel):
@@ -490,78 +499,13 @@ def create_workflow_version_in_projects(db, workflow_id, content, metadata=None)
     from workflows import create_workflow_version as _create_workflow_version
     return _create_workflow_version(db, workflow_id, content, metadata)
 
-def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modified_by=None):
-    """
-    Create or update a workflow within the scope of a specific project.
-    This ensures that each project maintains its own workflows without creating duplicates.
-    Automatically creates a version entry on each save.
-    """
-    print(f"✅ Creating/updating workflow '{workflow.name}' for project {project_id}, reusable: {is_reusable}")
-    
-    # 🔧 FIX: Search for existing workflow within the current project only
-    existing_workflow = db.query(Workflow).join(ProjectWorkflow).filter(
-        ProjectWorkflow.project_id == project_id,
-        # Case-insensitive equality rather than ILIKE: '_' is a wildcard in SQL
-        # LIKE, so "ci_build" would match and overwrite an unrelated "ciXbuild".
-        func.lower(Workflow.workflow_name) == workflow.name.strip().lower(),
-        Workflow.reusable_workflow == is_reusable
-    ).first()
-
-    if existing_workflow:
-        print(f"📌 ✅ Updating existing workflow in project: {existing_workflow.workflow_name}")
-        existing_workflow.workflow_yaml = workflow.content.strip()
-        existing_workflow.reusable_workflow = is_reusable
-        # Set hash to zeros to indicate local modification (user doesn't use git locally)
-        existing_workflow.workflow_git_hash = "0000000000000000000000000000000000000000"
-        # Audit: record who made this change
-        if last_modified_by:
-            existing_workflow.last_modified_by = last_modified_by
-        db.commit()
-        print(f"✅ Set git hash to zeros (local modification)")
-        
-        # Create version entry for this update
-        create_workflow_version_in_projects(
-            db, 
-            existing_workflow.workflow_id, 
-            workflow.content.strip(),
-            metadata={'action': 'update', 'timestamp': datetime.now(timezone.utc).isoformat()}
-        )
-        
-        return existing_workflow
-    else:
-        print(f"📌 Creating new workflow for project: {workflow.name.strip()}")
-        new_workflow = Workflow(
-            workflow_name=workflow.name.strip(),
-            workflow_yaml=workflow.content.strip(),
-            reusable_workflow=is_reusable,
-            # Set hash to zeros for new workflows (not yet pushed to GitHub)
-            workflow_git_hash="0000000000000000000000000000000000000000",
-            # Audit: record who created this workflow
-            last_modified_by=last_modified_by
-        )
-        db.add(new_workflow)
-        db.commit()
-        db.refresh(new_workflow)
-        
-        # Create project association for new workflow
-        db.add(ProjectWorkflow(
-            project_id=project_id,
-            workflow_id=new_workflow.workflow_id
-        ))
-        db.commit()
-        print(f"✅ Created new workflow '{workflow.name}' (ID: {new_workflow.workflow_id}) for project {project_id}")
-        print(f"✅ Set git hash to zeros (new workflow, not yet pushed)")
-        
-        # Create initial version entry for this new workflow
-        create_workflow_version_in_projects(
-            db, 
-            new_workflow.workflow_id, 
-            workflow.content.strip(),
-            metadata={'action': 'create', 'timestamp': datetime.now(timezone.utc).isoformat()}
-        )
-        
-        return new_workflow
-
+# create_or_update_workflow lives in workflows.py and is imported above.
+# There used to be a second copy here, and the two drifted: the rename
+# branch, its duplicate sweep and every guard added to it existed only in
+# the workflows.py version, so saving a project through this module could
+# not rename a workflow at all — it created a second one under the new name
+# and left the old one behind. Fixes also had to be made twice and were not:
+# the pending_delete tombstone guard landed in one copy and not the other.
 
 def update_project_state_if_needed(project: Project, workflows: List, rxworkflows: List = None) -> None:
     """
@@ -805,11 +749,45 @@ def _is_workflow_non_empty(workflow) -> bool:
     return bool(workflow.name and workflow.name.strip() and workflow.content and workflow.content.strip())
 
 
-def _process_project_workflows(db: Session, project: ProjectSchema, project_id: int, last_modified_by: str = None) -> None:
-    """Process regular and (optionally) reusable workflows for a project.
+def _owned_reusable_workflow_names(db: Session, project_id: int) -> set:
+    """Normalized names of the reusable workflows this project already owns."""
+    rows = (
+        db.query(Workflow.workflow_name)
+        .join(ProjectWorkflow, ProjectWorkflow.workflow_id == Workflow.workflow_id)
+        .filter(
+            ProjectWorkflow.project_id == project_id,
+            Workflow.reusable_workflow.is_(True),
+        )
+        .all()
+    )
+    return {name.strip().lower() for (name,) in rows if name and name.strip()}
 
-    Empty workflow entries (blank name or content) are skipped.
-    Reusable workflows are only processed when the feature is enabled on the project.
+
+def _reusable_workflows_to_save(db: Session, project: ProjectSchema, project_id: int) -> list:
+    """The reusable workflows in this payload that the project may save.
+
+    ``reusable_workflows_enabled`` gates *authoring new* reusable workflows. A
+    caller project can still own one - imported, or left from a previous
+    setting - and silently dropping an edit to it loses the user's work while
+    the save reports success, so edits to workflows already owned always save.
+    """
+    if project.reusable_workflows_enabled:
+        return list(project.rxworkflows)
+
+    owned = _owned_reusable_workflow_names(db, project_id)
+    keep = [w for w in project.rxworkflows if (w.name or "").strip().lower() in owned]
+    skipped = len(project.rxworkflows) - len(keep)
+    if skipped:
+        print(f"⚠️ Skipping {skipped} new reusable workflow(s) - feature disabled for project '{project.project_name}'")
+    return keep
+
+
+def _process_project_workflows(db: Session, project: ProjectSchema, project_id: int, last_modified_by: str = None) -> None:
+    """Process regular and reusable workflows for a project.
+
+    Empty workflow entries (blank name or content) are skipped. New reusable
+    workflows are only created when the feature is enabled on the project;
+    edits to reusable workflows it already owns always save.
     """
     # Process regular workflows - skip empty ones
     for workflow in project.workflows:
@@ -819,12 +797,7 @@ def _process_project_workflows(db: Session, project: ProjectSchema, project_id: 
         else:
             print(f"⚠️ Skipping empty regular workflow: name='{workflow.name}', content_length={len(workflow.content) if workflow.content else 0}")
 
-    # Only process reusable workflows if the feature is enabled for this project
-    if not project.reusable_workflows_enabled:
-        print(f"⚠️ Skipping reusable workflows - feature disabled for project '{project.project_name}'")
-        return
-
-    for workflow in project.rxworkflows:
+    for workflow in _reusable_workflows_to_save(db, project, project_id):
         if _is_workflow_non_empty(workflow):
             print(f"✅ RW workflow: name='{workflow.name}', content_length={len(workflow.content)}")
             create_or_update_workflow(db, workflow, project_id, is_reusable=True, last_modified_by=last_modified_by)
@@ -835,7 +808,7 @@ def _process_project_workflows(db: Session, project: ProjectSchema, project_id: 
 @router.post(
     "/projects/",
     responses={
-        **_responses(400, 401, 403, 404, 500),
+        **_responses(400, 401, 403, 404, 409, 500),
         422: {"description": "Invalid project_color for this project type"},
     },
 )
@@ -980,7 +953,7 @@ def update_project_order(
 @router.put(
     "/projects/{project_id}/",
     responses={
-        **_responses(400, 500),
+        **_responses(400, 409, 500),
         403: {"description": "Access denied"},
         404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         422: {"description": "Invalid project_color for this project type"},
@@ -1083,16 +1056,14 @@ def update_project(
             else:
                 print(f"⚠️ Skipping empty regular workflow: name='{workflow.name}', content_length={len(workflow.content) if workflow.content else 0}")
 
-        # Only process reusable workflows if the feature is enabled for this project
-        if project.reusable_workflows_enabled:
-            for workflow in project.rxworkflows:
-                if workflow.name and workflow.name.strip() and workflow.content and workflow.content.strip():
-                    print(f"✅ ❌ ❌ RW: {workflow}")
-                    create_or_update_workflow(db, workflow, existing_project.project_id, is_reusable=True, last_modified_by=_last_modifier)
-                else:
-                    print(f"⚠️ Skipping empty reusable workflow: name='{workflow.name}', content_length={len(workflow.content) if workflow.content else 0}")
-        else:
-            print(f"⚠️ Skipping reusable workflows - feature disabled for project '{project.project_name}'")
+        # New reusable workflows need the feature enabled; edits to ones the
+        # project already owns always save - see _reusable_workflows_to_save.
+        for workflow in _reusable_workflows_to_save(db, project, existing_project.project_id):
+            if workflow.name and workflow.name.strip() and workflow.content and workflow.content.strip():
+                print(f"✅ ❌ ❌ RW: {workflow}")
+                create_or_update_workflow(db, workflow, existing_project.project_id, is_reusable=True, last_modified_by=_last_modifier)
+            else:
+                print(f"⚠️ Skipping empty reusable workflow: name='{workflow.name}', content_length={len(workflow.content) if workflow.content else 0}")
 
         # Update project state based on workflow changes (considers both regular and reusable)
         update_project_state_if_needed(existing_project, project.workflows, project.rxworkflows)
@@ -1264,6 +1235,7 @@ def update_project_drift_config(
 @router.patch(
     "/projects/{project_id}/project-name",
     responses={
+        403: {"description": _ERR_INSUFFICIENT_PROJECT_ROLE},
         404: {"description": _ERR_PROJECT_NOT_FOUND_PLAIN},
         500: {"description": "Internal server error"},
     },
@@ -1279,7 +1251,7 @@ def update_project_name(
     project_code is never touched — it is immutable after creation.
     """
     try:
-        _caller, caller_member = _resolve_caller(db, x_github_user)
+        caller, caller_member = _resolve_caller(db, x_github_user)
 
         existing_project = _find_project_by_id(db, project_id, caller_member, payload.github_user)
         if not existing_project:
@@ -1288,6 +1260,21 @@ def update_project_name(
                 f"(caller='{x_github_user}', github_user='{payload.github_user}')"
             )
             raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
+
+        # Renaming is a write. _find_project_by_id accepts any ProjectMembership
+        # regardless of project_role, so without this a documented read-only
+        # project_viewer could rename the project.
+        #
+        # Owners are allowed through explicitly. ProjectMembership rows are only
+        # ever created by the admin "add project member" route, never at project
+        # creation, and check_project_access has no ownership fast-path — so a
+        # non-admin owner of their own project has no membership row and
+        # _require_project_editor alone would lock them out of renaming it.
+        _caller_owns_project = (
+            caller is not None and existing_project.user_id == caller.user_id
+        )
+        if not _caller_owns_project:
+            _require_project_editor(db, caller_member, existing_project.project_id)
 
         print(
             f"✅ PATCH /projects/{project_id}/project-name - Renaming project "
@@ -1419,35 +1406,52 @@ def _apply_saved_display_order(db: Session, caller_member, rows: list) -> list:
 
 
 def _initialize_display_order(db: Session, caller_member, rows: list) -> None:
-    """Persist the current updated_at-descending order the first time a user lists projects.
+    """Give every project the caller can see a saved position (issue #1804).
 
-    Without this, a user who has never dragged anything would keep falling back
-    to updated_at, so editing a project would still move its card — the exact
-    behaviour issue #1804 removes. Runs once: after this the user always has
-    rows, and updated_at is never consulted for those projects again.
+    ``rows`` arrives updated_at-descending, which is the arrangement a project
+    without a saved position falls back to — so seeding in this order is
+    invisible on the listing that does it, and freezes that spot from then on.
+
+    Seeding only once would leave every project created after the first listing
+    permanently on the updated_at fallback, so editing one would still swap it
+    past its unseeded neighbours — the behaviour this issue removes. Projects
+    already positioned keep their position; the rest append after the highest
+    one, which is where they render today.
     """
     if caller_member is None or not rows:
         return
 
-    already_ordered = (
-        db.query(ProjectDisplayOrder.id)
+    already_ordered = {
+        project_id for (project_id,) in
+        db.query(ProjectDisplayOrder.project_id)
         .filter(ProjectDisplayOrder.user_id == caller_member.user_id)
-        .first()
-    )
-    if already_ordered:
+        .all()
+    }
+    unordered = [
+        row[0].project_id for row in rows
+        if row[0].project_id not in already_ordered
+    ]
+    if not unordered:
         return
 
+    highest = (
+        db.query(func.max(ProjectDisplayOrder.position))
+        .filter(ProjectDisplayOrder.user_id == caller_member.user_id)
+        .scalar()
+    )
+    next_position = 0 if highest is None else highest + 1
+
     try:
-        for position, row in enumerate(rows):
+        for offset, project_id in enumerate(unordered):
             db.add(ProjectDisplayOrder(
                 user_id=caller_member.user_id,
-                project_id=row[0].project_id,
-                position=position,
+                project_id=project_id,
+                position=next_position + offset,
             ))
         db.commit()
     except Exception:
-        # Never fail a read because the one-time seed lost a race with a
-        # concurrent request; the next list call retries.
+        # Never fail a read because the seed lost a race with a concurrent
+        # request; the next list call retries.
         db.rollback()
 
 
@@ -1598,7 +1602,7 @@ def get_projects(
             "last_preflight_pr_url": project.last_preflight_pr_url,
             "drift_status": project.drift_status or "unknown",
             "drift_count": int(project.drift_count or 0),
-            "last_drift_check_at": project.last_drift_check_at,
+            "last_drift_check_at": _utc_iso(project.last_drift_check_at),
             "drift_error_summary": project.drift_error_summary,
             "drift_check_interval_minutes": project.drift_check_interval_minutes,
             "last_modified_by": project.last_modified_by,
@@ -2362,10 +2366,14 @@ def get_project(
 
     repo_names = _get_repo_names(db, project.project_id)
 
+    # pending_delete rows are queued for removal from GitHub by an open campaign.
+    # Listing them shows the user a workflow they already asked to delete, with no
+    # indication of its state, until the campaign merges and the row is reaped.
     all_workflows = (
         db.query(Workflow)
         .join(ProjectWorkflow, Workflow.workflow_id == ProjectWorkflow.workflow_id)
-        .filter(ProjectWorkflow.project_id == project.project_id)
+        .filter(ProjectWorkflow.project_id == project.project_id,
+                Workflow.pending_delete.is_(False))
         .all()
     )
     workflows, rxworkflows = _split_workflows(all_workflows)

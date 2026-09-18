@@ -26,19 +26,48 @@ import {
   importWorkflows,
   DiscoveryResponse,
   DiscoveredWorkflow,
+  ImportWorkflowItem,
   PreviewResponse,
 } from '../api/workflowImport';
+import { fetchProjects } from '../api/projects';
 
 const ALREADY_MANAGED_EMPTY_STATE = 'All discovered workflows are already managed by this project.';
+
+type ImportMode = 'save_local_only' | 'save_and_create_pr_campaign';
+
+/** A Reusable Workflow Project an import can be filed into. */
+interface RwxDestination {
+  id: number;
+  name: string;
+}
+
+/** What one import call into the open project produced. */
+interface ImportOutcome {
+  message: string;
+  prState: string | null;
+  campaignFailed: boolean;
+}
 
 interface WorkflowImportPanelProps {
   projectId: number;
   projectName: string;
   githubUser: string;
   selectedRepos?: string[];
+  /** Reusable workflows are only out of place in a caller project. */
+  projectType?: 'standard' | 'rwx';
   onImportComplete?: (prState: string | null) => void;
+  /** Opens the create-project flow preset to a Reusable Workflow Project. */
+  onCreateReusableProject?: () => void;
   onClose: () => void;
 }
+
+const toImportItems = (list: SelectedWorkflow[]): ImportWorkflowItem[] =>
+  list.map((wf) => ({
+    source_repo: wf.repo_name,
+    source_branch: wf.branch,
+    workflow_path: wf.path,
+    content_sha: wf.blob_sha,
+  }));
 
 interface SelectedWorkflow extends DiscoveredWorkflow {
   selected: boolean;
@@ -51,7 +80,9 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
   projectName,
   githubUser,
   selectedRepos,
+  projectType = 'standard',
   onImportComplete,
+  onCreateReusableProject,
   onClose,
 }) => {
   const [discovery, setDiscovery] = useState<DiscoveryResponse | null>(null);
@@ -65,6 +96,14 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+
+  // Reusable-workflow routing: which Reusable Workflow Projects exist, which one
+  // is picked, and the import that is paused waiting on that choice.
+  const [rwxProjects, setRwxProjects] = useState<RwxDestination[]>([]);
+  const [rwxLookup, setRwxLookup] = useState<'idle' | 'loading' | 'loaded'>('idle');
+  const [destinationId, setDestinationId] = useState<number | null>(null);
+  const [decision, setDecision] = useState<{ mode: ImportMode } | null>(null);
+  const decisionRef = React.useRef<HTMLDivElement | null>(null);
 
   // Discover workflows
   const handleDiscover = useCallback(async () => {
@@ -153,57 +192,253 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
     setSelectedWorkflows((prev) => prev.map((wf) => ({ ...wf, selected: selectAll })));
   }, []);
 
-  // Import selected workflows
-  const handleImport = useCallback(
-    async (mode: 'save_local_only' | 'save_and_create_pr_campaign') => {
-      const selected = selectedWorkflows.filter((wf) => wf.selected);
-      if (selected.length === 0) return;
+  const selectedReusable = selectedWorkflows.filter((wf) => wf.selected && wf.is_reusable);
+  const canRouteReusable = projectType !== 'rwx';
 
-      setIsImporting(true);
-      setImportResult(null);
-      setImportError(null);
+  // Only a caller project with a reusable workflow in the scan needs somewhere
+  // to send it, so the project list is fetched on that condition alone.
+  const needsRwxProjects =
+    canRouteReusable && selectedWorkflows.some((wf) => wf.is_reusable);
 
-      try {
-        const result = await importWorkflows(
-          projectId,
-          githubUser,
-          projectName,
-          selected.map((wf) => ({
-            source_repo: wf.repo_name,
-            source_branch: wf.branch,
-            workflow_path: wf.path,
-            content_sha: wf.blob_sha,
-          })),
-          mode,
-          mode === 'save_and_create_pr_campaign' ? (selectedRepos || undefined) : undefined
-        );
+  useEffect(() => {
+    if (!needsRwxProjects) return;
+    let cancelled = false;
+    setRwxLookup('loading');
+    fetchProjects(githubUser)
+      .then((projects) => {
+        if (cancelled) return;
+        const destinations = projects
+          .filter((project) => project.project_type === 'rwx')
+          .map((project) => ({
+            id: project.project_id,
+            name: project.project_name || project.name || '',
+          }))
+          .filter((project): project is RwxDestination =>
+            typeof project.id === 'number' && !!project.name
+          );
+        setRwxProjects(destinations);
+        setDestinationId((current) => current ?? destinations[0]?.id ?? null);
+      })
+      .catch(() => {
+        // A failed lookup just means no destinations to offer - the user can
+        // still import into this project, so it must not block the panel.
+        if (!cancelled) setRwxProjects([]);
+      })
+      .finally(() => {
+        if (!cancelled) setRwxLookup('loaded');
+      });
+    return () => { cancelled = true; };
+  }, [needsRwxProjects, githubUser]);
 
-        const prResults = result.pr_results;
-        const prCreationFailed =
+  // The decision replaces the footer's import buttons, and on a long scan it
+  // renders below the fold - without this the click looks like it did nothing.
+  useEffect(() => {
+    if (decision) decisionRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [decision]);
+
+  /** Import into the project the panel is open on. */
+  const importIntoThisProject = useCallback(
+    async (mode: ImportMode, items: ImportWorkflowItem[]): Promise<ImportOutcome> => {
+      const result = await importWorkflows(
+        projectId,
+        githubUser,
+        projectName,
+        items,
+        mode,
+        mode === 'save_and_create_pr_campaign' ? (selectedRepos || undefined) : undefined
+      );
+      const prResults = result.pr_results;
+      return {
+        message: result.message,
+        prState: result.pr_state,
+        campaignFailed:
           mode === 'save_and_create_pr_campaign' &&
           (
             !prResults ||
             typeof prResults.error === 'string' ||
             prResults.prs_created === 0
-          );
+          ),
+      };
+    },
+    [projectId, githubUser, projectName, selectedRepos]
+  );
 
-        if (prCreationFailed) {
+  /**
+   * File reusable workflows into a Reusable Workflow Project.
+   *
+   * Always a local save: the workflow is delivered by the project that now owns
+   * it, not by this campaign, so a campaign-mode import says so rather than
+   * leaving the user to notice the missing PRs.
+   */
+  const importIntoReusableProject = useCallback(
+    async (destinationProjectId: number, items: ImportWorkflowItem[], mode: ImportMode): Promise<string[]> => {
+      const result = await importWorkflows(
+        projectId,
+        githubUser,
+        projectName,
+        items,
+        'save_local_only',
+        undefined,
+        destinationProjectId
+      );
+      const notes = [result.message];
+      if (mode === 'save_and_create_pr_campaign') {
+        notes.push('No PR Campaign was created for them - they are delivered by the project that now owns them.');
+      }
+      return notes;
+    },
+    [projectId, githubUser, projectName]
+  );
+
+  /**
+   * Run the import.
+   *
+   * With a destination set, reusable workflows are filed into that Reusable
+   * Workflow Project and everything else still lands in the open project, so a
+   * mixed selection does not force the user to import twice.
+   */
+  const runImport = useCallback(
+    async (mode: ImportMode, destinationProjectId: number | null) => {
+      const selected = selectedWorkflows.filter((wf) => wf.selected);
+      if (selected.length === 0) return;
+
+      const here = destinationProjectId ? selected.filter((wf) => !wf.is_reusable) : selected;
+      const moved = destinationProjectId ? selected.filter((wf) => wf.is_reusable) : [];
+
+      setIsImporting(true);
+      setImportResult(null);
+      setImportError(null);
+
+      // Declared out here so a failure in the second call can still report what
+      // the first one wrote, and still tell the parent to refetch.
+      const messages: string[] = [];
+      let prState: string | null = null;
+      let campaignFailed = false;
+      let wroteSomething = false;
+
+      try {
+        if (here.length > 0) {
+          const outcome = await importIntoThisProject(mode, toImportItems(here));
+          wroteSomething = true;
+          prState = outcome.prState;
+          campaignFailed = outcome.campaignFailed;
+          messages.push(outcome.message);
+        }
+
+        if (moved.length > 0 && destinationProjectId) {
+          const notes = await importIntoReusableProject(destinationProjectId, toImportItems(moved), mode);
+          wroteSomething = true;
+          messages.push(...notes);
+        }
+
+        if (campaignFailed) {
           setImportError('Workflows were saved locally, but PR Campaign creation failed. No PRs were created.');
         } else {
-          setImportResult(result.message);
-        }
-
-        if (onImportComplete) {
-          onImportComplete(result.pr_state);
+          setImportResult(messages.join(' '));
         }
       } catch (err: any) {
-        setImportError(err.message || 'Import failed');
+        const failure = err.message || 'Import failed';
+        setImportError(
+          messages.length > 0 ? `${messages.join(' ')} The rest failed: ${failure}` : failure
+        );
       } finally {
         setIsImporting(false);
+        // Anything already written has to reach the parent even when a later
+        // call failed, or the project view stays stale until a manual refresh.
+        if (wroteSomething && onImportComplete) {
+          onImportComplete(prState);
+        }
       }
     },
-    [selectedWorkflows, projectId, githubUser, projectName, selectedRepos, onImportComplete]
+    [selectedWorkflows, importIntoThisProject, importIntoReusableProject, onImportComplete]
   );
+
+  // Import selected workflows, pausing first if any of them are reusable.
+  const handleImport = useCallback(
+    (mode: ImportMode) => {
+      const selected = selectedWorkflows.filter((wf) => wf.selected);
+      if (selected.length === 0) return;
+
+      if (canRouteReusable && selected.some((wf) => wf.is_reusable)) {
+        setDecision({ mode });
+        return;
+      }
+      void runImport(mode, null);
+    },
+    [selectedWorkflows, canRouteReusable, runImport]
+  );
+
+  /**
+   * Where the reusable workflows should go.
+   *
+   * The "you have none" branch must not show while the lookup is still in
+   * flight, or a slow response pushes the user into creating a second Reusable
+   * Workflow Project and loses the scan on navigation.
+   */
+  const renderDestinationChoice = () => {
+    if (rwxLookup !== 'loaded') {
+      return (
+        <div className="import-reusable-choice" data-testid="rwx-lookup-loading">
+          <p>Looking for your Reusable Workflow Projects…</p>
+        </div>
+      );
+    }
+
+    if (rwxProjects.length === 0) {
+      return (
+        <div className="import-reusable-choice" data-testid="no-rwx-project">
+          <p>
+            You do not have a Reusable Workflow Project yet. Create one and these
+            workflows can be imported into it instead.
+          </p>
+          {onCreateReusableProject && (
+            <button
+              type="button"
+              className="btn-import-reusable"
+              onClick={onCreateReusableProject}
+              disabled={isImporting}
+              data-testid="create-rwx-project-button"
+            >
+              Create a Reusable Workflow Project
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    const selectedName = rwxProjects.find((project) => project.id === destinationId)?.name ?? '';
+    return (
+      <div className="import-reusable-choice">
+        <label htmlFor="reusable-destination">Reusable Workflow Project</label>
+        <select
+          id="reusable-destination"
+          value={destinationId ?? ''}
+          onChange={(e) => setDestinationId(Number(e.target.value))}
+          data-testid="reusable-destination"
+        >
+          {rwxProjects.map((project) => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="btn-import-reusable"
+          onClick={() => resolveDecision(destinationId)}
+          disabled={isImporting || destinationId === null}
+          data-testid="import-into-rwx-button"
+        >
+          Import into {selectedName}
+        </button>
+      </div>
+    );
+  };
+
+  const resolveDecision = (destinationProjectId: number | null) => {
+    if (!decision) return;
+    const { mode } = decision;
+    setDecision(null);
+    void runImport(mode, destinationProjectId);
+  };
 
   // See CreatePRModal: dismissal lives on a real button, not a div onClick.
   // The in-flight guard stays - an import must not be dismissed mid-run.
@@ -313,6 +548,15 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
                           />
                           <div className="workflow-info">
                             <span className="workflow-filename">{wf.file_name}</span>
+                            {wf.is_reusable && (
+                              <span
+                                className="workflow-reusable-dot"
+                                data-testid={`reusable-dot-${wf.repo_name}-${wf.path}`}
+                                title="Reusable workflow (triggered by workflow_call)"
+                              >
+                                <span className="sr-only">Reusable workflow</span>
+                              </span>
+                            )}
                             <span className="workflow-repo">{wf.repo_name}</span>
                             <span className="workflow-branch">{wf.branch}</span>
                             {wf.blob_sha && (
@@ -365,6 +609,57 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
             </div>
           )}
 
+          {/* Reusable workflows need a home decision before anything is written */}
+          {decision && (
+            <div className="import-reusable-decision" data-testid="reusable-decision" ref={decisionRef}>
+              <h4>
+                {selectedReusable.length === 1
+                  ? 'One selected workflow is reusable'
+                  : `${selectedReusable.length} selected workflows are reusable`}
+              </h4>
+              <p className="import-reusable-names">
+                {selectedReusable.map((wf) => wf.file_name).join(', ')}
+              </p>
+              <p>
+                {selectedReusable.length === 1 ? 'It is triggered by ' : 'They are triggered by '}
+                <code>workflow_call</code>, so a caller workflow has to reference{' '}
+                {selectedReusable.length === 1 ? 'it' : 'them'} to run. A Reusable Workflow
+                Project keeps one copy that every caller project links to, instead of a copy
+                per project.
+              </p>
+
+              {decision.mode === 'save_and_create_pr_campaign' && (
+                <p data-testid="reusable-campaign-note">
+                  Filing them into a Reusable Workflow Project saves them there locally —
+                  no PR Campaign is created for them, because that project delivers them.
+                </p>
+              )}
+
+              {renderDestinationChoice()}
+
+              <div className="import-reusable-actions">
+                <button
+                  type="button"
+                  className="btn-save-local"
+                  onClick={() => resolveDecision(null)}
+                  disabled={isImporting}
+                  data-testid="import-here-anyway-button"
+                >
+                  Import into {projectName} anyway
+                </button>
+                <button
+                  type="button"
+                  className="btn-close-modal"
+                  onClick={() => setDecision(null)}
+                  disabled={isImporting}
+                  data-testid="reusable-decision-cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Import result */}
           {importResult && (
             <div className="import-success" data-testid="import-success">
@@ -381,7 +676,7 @@ export const WorkflowImportPanel: React.FC<WorkflowImportPanelProps> = ({
 
         {/* Modal Footer with import actions */}
         <div className="modal-footer">
-          {selectedCount > 0 && !importResult && (
+          {selectedCount > 0 && !importResult && !decision && (
             <div className="import-actions" data-testid="import-actions">
               <span className="import-info">
                 {selectedCount} workflow(s) selected

@@ -473,3 +473,144 @@ class TestPerProjectInterval:
             assert sweep_projects_for_drift(db) == 0
 
         assert check.call_count == 0
+
+
+class TestAnUndecryptableSavedTokenIsNotACredential:
+    """#2050: after a container update every project showed "Needs Attention".
+
+    A saved PAT that will not decrypt (SECRET_KEY changed) resolved to the
+    sentinel string, which the store handed out as an ordinary token. Every
+    GitHub read then 401'd, every (workflow, repo) pair came back check_failed,
+    and every project cached check_failed at once. These tests drive the real
+    credential store rather than patching it, because the bug lived there.
+    """
+
+    @pytest.fixture
+    def sentinel_owner(self, db):
+        from auth import INVALID_SAVED_TOKEN_SENTINEL, user_tokens
+
+        owner = _owner(db, "alice")
+        user_tokens.clear()
+        user_tokens._pat_cache["alice"] = (INVALID_SAVED_TOKEN_SENTINEL, float("inf"))
+        try:
+            yield owner
+        finally:
+            user_tokens.clear()
+            user_tokens.invalidate_pat("alice")
+
+    def test_the_project_is_skipped_rather_than_checked_with_a_garbage_token(
+        self, db, sentinel_owner
+    ):
+        """Running the check anyway is what produced check_failed everywhere."""
+        _project(db, sentinel_owner, "P1")
+
+        with patch("workflows.run_project_drift_check") as check:
+            assert sweep_projects_for_drift(db) == 0
+
+        assert check.call_count == 0
+
+    def test_a_clean_project_is_not_flipped_to_check_failed(self, db, sentinel_owner):
+        """The reported symptom. Running the check with the sentinel 401s every
+        read, so the whole project caches check_failed — which the UI shows as
+        "Needs Attention". The mock stands in for that, so the test fails if the
+        sweep ever decides to run the check again."""
+        project = _project(db, sentinel_owner, "P1")
+        project.drift_status = "clean"
+        db.commit()
+
+        def every_read_401s(session, _username, proj):
+            from workflows import _cache_project_drift_summary
+            _cache_project_drift_summary(session, proj, "check_failed", 0, "401")
+            return ([], [])
+
+        with patch("workflows.run_project_drift_check", side_effect=every_read_401s):
+            sweep_projects_for_drift(db)
+
+        db.refresh(project)
+        assert project.drift_status == "clean"
+
+    def test_the_badge_the_bug_left_behind_is_cleared(self, db, sentinel_owner):
+        """The fix is worthless on upgrade if it only stops *new* false badges.
+
+        Every affected project is already sitting on a check_failed written by
+        the bug, which the UI renders as "Needs Attention". A skip knows no
+        check is being attempted, so that non-verdict becomes "unknown"
+        ("Not checked") instead of accusing the project indefinitely.
+        """
+        project = _project(db, sentinel_owner, "P1")
+        project.drift_status = "check_failed"
+        db.commit()
+
+        with patch("workflows.run_project_drift_check"):
+            sweep_projects_for_drift(db)
+
+        db.refresh(project)
+        assert project.drift_status == "unknown"
+
+    def test_a_real_verdict_is_still_not_touched(self, db, sentinel_owner):
+        """Only the non-verdict is cleared: drift that was really found stands."""
+        project = _project(db, sentinel_owner, "P1")
+        project.drift_status = "drifted"
+        project.drift_count = 3
+        db.commit()
+
+        with patch("workflows.run_project_drift_check"):
+            sweep_projects_for_drift(db)
+
+        db.refresh(project)
+        assert project.drift_status == "drifted"
+        assert project.drift_count == 3
+
+    def test_the_inflated_backoff_streak_is_reset(self, db, sentinel_owner):
+        """Pre-fix, every doomed check incremented the streak, so it hit the 32x
+        cap within ~1.5h. A skip is not a failed check, so carrying that streak
+        would keep throttling a project that is not being checked at all — and
+        would still be throttling it after the credential is repaired.
+
+        Cursor is set past the inflated 8h window (32 x 15min) on purpose: that
+        backoff is applied when candidates are selected, so a project inside it
+        is not reached at all and nothing here can reset anything.
+        """
+        project = _project(db, sentinel_owner, "P1", failure_count=6,
+                           last_checked=datetime.now(timezone.utc) - timedelta(hours=9))
+
+        with patch("workflows.run_project_drift_check"):
+            sweep_projects_for_drift(db)
+
+        db.refresh(project)
+        assert project.drift_check_failure_count == 0
+
+    def test_the_reason_names_the_unreadable_token_not_a_missing_one(
+        self, db, sentinel_owner
+    ):
+        """A token *is* stored, so "no saved GitHub token" sends the owner
+        looking for a credential that is sitting right there."""
+        project = _project(db, sentinel_owner, "P1")
+
+        with patch("workflows.run_project_drift_check"):
+            sweep_projects_for_drift(db)
+
+        db.refresh(project)
+        assert project.drift_error_summary == drift_worker.UNREADABLE_CREDENTIAL_REASON
+        assert project.drift_error_summary != drift_worker.NO_CREDENTIAL_REASON
+
+
+class TestARecordedSkipCannotKillTheTick:
+    def test_a_failed_skip_does_not_stop_the_other_projects(self, db):
+        """_record_skip commits, and a commit can fail (SQLite "database is
+        locked"). Outside the per-project guard that took the whole sweep down
+        with it, on the first tick after a deploy when every affected project
+        writes at once."""
+        broke = _owner(db, "broke")
+        fine = _owner(db, "fine")
+        _project(db, broke, "SKIPPED", last_checked=STALE - timedelta(days=1))
+        _project(db, fine, "WANTED", last_checked=STALE)
+
+        seen = []
+        with _tokens({"fine": "tok"}), \
+             patch.object(drift_worker, "_record_skip", side_effect=RuntimeError("database is locked")), \
+             patch("workflows.run_project_drift_check",
+                   side_effect=lambda d, u, p: seen.append(p.project_code) or ([], [])):
+            assert sweep_projects_for_drift(db) == 1
+
+        assert seen == ["WANTED"]

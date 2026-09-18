@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
 import EditableNameField from './EditableNameField';
-import { getPrefixModeConfig } from '../utils/prefixModeConfig';
+import { getPrefixModeConfig, projectKeyFixedNote } from '../utils/prefixModeConfig';
 import { getProjectTypeConfig } from '../utils/projectTypeConfig';
 import ProjectTypeBadge from './ProjectTypeBadge';
 import PrefixModeBadge from './PrefixModeBadge';
@@ -185,7 +185,21 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </span>
               )
             )}
-            {projectCode && <span className="sidebar-project-key">Project Key: {projectCode}</span>}
+            {projectCode && (
+              <span
+                className="sidebar-project-key"
+                // Only when the mode is actually known. `usePrefix` is optional
+                // and undefined means "not loaded yet", which is why the badge
+                // below guards with `!== undefined` — `!== false` would assert
+                // prefix-mode wording for a No Prefix Mode project.
+                title={usePrefix === undefined
+                  ? undefined
+                  : projectKeyFixedNote(usePrefix, projectCode)}
+              >
+                Project Key: {projectCode}
+                <span className="sidebar-project-key-fixed"> (fixed)</span>
+              </span>
+            )}
             <div className="sidebar-project-badges">
               <ProjectTypeBadge projectType={projectType} size="sm" />
               {repositoryVisibilityScope && (

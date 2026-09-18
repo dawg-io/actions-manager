@@ -127,9 +127,18 @@ interface ErrorResponse {
   };
 }
 
+/**
+ * A create link can preselect the project type, e.g. /project/:user/new?type=rwx
+ * from the import panel's "Create a Reusable Workflow Project" action. Read off
+ * `window.location` rather than a router hook so the wizard keeps working
+ * wherever it is mounted.
+ */
+const readInitialProjectType = (): ProjectType =>
+  new URLSearchParams(window.location.search).get("type") === "rwx" ? "rwx" : "standard";
+
 const NewProject: React.FC<NewProjectProps> = ({ user, tourStep = null }) => {
   const navigate = useNavigate();
-  const [projectType, setProjectType] = useState<ProjectType>("standard");
+  const [projectType, setProjectType] = useState<ProjectType>(readInitialProjectType);
   const [projectName, setProjectName] = useState<string>("");
   const [projectKey, setProjectKey] = useState<string>("");
   const [useCustomKey, setUseCustomKey] = useState<boolean>(false);

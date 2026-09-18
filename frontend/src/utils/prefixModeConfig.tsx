@@ -40,3 +40,29 @@ export const NO_PREFIX_MODE_CONFIG = {
 export function getPrefixModeConfig(usePrefix: boolean) {
   return usePrefix ? PREFIX_MODE_CONFIG : NO_PREFIX_MODE_CONFIG;
 }
+
+/**
+ * Why the project key does not follow a project rename, phrased for the mode
+ * the project is actually in.
+ *
+ * The key is generated at creation and is immutable afterwards, so a rename
+ * leaves the display name and the key looking mismatched. This is the sentence
+ * that explains it, shared by the sidebar and the rename confirmation so the
+ * two never drift apart.
+ *
+ * Deliberately does not mention deployment environments: those are never
+ * prefixed, in either mode. In No Prefix Mode nothing in GitHub carries the
+ * key at all except the pull-request branch name, so the two modes need
+ * different sentences to stay accurate.
+ */
+export function projectKeyFixedNote(usePrefix: boolean, projectCode?: string): string {
+  const base = "Renaming the project does not change the project key.";
+  if (usePrefix) {
+    const prefix = projectCode ? `AM_${projectCode.toUpperCase()}_` : "AM_PROJECT_CODE_";
+    return `${base} Existing secrets, variables and delivered workflow files keep their ${prefix} names.`;
+  }
+  return (
+    `${base} This project creates resources without the key prefix; the key is used in ` +
+    "ActionsManager pull request branch names."
+  );
+}

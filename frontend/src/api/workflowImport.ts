@@ -19,6 +19,12 @@ export interface DiscoveredWorkflow {
   file_name: string;
   path: string;
   blob_sha: string | null;
+  /**
+   * True when the file is triggered by `workflow_call`, i.e. a reusable workflow.
+   * Optional so a frontend running ahead of the backend degrades to "not
+   * reusable" rather than failing to render the scan.
+   */
+  is_reusable?: boolean;
 }
 
 export interface DiscoveryRepoResult {
@@ -50,6 +56,7 @@ export interface PreviewResponse {
   file_name: string;
   content: string;
   blob_sha: string | null;
+  is_reusable?: boolean;
 }
 
 export interface ImportWorkflowItem {
@@ -73,6 +80,8 @@ export interface ImportResponse {
   results: ImportResult[];
   pr_state: string | null;
   pr_results: Record<string, unknown> | null;
+  /** Set when the workflows were filed into a different project than the one open. */
+  destination_project_name?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +171,10 @@ export async function previewWorkflow(
  * Import selected workflows into ActionsManager.
  *
  * @param importMode - "save_local_only" or "save_and_create_pr_campaign"
+ * @param destinationProjectId - File the workflows into this Reusable Workflow
+ *   Project instead of the one being viewed. The source repository is still
+ *   validated against the open project. An id rather than a name: project names
+ *   are only unique per owner, so a name can resolve to someone else's project.
  */
 export async function importWorkflows(
   projectId: number,
@@ -169,7 +182,8 @@ export async function importWorkflows(
   projectName: string,
   workflows: ImportWorkflowItem[],
   importMode: 'save_local_only' | 'save_and_create_pr_campaign' = 'save_local_only',
-  targetRepos?: string[]
+  targetRepos?: string[],
+  destinationProjectId?: number
 ): Promise<ImportResponse> {
   const response = await fetch(
     `${API_BASE_URL}/api/projects/${projectId}/workflow-import`,
@@ -183,6 +197,7 @@ export async function importWorkflows(
         workflows,
         import_mode: importMode,
         target_repos: targetRepos,
+        destination_project_id: destinationProjectId,
       }),
     }
   );

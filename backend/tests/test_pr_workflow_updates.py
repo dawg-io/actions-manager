@@ -560,12 +560,13 @@ class TestPRWorkflowUpdates:
         with patch('workflows.requests.post') as mock_post:
             mock_post.return_value = mock_response
             
-            pr = _create_pull_request(
+            pr, reason = _create_pull_request(
                 "owner", "repo", "actions-manager/myapp-main",
                 "main", "MYAPP", ["ci-build", "deploy"], headers
             )
-            
+
             assert pr is not None
+            assert reason is None
             assert pr["number"] == 43
             assert pr["html_url"] == "https://github.com/owner/repo/pull/43"
 
@@ -576,16 +577,23 @@ class TestPRWorkflowUpdates:
         mock_response = Mock()
         mock_response.status_code = 422
         mock_response.text = "Validation failed"
-        
+        mock_response.json.return_value = {
+            "message": "Validation Failed",
+            "errors": [{"message": "No commits between main and actions-manager/myapp-main"}],
+        }
+
         with patch('workflows.requests.post') as mock_post:
             mock_post.return_value = mock_response
-            
-            pr = _create_pull_request(
+
+            pr, reason = _create_pull_request(
                 "owner", "repo", "actions-manager/myapp-main",
                 "main", "MYAPP", ["ci-build"], headers
             )
-            
+
             assert pr is None
+            # The whole point of the reason: "422" alone tells the user nothing.
+            assert "422" in reason
+            assert "No commits between main and actions-manager/myapp-main" in reason
 
     def test_update_workflow_to_github_new_file(self):
         """Test committing a new workflow file to AM branch."""

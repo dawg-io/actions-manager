@@ -95,6 +95,8 @@ _request_github_user: contextvars.ContextVar[Optional[str]] = contextvars.Contex
 # Security: Allow insecure HTTP for PAT login only when explicitly enabled
 ALLOW_INSECURE_HTTP = os.getenv("ALLOW_INSECURE_HTTP", "false").lower() == "true"
 
+HTTPS_SETUP_DOCS_URL = "https://actionsmanager.io/getting-started/https-setup.html"
+
 
 def _is_localhost(host: str) -> bool:
     """
@@ -168,7 +170,9 @@ def _validate_secure_connection(request: Request) -> None:
         detail=(
             "PAT login over non-local HTTP is disabled for security. "
             "Use HTTPS or set ALLOW_INSECURE_HTTP=true to override. "
-            "See documentation for HTTPS setup with reverse proxies."
+            "Already behind an HTTPS reverse proxy? It must forward "
+            "X-Forwarded-Proto: https. "
+            f"Setup guide: {HTTPS_SETUP_DOCS_URL}"
         ),
     )
 
@@ -328,6 +332,27 @@ class GitHubCredentialStore:
         self._pat_cache[username] = (token, now + _PAT_CACHE_TTL)
         return token
 
+    def _usable_pat(self, username: str) -> Optional[str]:
+        """The saved PAT, or None when one is stored but cannot be decrypted.
+
+        The sentinel is not a credential. Handing it out gives callers a string
+        that looks like a PAT and 401s on every GitHub call, and because a saved
+        token is preferred over the in-memory OAuth one it also shadows a
+        working session token.
+        """
+        token = self._cached_pat(username)
+        return None if token == INVALID_SAVED_TOKEN_SENTINEL else token
+
+    def has_unreadable_saved_token(self, username: str) -> bool:
+        """True when a PAT is stored for this user but cannot be decrypted.
+
+        Separates "no credential" from "a credential we cannot read" so callers
+        can say which, instead of reporting a generic failure.
+        """
+        if not self._allowed_for_request(username):
+            return False
+        return self._cached_pat(username) == INVALID_SAVED_TOKEN_SENTINEL
+
     def invalidate_pat(self, username: str) -> None:
         """Evict a username's PAT cache entry (call after save or remove)."""
         self._pat_cache.pop(username, None)
@@ -352,12 +377,12 @@ class GitHubCredentialStore:
             return False
         if username in self._oauth_tokens:
             return True
-        return self._cached_pat(username) is not None
+        return self._usable_pat(username) is not None
 
     def __getitem__(self, username: str) -> str:
         if not self._allowed_for_request(username):
             raise KeyError(username)
-        saved_token = self._cached_pat(username)
+        saved_token = self._usable_pat(username)
         if saved_token is not None:
             return saved_token
         return self._oauth_tokens[username]

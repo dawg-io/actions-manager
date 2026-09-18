@@ -258,7 +258,15 @@ class DriftCheckUnavailable(Exception):
     5xx means the answer is unknown. Treating those as absence made every
     workflow in the repo look deleted, and treating them as "no drift" emitted
     a false drift.resolved for workflows that were still drifted.
+
+    ``status_code`` carries what GitHub answered, as a field rather than only
+    inside the message, so a caller can tell a missing repository (404) from an
+    outage without parsing prose.
     """
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class DriftStatus(BaseModel):
@@ -429,6 +437,23 @@ class BulkResolveDriftResponse(BaseModel):
     results: List[BulkResolveDriftItemResult]
 
 
+def _utc_iso(value: Optional[datetime]) -> Optional[str]:
+    """Serialize a stored (naive UTC) drift timestamp with an explicit UTC marker.
+
+    Without the designator the browser reads the string as *local* time, so a
+    check that just ran renders hours off — which reads as the previous
+    automatic sweep's time rather than the manual one the user just triggered.
+
+    Emitted as ``+00:00`` rather than ``Z``: both are valid ISO-8601 UTC and
+    ``new Date()`` accepts either, and this is byte-identical to what the live
+    ``refresh=true`` path already produces from ``datetime.now(timezone.utc)``,
+    so the two drift surfaces cannot disagree on format.
+    """
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc).isoformat()
+
+
 def _cache_project_drift_summary(
     db: Session,
     project: Project,
@@ -500,6 +525,21 @@ PROGRESS_COMMITTING_FILES = "Committing files"
 PROGRESS_OPENING_PR = "Opening PR"
 PR_CREATION_FAILED = "Failed to create PR"
 NO_WORKFLOWS_COMMITTED = "No workflows committed"
+
+# Outcome of deleting one file from one branch. "absent" is a success for the
+# caller's intent (the file is not there) but produces no commit, so a caller
+# about to open a PR has to tell the two apart.
+DELETE_DELETED = "deleted"
+DELETE_ABSENT = "absent"
+DELETE_FAILED = "error"
+
+# How a workflow deletion reaches GitHub. "campaign" runs a PR Campaign carrying
+# the removal, so it is reviewed and tracked like every other delivery;
+# "direct" commits it to every branch holding the file, unreviewed.
+DELIVERY_CAMPAIGN = "campaign"
+DELIVERY_DIRECT = "direct"
+VALID_DELETE_DELIVERIES = (DELIVERY_CAMPAIGN, DELIVERY_DIRECT)
+
 _ERR_WORKFLOW_NOT_FOUND = "Workflow not found"
 _ERR_STALE_VALIDATION_URL = "Stored validation PR URL is invalid."
 _ERR_VALIDATION_PR_MISSING = "Validation PR not found (may have been deleted)."
@@ -835,8 +875,12 @@ def fetch_workflow_tree(owner: str, repo: str, branch: str, token: str,
     if response.status_code == 304:
         raise NotModified(f"{owner}/{repo}@{branch} unchanged")
 
-    if response.status_code == 404:
-        # The directory genuinely has no workflows — an empty result is the truth.
+    if response.status_code in (404, 409):
+        # Both are GitHub answering "there is nothing here", not failing to
+        # answer. 404: the directory genuinely has no workflows. 409 "Git
+        # Repository is empty.": a repository with zero commits, which is the
+        # normal state of the reusable-workflow repo until the first delivery,
+        # because _ensure_reusable_repo_exists creates it with auto_init=False.
         return {}, response.headers.get("ETag")
 
     if response.status_code != 200:
@@ -846,7 +890,8 @@ def fetch_workflow_tree(owner: str, repo: str, branch: str, token: str,
         # the repo look deleted from GitHub.
         raise DriftCheckUnavailable(
             f"GitHub returned {response.status_code} listing workflows in "
-            f"{owner}/{repo}@{branch}"
+            f"{owner}/{repo}@{branch}",
+            status_code=response.status_code,
         )
 
     # Extract blob SHAs from the tree response
@@ -886,7 +931,8 @@ def get_default_branch(owner, repo, headers, user: str = None, db: Session = Non
 
     if response.status_code != 200:
         raise DriftCheckUnavailable(
-            f"GitHub returned {response.status_code} resolving the default branch of {owner}/{repo}"
+            f"GitHub returned {response.status_code} resolving the default branch of {owner}/{repo}",
+            status_code=response.status_code,
         )
 
     default_branch = response.json().get("default_branch")
@@ -971,13 +1017,21 @@ def _validate_user_and_get_project(db: Session, user: str, project_name: str):
 def _get_project_workflows(db: Session, project):
     """
     Retrieve all workflows for a project and separate them by type.
-    
+
+    ``pending_delete`` rows are excluded. They are queued for removal from
+    GitHub by an open campaign, so between that campaign merging and
+    ``_reap_deleted_workflows`` destroying the row, a drift check would find the
+    file legitimately gone and report it as "deleted from GitHub" — drift for a
+    deletion ActionsManager itself asked for. Delivery reads these rows from
+    ``_build_regular_workflow_results`` instead, which must keep seeing them.
+
     Returns:
         tuple: (regular_workflows, reusable_workflows)
     """
     workflows = db.query(Workflow) \
         .join(ProjectWorkflow, Workflow.workflow_id == ProjectWorkflow.workflow_id) \
-        .filter(ProjectWorkflow.project_id == project.project_id) \
+        .filter(ProjectWorkflow.project_id == project.project_id,
+                Workflow.pending_delete.is_(False)) \
         .all()
     
     # Separate regular workflows from reusable workflows
@@ -1370,6 +1424,22 @@ def _delivery_confirmed_on_branch(db: Session, workflow, repo_name: str, branch:
     ) is not None
 
 
+LOCAL_COMMIT_HASH = "0" * 40  # 40 zeros indicates a local-only commit
+
+
+def _was_ever_delivered(workflow) -> bool:
+    """Whether this workflow carries a real GitHub blob SHA.
+
+    The zeroed sentinel means an ActionsManager edit that has not been pushed,
+    and no hash at all means it has never left the database. Either way nothing
+    was ever written to GitHub under this workflow's name.
+    """
+    return bool(
+        workflow.workflow_git_hash
+        and workflow.workflow_git_hash != LOCAL_COMMIT_HASH
+    )
+
+
 def _drift_for_missing_workflow(workflow, repo_name: str, drift_type: str, db: Session, project_id: int,
                                 branch: str = "") -> Optional[DriftStatus]:
     """Workflow doesn't exist on GitHub. Decide deleted / pending-merge / never-synced.
@@ -1380,11 +1450,7 @@ def _drift_for_missing_workflow(workflow, repo_name: str, drift_type: str, db: S
     PR branch SHA, which won't be present on the target branch until merge — so an
     open PR means "pending merge", not "deleted".
     """
-    LOCAL_COMMIT_HASH = "0" * 40  # 40 zeros indicates local-only commit
-    has_real_hash = (
-        workflow.workflow_git_hash
-        and workflow.workflow_git_hash != LOCAL_COMMIT_HASH
-    )
+    has_real_hash = _was_ever_delivered(workflow)
     label = 'Reusable w' if drift_type == 'reusable_workflow' else 'W'
 
     if has_real_hash:
@@ -1466,7 +1532,6 @@ def _drift_for_content_mismatch(workflow, github_content, github_sha, repo_name:
     ActionsManager; a local AM edit must never be flagged as drift.
     """
     label = 'Reusable w' if drift_type == 'reusable_workflow' else 'W'
-    LOCAL_COMMIT_HASH = "0" * 40
     # Only the zeroed hash proves this was an intentional local edit: every path
     # that edits a workflow in ActionsManager sets that sentinel. Status alone is
     # not enough, because closing a fix PR without merging also reverts the
@@ -1935,6 +2000,7 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
 
     default_branch = ""
     prefetch_error = None
+    repo_missing = False
     try:
         # Get default branch for the reusable workflow repo
         headers = {
@@ -1957,8 +2023,31 @@ def _process_reusable_workflows(db: Session, reusable_workflows: List, user: str
         print(f"⚠️ Error fetching workflow SHAs from {reusable_repo_name}: {e}")
         all_workflow_shas = None
         prefetch_error = str(e)
+        repo_missing = getattr(e, "status_code", None) == 404
 
     if all_workflow_shas is None:
+        if repo_missing:
+            # GitHub can see no such repository, so nothing was ever delivered
+            # there under a name we could check. For a workflow that carries no
+            # real blob SHA that is the whole story - it has never left the
+            # database - and reporting check_failed showed the project as
+            # "Needs Attention" with "GitHub didn't respond" for a workflow
+            # nothing had delivered. That is the common case here:
+            # _get_reusable_workflow_repo falls back to
+            # {user}/am-reuseable-workflow when a project has neither an RWX
+            # repo of its own nor a link, and that repository need not exist.
+            #
+            # A workflow that does carry a real SHA was written to GitHub at
+            # some point, and 404 cannot distinguish "the repository was
+            # deleted" from "this token can no longer see a private one" -
+            # GitHub answers 404 to both. Calling that a deletion would drive
+            # the Delete Everywhere flow on a token-scope change, which is the
+            # failure #1981 added check_failed to prevent, so those stay
+            # unchecked and visible.
+            reusable_workflows = [w for w in reusable_workflows if _was_ever_delivered(w)]
+            if not reusable_workflows:
+                print(f"ℹ️  {reusable_repo_name} does not exist; its reusable "
+                      f"workflows have never been delivered, so there is nothing to check")
         return [
             _create_drift_status(
                 workflow_name=w.workflow_name,
@@ -2162,6 +2251,175 @@ def create_workflow_version(db: Session, workflow_id: int, content: str, metadat
         # This ensures backward compatibility
         return None
 
+def _assert_name_not_held_by_tombstone(db, project_id: int, name: str, is_reusable: bool) -> None:
+    """Refuse a name a pending_delete row still owns.
+
+    A tombstone is a workflow queued for removal from GitHub by an open
+    campaign. It keeps its name until that campaign merges and
+    ``_reap_deleted_workflows`` destroys the row, because the name is what
+    ``_commit_workflows_to_branch`` deletes. Letting a live workflow take the
+    same name in the same project puts two rows behind one delivered path.
+    """
+    tombstone = db.query(Workflow).join(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project_id,
+        func.lower(Workflow.workflow_name) == (name or "").lower(),
+        Workflow.reusable_workflow == is_reusable,
+        Workflow.pending_delete.is_(True),
+    ).first()
+    if tombstone:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"'{tombstone.workflow_name}' is queued for removal from GitHub by an open "
+                f"PR campaign. Merge or close that campaign before reusing the name."
+            ),
+        )
+
+
+_CASE_ONLY_RENAME_REFUSAL = (
+    "ActionsManager cannot change only the capitalisation of a workflow name. "
+    "Rename it to something different first, then to the casing you want."
+)
+
+
+def _assert_not_case_only_rename(original_name: str, new_name: str,
+                                 is_rename: bool) -> None:
+    """Refuse a rename that differs from the old name only in capitalisation.
+
+    ``is_rename`` compares the two lowercased, so such a request never reaches
+    the rename branch at all and the save quietly keeps the old casing.
+
+    Reported, not raised. create_or_update_workflow commits per workflow with no
+    outer transaction, so a 409 here abandoned a project save part-way: the
+    workflows ahead of it were already committed, the ones behind it silently
+    lost their edits, and the client was told nothing had been saved. Because
+    savedName is not restamped either, the same save then failed on every retry
+    and the project could not be saved at all until the user restored the
+    original casing — a cosmetic edit bricking the project.
+
+    The refusal still reaches the user where it costs nothing: the rename report
+    returns it as a blocker, so the dialog explains it before anything is sent.
+    """
+    if original_name and not is_rename and original_name != new_name:
+        print(f"📌 {_CASE_ONLY_RENAME_REFUSAL} (keeping '{original_name}')")
+
+
+def _was_delivered_per_db(db, workflow) -> bool:
+    """Whether the database holds evidence this workflow reached GitHub.
+
+    Two independent signals, because neither alone is complete:
+    ``workflow_git_hash`` is zeroed by any local edit, so it under-reports a
+    delivered workflow the user has since edited; ``confirmed_present_at``
+    only exists once a drift check has seen the file, so it misses a delivery
+    that predates drift. Either one is positive evidence.
+
+    Both signals fail together for a reusable workflow delivered to a repository
+    that is not one of its project's own ``ProjectRepo`` rows: drift details take
+    their repo id from that set, so no ``WorkflowDriftState`` is ever written and
+    no ``confirmed_present_at`` exists, while an ordinary local edit has already
+    zeroed the hash. That combination reported a delivered workflow as new, which
+    released the linked-consumer refusal AND skipped recording the old filename,
+    orphaning it — while the report, which asks GitHub, said "blocked". The
+    status is the third signal: a workflow still in ``new`` has never been
+    through a campaign, and anything past it may have reached GitHub.
+
+    "May have" is the honest reading, and the asymmetry justifies it: a false
+    positive costs one DELETE that answers 404 (absent, not an error) and a
+    conservative refusal the user can act on, while a false negative silently
+    orphans a live file and breaks a caller's ``uses:`` line.
+
+    Deliberately DB-only. The save path must not grow GitHub round trips, and
+    unlike the read-only report there is no outage to be conservative about
+    here — the answer is deterministic either way.
+    """
+    if _was_ever_delivered(workflow):
+        return True
+    if (workflow.workflow_status or "new") != "new":
+        return True
+    return db.query(WorkflowDriftState).filter(
+        WorkflowDriftState.workflow_id == workflow.workflow_id,
+        WorkflowDriftState.confirmed_present_at.isnot(None),
+    ).first() is not None
+
+
+def _record_rename_for_delivery(db: Session, workflow, new_name: str) -> None:
+    """Remember the delivered name so the next campaign can carry the rename.
+
+    Git stores no rename: it is a remove plus an add that the diff detects. So
+    delivery needs both halves, and ``workflow_name`` is about to be reassigned
+    — after that the old name is unrecoverable, because nothing else stores a
+    filename (``WorkflowVersion`` keeps content, ``WorkflowDriftState`` keys on
+    ``workflow_id`` and derives the name).
+
+    Only for a workflow that really reached GitHub. Renaming one that never did
+    has no old file to remove, and recording a name that was never delivered
+    would make every campaign try to delete a path that is not there.
+
+    An outstanding rename is never overwritten. Renaming twice before delivering
+    (``ci`` → ``ci2`` → ``ci3``) must still remove ``ci.yml``, which is the only
+    name GitHub has ever seen; ``ci2`` was never delivered and deleting it would
+    be a no-op at best.
+
+    Renaming back to the delivered name cancels it instead. ``ci`` → ``ci2`` →
+    ``ci`` leaves the file GitHub already has as the one being written again, so
+    keeping the record would make the campaign delete the file it had just
+    written and remove the workflow from every repository on merge.
+
+    Compared exactly, not case-insensitively: GitHub's contents API is
+    case-sensitive, so ``ci`` → ``CI`` really is a rename with an old file to
+    remove.
+
+    The name recorded is the row's own, never the caller-supplied
+    ``original_name``: the lookup that found this row matched case-insensitively,
+    so a request naming ``ci`` can match a row stored as ``CI``. Recording the
+    request's spelling would send the removal after a path GitHub does not have,
+    and it would 404 as "already absent" while the real file stayed orphaned.
+    """
+    if workflow.renamed_from == new_name:
+        print(f"📌 Renamed back to '{new_name}'; the delivered file is the one being written")
+        workflow.renamed_from = None
+        return
+    if workflow.renamed_from:
+        return
+    if not _was_delivered_per_db(db, workflow):
+        return
+    workflow.renamed_from = workflow.workflow_name
+    print(f"📌 Recorded '{workflow.workflow_name}' as the delivered name to remove on the next campaign")
+
+
+def _assert_rename_allowed(db, project_id: int, workflow, new_name: str,
+                           user: Optional[str]) -> None:
+    """Refuse a rename the impact report would call blocked.
+
+    Calls the same ``_rename_blockers`` the preview calls, so the dialog and
+    the save cannot disagree about what is allowed — the preview saying
+    "blocked" while /api/save-workflows performed it anyway was the whole
+    hazard. Every check below is a database query; no GitHub call is added.
+    """
+    project = db.query(Project).filter(Project.project_id == project_id).first()
+    if project is None:
+        return
+
+    # Consumers only matter to the blocker that refuses a *delivered reusable*
+    # workflow, so skip the scan otherwise. It loads every workflow row of every
+    # linked caller project — full YAML column — and substring-matches in Python,
+    # which is ~19 queries and hundreds of materialised rows on a project with a
+    # handful of callers. Paid on every rename save and every preview, and
+    # discarded unread in all the cases below.
+    delivered = _was_delivered_per_db(db, workflow)
+    consumers = (
+        _rename_consumers(db, project, workflow, user or "")
+        if delivered and workflow.reusable_workflow
+        else []
+    )
+
+    blocker = _rename_blockers(
+        db, project, workflow, new_name, consumers, delivered=delivered,
+    )
+    if blocker:
+        raise HTTPException(status_code=409, detail=blocker)
+
+
 def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modified_by=None):
     """
     Create or update a workflow within the scope of a specific project.
@@ -2199,70 +2457,53 @@ def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modifi
 
     is_rename = bool(original_name and original_name.lower() != new_name.lower())
 
+    _assert_not_case_only_rename(original_name, new_name, is_rename)
+
     print(f"✅ Creating/updating workflow '{new_name}' for project {project_id}, reusable: {is_reusable}"
           + (f" (renamed from '{original_name}')" if is_rename else ""))
 
     existing_workflow = None
 
     if is_rename:
-        # Look up the workflow by its previous name so we perform a true rename
+        # Look up the workflow by its previous name so we perform a true rename.
+        # Case-insensitive *equality*, not ILIKE: '_' is a single-character
+        # wildcard in SQL LIKE and workflow names routinely contain it, so
+        # renaming "ci_build" could match an unrelated "ciXbuild" and rename
+        # that instead. Same reasoning as the new-name lookup below.
+        # pending_delete rows are excluded so a rename can never resurrect a
+        # workflow that is queued for removal from GitHub.
         existing_workflow = db.query(Workflow).join(ProjectWorkflow).filter(
             ProjectWorkflow.project_id == project_id,
-            Workflow.workflow_name.ilike(original_name),
-            Workflow.reusable_workflow == is_reusable
+            func.lower(Workflow.workflow_name) == original_name.lower(),
+            Workflow.reusable_workflow == is_reusable,
+            Workflow.pending_delete.is_(False)
         ).first()
 
         if existing_workflow:
+            # A rename *takes* the new name, so it needs the same refusal as a
+            # fresh save. The guard below used to sit only in the
+            # `existing_workflow is None` block, which is exactly the branch a
+            # rename skips — so renaming onto a tombstone's name produced the
+            # duplicate pair the guard exists to prevent.
+            _assert_name_not_held_by_tombstone(db, project_id, new_name, is_reusable)
+            # The rest of the refusals the impact report computes. Until this
+            # call existed the report could say "blocked" and the save would
+            # rename anyway, orphaning the delivered file and breaking every
+            # consumer's uses: line with no warning.
+            _assert_rename_allowed(db, project_id, existing_workflow, new_name, last_modified_by)
+
+            _record_rename_for_delivery(db, existing_workflow, new_name)
+
             print(f"📌 ✅ Renaming workflow '{original_name}' → '{new_name}' in project {project_id}")
             existing_workflow.workflow_name = new_name
 
-            # Remove any accidental duplicate(s) that may have been created under the new name
-            # (can happen if a prior save already ran before this rename path was in place).
-            # Fetch ALL duplicates — not just the first — so nothing is left behind.
-            duplicates = db.query(Workflow).join(ProjectWorkflow).filter(
-                ProjectWorkflow.project_id == project_id,
-                Workflow.workflow_name.ilike(new_name),
-                Workflow.reusable_workflow == is_reusable,
-                Workflow.workflow_id != existing_workflow.workflow_id
-            ).all()
-            for dup in duplicates:
-                print(f"📌 Removing accidental duplicate workflow '{new_name}' (id={dup.workflow_id})")
-                # Before deleting the duplicate, migrate any LinkedReusableWorkflow rows that
-                # point to it so we don't silently unlink standard projects.  The duplicate's
-                # links are re-targeted to existing_workflow (the canonical renamed record).
-                # Use a raw UPDATE so we don't need to load each row individually.
-                dup_linked_count = (
-                    db.query(LinkedReusableWorkflow)
-                    .filter(LinkedReusableWorkflow.workflow_id == dup.workflow_id)
-                    .count()
-                )
-                if dup_linked_count:
-                    print(f"  ↳ Migrating {dup_linked_count} LinkedReusableWorkflow row(s) "
-                          f"from duplicate id={dup.workflow_id} → id={existing_workflow.workflow_id}")
-                    # Delete any links that would create a duplicate (same standard_project_id already
-                    # linked to existing_workflow) to avoid a unique-constraint violation on insert.
-                    already_linked_project_ids = {
-                        r[0] for r in db.query(LinkedReusableWorkflow.standard_project_id)
-                        .filter(LinkedReusableWorkflow.workflow_id == existing_workflow.workflow_id)
-                        .all()
-                    }
-                    db.query(LinkedReusableWorkflow).filter(
-                        LinkedReusableWorkflow.workflow_id == dup.workflow_id,
-                        LinkedReusableWorkflow.standard_project_id.in_(already_linked_project_ids)
-                    ).delete(synchronize_session=False)
-                    # Re-point the remaining links to the canonical renamed workflow
-                    db.query(LinkedReusableWorkflow).filter(
-                        LinkedReusableWorkflow.workflow_id == dup.workflow_id
-                    ).update({"workflow_id": existing_workflow.workflow_id}, synchronize_session=False)
-
-                # Must delete the ProjectWorkflow association row first because
-                # ProjectWorkflow has a FK to Workflow (and SQLite doesn't always
-                # enforce FK cascades).  Deleting the association before the
-                # Workflow row avoids a constraint violation.
-                db.query(ProjectWorkflow).filter_by(
-                    project_id=project_id, workflow_id=dup.workflow_id
-                ).delete(synchronize_session=False)
-                db.delete(dup)
+            # No duplicate sweep here any more. _assert_rename_allowed above
+            # refuses on a strict superset of what the sweep used to match —
+            # same project, same lower(name), same kind, other row — and it
+            # includes tombstones, which the sweep excluded. So the sweep
+            # could only ever run against an empty list, including the
+            # LinkedReusableWorkflow re-pointing it carried for a case that
+            # can no longer reach it.
         else:
             print(f"⚠️ Original workflow '{original_name}' not found; treating as new workflow '{new_name}'")
 
@@ -2272,18 +2513,39 @@ def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modifi
         # contain '_', which is a single-character wildcard in SQL LIKE, so
         # saving "ci_build" could match and overwrite an unrelated "ciXbuild".
         # Same reasoning as the reusable duplicate sweep in projects.py.
+        # pending_delete rows are excluded so that saving never revives a
+        # tombstone and silently cancels the deletion its campaign is carrying.
         existing_workflow = db.query(Workflow).join(ProjectWorkflow).filter(
             ProjectWorkflow.project_id == project_id,
             func.lower(Workflow.workflow_name) == (new_name or "").lower(),
-            Workflow.reusable_workflow == is_reusable
+            Workflow.reusable_workflow == is_reusable,
+            Workflow.pending_delete.is_(False)
         ).first()
+
+        # ...but excluding them must not let a second row take the same name.
+        # Both rows format to one GitHub path, and a campaign selecting that name
+        # picks up both: _commit_workflows_to_branch would then remove the file
+        # and upsert it on the same AM branch, with DB order deciding which wins.
+        # Refuse instead, and say what the user has to do about it.
+        _assert_name_not_held_by_tombstone(db, project_id, new_name, is_reusable)
 
     if existing_workflow:
         print(f"📌 ✅ Updating existing workflow in project: {existing_workflow.workflow_name}")
+        # Whether the YAML actually moved. A project save posts every workflow it
+        # holds, so settings-only saves — adding a repository, renaming the
+        # project — arrive here for workflows nobody edited. projects.py used to
+        # have its own copy of this function that never touched workflow_status;
+        # now that the duplicate is gone and this one runs on that path, an
+        # unchanged re-save flipped every synced workflow to committed_locally
+        # and the badges with it. The hash is gated with it: zeroing the drift
+        # baseline for a workflow whose content did not change would report
+        # drift that does not exist.
+        content_changed = (existing_workflow.workflow_yaml or "") != workflow.content.strip()
         existing_workflow.workflow_yaml = workflow.content.strip()
         existing_workflow.reusable_workflow = is_reusable
-        # Set hash to zeros to indicate local modification (user doesn't use git locally)
-        existing_workflow.workflow_git_hash = "0000000000000000000000000000000000000000"
+        if content_changed:
+            # Zeros mean "modified locally" — the user does not use git here.
+            existing_workflow.workflow_git_hash = "0000000000000000000000000000000000000000"
 
         # Check if this workflow has any open PRs before downgrading status
         has_open_pr = False
@@ -2318,7 +2580,7 @@ def create_or_update_workflow(db, workflow, project_id, is_reusable, last_modifi
             if existing_workflow.workflow_status != "under_review":
                 existing_workflow.workflow_status = "under_review"
             print("✅ Workflow has open PR - preserving status: under_review")
-        else:
+        elif content_changed:
             # No open PR: editing a "synced" or "under_review" workflow brings it back to committed_locally
             existing_workflow.workflow_status = "committed_locally"
             print(f"✅ Set git hash to zeros (local modification), workflow status: committed_locally")
@@ -2550,6 +2812,78 @@ def _get_linked_workflow_ids_for_project(
     return [r[0] for r in query.all()]
 
 
+def _reap_deleted_workflows(db: Session, project_id: int, workflows: list,
+                            new_status: str) -> tuple:
+    """Drop the rows a merged campaign has just removed from GitHub.
+
+    Returns (surviving_workflows, removed_ids). Only on the transition to
+    synced_with_github: before that the pull request carrying the removal is
+    still open, and the row is what Restore acts on. Mirrors
+    _update_project_custom_files_status.
+    """
+    if new_status != "synced_with_github":
+        return workflows, []
+
+    removed = [w for w in workflows if w.pending_delete]
+    if not removed:
+        return workflows, []
+
+    for workflow in removed:
+        _detach_workflow_from_project(db, project_id, workflow)
+    print(f"🗑️ Removed {len(removed)} deleted workflow(s) from the project")
+    return [w for w in workflows if not w.pending_delete], [w.workflow_id for w in removed]
+
+
+def _clear_completed_renames(workflows: list, new_status: str) -> None:
+    """Forget the pre-rename name once the campaign carrying it has merged.
+
+    Only on merge. ``_cancel_pending_deletes`` clears its flag when a campaign
+    is *closed*, because a closed campaign means the deletion never happened —
+    here the opposite holds. Closing a campaign leaves the old file on GitHub
+    under its old name, so the rename is still outstanding and the next campaign
+    has to carry it. Clearing on close would strand that file permanently, with
+    nothing left that knows its name.
+    """
+    if new_status != "synced_with_github":
+        return
+    for workflow in workflows:
+        if workflow.renamed_from:
+            print(f"✅ Rename of '{workflow.renamed_from}' → '{workflow.workflow_name}' is merged")
+            workflow.renamed_from = None
+
+
+def _cancel_pending_deletes(workflows: list, new_status: str) -> None:
+    """Unmark workflows whose removal campaign was closed without merging.
+
+    A transition back to committed_locally means every pull request carrying the
+    change was closed, so the deletion did not happen. Leaving pending_delete set
+    would strand the workflow: nothing surfaces the flag, there is no Restore to
+    clear it, and the next campaign the user opens for an unrelated edit would
+    silently delete the file instead of updating it.
+    """
+    if new_status != "committed_locally":
+        return
+    for workflow in workflows:
+        if workflow.pending_delete:
+            workflow.pending_delete = False
+            print(f"↩️ Cancelled the pending deletion of '{workflow.workflow_name}' (campaign closed)")
+
+
+def _drop_drift_for_removed(db: Session, project_id: int, removed_ids: list) -> None:
+    """Clear persisted drift for workflows that no longer exist.
+
+    Called after the caller's commit: drop_workflow_drift commits and recomputes
+    the project's drift summary, so it has to see the rows already gone.
+    """
+    if not removed_ids:
+        return
+    project = db.query(Project).filter_by(project_id=project_id).first()
+    if not project:
+        return
+    for workflow_id in removed_ids:
+        drop_workflow_drift(db, project, workflow_id)
+
+
 def _update_project_workflows_status(db: Session, project_id: int, new_status: str,
                                      only_if_status: Optional[str] = None,
                                      non_reusable_only: bool = False,
@@ -2595,13 +2929,33 @@ def _update_project_workflows_status(db: Session, project_id: int, new_status: s
                     f"🔒 Kept {len(locked_ids)} reusable workflow(s) under_review "
                     f"(open PR campaign in another project)"
                 )
+        workflows, removed_ids = _reap_deleted_workflows(db, project_id, workflows, new_status)
+        _cancel_pending_deletes(workflows, new_status)
+        _clear_completed_renames(workflows, new_status)
         for workflow in workflows:
             workflow.workflow_status = new_status
         db.commit()
+        _drop_drift_for_removed(db, project_id, removed_ids)
         print(f"✅ Updated {len(workflows)} workflow(s) status to: {new_status}")
     except Exception as e:
         print(f"❌ Error updating workflow statuses: {str(e)}")
         db.rollback()
+
+
+def _detach_workflow_from_project(db: Session, project_id: int, workflow: Workflow) -> None:
+    """Remove a workflow's project link and the workflow row itself.
+
+    A workflow belongs to exactly one project (unique index on
+    project_workflows.workflow_id), so dropping the association always leaves it
+    orphaned — there is no other project keeping it alive. Does not commit;
+    persisted drift is dropped by the caller afterwards, because
+    drop_workflow_drift commits and recomputes the project's summary.
+    """
+    db.query(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project_id,
+        ProjectWorkflow.workflow_id == workflow.workflow_id,
+    ).delete(synchronize_session=False)
+    db.delete(workflow)
 
 
 def _update_project_custom_files_status(
@@ -2681,9 +3035,17 @@ def _sync_linked_reusable_workflows_after_merge(db: Session, standard_project_id
             return
 
         # Transition the linked workflows to synced_with_github
+        # renamed_from goes with the status. This bulk update is the only path
+        # that syncs a reusable workflow delivered through a caller project, and
+        # _clear_completed_renames never sees those rows — so the record of the
+        # pre-rename name survived the merge that completed it. The next rename
+        # then kept the stale name (the recorder never overwrites one), the
+        # campaign after that deleted a file that was already gone, and the name
+        # in between became a permanent orphan.
         db.query(Workflow).filter(
             Workflow.workflow_id.in_(linked_wf_ids)
-        ).update({"workflow_status": "synced_with_github"}, synchronize_session=False)
+        ).update({"workflow_status": "synced_with_github", "renamed_from": None},
+                 synchronize_session=False)
         db.commit()
         print(f"✅ Synced {len(linked_wf_ids)} linked reusable workflow(s) → synced_with_github")
 
@@ -2713,7 +3075,7 @@ def _sync_linked_reusable_workflows_after_merge(db: Session, standard_project_id
         db.rollback()
 
 
-@router.post("/api/save-workflows", responses=_responses(400, 401, 404, 500))
+@router.post("/api/save-workflows", responses=_responses(400, 401, 404, 409, 500))
 def save_workflows(
     payload: SaveProjectWorkflowsRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -2726,6 +3088,20 @@ def save_workflows(
 
         if not project:
             raise HTTPException(status_code=404, detail=PROJECT_ERROR)
+
+        # _find_project_by_name admits any ProjectMembership, project_viewer
+        # included. Without this a viewer could save — and a save can set
+        # renamed_from, which arms a DELETE of the old file in every target
+        # repository on the next campaign. The read-only preview was already
+        # gated at project_editor, so the write that performs the rename was the
+        # looser of the two.
+        #
+        # Here rather than inside create_or_update_workflow: that function has no
+        # authenticated principal (its only identity argument is the audit field
+        # last_modified_by, which one caller fills straight from the request
+        # body), and it commits per workflow with no outer transaction — a 403
+        # raised inside the loop would leave the workflows ahead of it written.
+        _require_project_editor(db, github_user, project)
 
         # ✅ Save regular workflows
         for workflow in payload.workflows:
@@ -3063,13 +3439,14 @@ _ERR_INSUFFICIENT_PROJECT_ROLE = "Insufficient project permissions. Required: pr
 _ERR_REPO_NOT_IN_PROJECT = "Repository is not part of this project"
 
 
-def _require_drift_editor(db: Session, github_user: str, project: Project) -> None:
-    """Require at least project_editor to resolve drift.
+def _require_project_editor(db: Session, github_user: str, project: Project) -> None:
+    """Require at least project_editor before writing to the project's repositories.
 
-    Resolving drift writes to GitHub — "Restore Directly" force-pushes over the
-    default branch — so read-only access must not be enough. The endpoints
-    previously only proved the caller could *see* the project, because
-    _find_project_by_name never reads ProjectMembership.project_role.
+    Drift resolution writes to GitHub — "Restore Directly" force-pushes over the
+    default branch — and so does deleting a workflow, so read-only access must
+    not be enough for either. The endpoints previously only proved the caller
+    could *see* the project, because _find_project_by_name never reads
+    ProjectMembership.project_role.
 
     Project owners and admin workspace members always pass; everyone else needs
     an explicit project_editor membership.
@@ -3114,23 +3491,45 @@ def _require_repo_in_project(db: Session, project: Project, repo_name: str, gith
     links (or the authenticated user), never from the request, so accepting it
     keeps the target out of the caller's control.
     """
-    if not repo_name or "/" not in repo_name:
-        raise HTTPException(status_code=400, detail="repo must be in 'owner/repo' format")
-
+    _require_owned_repo_format(repo_name)
     normalized = repo_name.strip()
 
-    repo = db.query(Repo).filter(Repo.repo_name == normalized).first()
-    if repo:
-        in_project = db.query(ProjectRepo).filter_by(
-            project_id=project.project_id, repo_id=repo.repo_id
-        ).first()
-        if in_project:
-            return
+    if _project_owns_repo(db, project, normalized):
+        return
 
     if normalized == _get_reusable_workflow_repo(project, github_user, db):
         return
 
     raise HTTPException(status_code=400, detail=_ERR_REPO_NOT_IN_PROJECT)
+
+
+def _require_owned_repo_format(repo_name: str) -> None:
+    if not repo_name or "/" not in repo_name:
+        raise HTTPException(status_code=400, detail="repo must be in 'owner/repo' format")
+
+
+def _project_owns_repo(db: Session, project: Project, repo_name: str) -> bool:
+    """True when *repo_name* is one of the project's own repositories."""
+    repo = db.query(Repo).filter(Repo.repo_name == repo_name.strip()).first()
+    if not repo:
+        return False
+    return db.query(ProjectRepo).filter_by(
+        project_id=project.project_id, repo_id=repo.repo_id
+    ).first() is not None
+
+
+def _require_owned_repo(db: Session, project: Project, repo_name: str) -> None:
+    """Require that *repo_name* is one of the project's own repositories.
+
+    Stricter than _require_repo_in_project, which also accepts the reusable-
+    workflow repo so reusable-workflow drift stays resolvable. That repo belongs
+    to the *linked RWX project*, so accepting it for a deletion would remove the
+    shared copy every other caller project linking that project depends on —
+    the very thing _require_owns_reusable_repo refuses on the sibling endpoint.
+    """
+    _require_owned_repo_format(repo_name)
+    if not _project_owns_repo(db, project, repo_name):
+        raise HTTPException(status_code=400, detail=_ERR_REPO_NOT_IN_PROJECT)
 
 
 def _record_drift_check_failure(db: Session, project: Project, message: str) -> None:
@@ -3223,7 +3622,7 @@ def _stored_project_drift_details(db: Session, project: Project) -> List[Workflo
             github_yaml=None,          # fetched on demand — see docstring
             actionsmanager_sha=expected.workflow_git_hash,
             github_sha=state.github_sha,
-            last_checked=(state.last_checked_at.isoformat() if state.last_checked_at else ""),
+            last_checked=_utc_iso(state.last_checked_at) or "",
             message=(
                 f"Workflow was deleted from {repo_name}" if state.deleted_in_github
                 else f"Workflow content differs between local and {repo_name}"
@@ -3325,8 +3724,7 @@ def get_project_drift(
             drifted_workflows=drifted,
             # None when no check has ever run — the UI must say "not checked
             # yet" rather than implying a clean result.
-            last_checked=(project.last_drift_check_at.isoformat()
-                          if project.last_drift_check_at else None),
+            last_checked=_utc_iso(project.last_drift_check_at),
             unchecked_count=0,
             stale_reason=project.drift_error_summary,
         )
@@ -3767,7 +4165,7 @@ def resolve_workflow_drift(
         raise HTTPException(status_code=403, detail="Not authorized for this workflow")
 
     # Resolving drift writes to GitHub, so seeing the project is not enough.
-    _require_drift_editor(db, github_user, project)
+    _require_project_editor(db, github_user, project)
     # And the target must be one of the project's own repos, not any repo the
     # caller's token happens to be able to write to.
     _require_repo_in_project(db, project, payload.repo, github_user)
@@ -4082,7 +4480,7 @@ def bulk_resolve_project_drift(
         raise HTTPException(status_code=403, detail=NOT_AUTHORIZED_PROJECT_DETAIL)
 
     # Bulk resolve writes to GitHub for every item, so require editor rights.
-    _require_drift_editor(db, github_user, project)
+    _require_project_editor(db, github_user, project)
 
     resolved_items = _validate_bulk_resolve_items(db, project_id, payload.items)
     # Validate every target repo up front — the batch is rejected whole rather
@@ -4149,7 +4547,7 @@ def _validate_adopt_github_request(
 
     # Adopting can push to every project repo, so require editor rights.
     # (_resolve_source_repo below already checks the repo belongs to the project.)
-    _require_drift_editor(db, github_user, project)
+    _require_project_editor(db, github_user, project)
 
     workflow = db.query(Workflow).filter_by(workflow_id=payload.workflow_id).first()
     if not workflow:
@@ -4941,7 +5339,13 @@ def _build_regular_workflow_results(project: Project, payload: "CreatePullReques
         if payload.selected_workflows is not None:
             regular_workflows = [w for w in regular_workflows if w.workflow_name in payload.selected_workflows]
         workflow_dicts = [
-            {"name": w.workflow_name, "content": w.workflow_yaml}
+            {"name": w.workflow_name, "content": w.workflow_yaml,
+             "pending_delete": bool(w.pending_delete),
+             # The name the file still carries on GitHub. Delivered as the
+             # remove half of the rename, in the same campaign as the add, so
+             # the pull request shows a rename rather than an unrelated new
+             # file plus an orphan.
+             "renamed_from": w.renamed_from}
             for w in regular_workflows if w.workflow_name and w.workflow_yaml
         ]
         selected_names = [w.workflow_name for w in regular_workflows if w.workflow_name]
@@ -5074,7 +5478,8 @@ def _build_reusable_workflow_results(project: Project, payload: "CreatePullReque
     if not reusable_workflows:
         return {}, []
     rxworkflow_dicts = [
-        {"name": w.workflow_name, "content": w.workflow_yaml}
+        {"name": w.workflow_name, "content": w.workflow_yaml,
+         "renamed_from": w.renamed_from}
         for w in reusable_workflows if w.workflow_name and w.workflow_yaml
     ]
     selected_names = [w.workflow_name for w in reusable_workflows if w.workflow_name]
@@ -8957,12 +9362,34 @@ def _campaign_pr_body(db: Session, project_code: str, user: Optional[str],
     return "\n".join(lines) + "\n"
 
 
+def _github_reason(response) -> str:
+    """GitHub's own explanation for a failed call, trimmed for display.
+
+    The useful part is ``message`` plus the ``errors`` list — "No commits between
+    main and actions-manager/..." only ever appears there. Callers that report a
+    bare status code leave the user with nothing to act on.
+    """
+    fallback = (response.text or "")[:200]
+    try:
+        payload = response.json()
+    except Exception:
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+    parts = [payload.get("message") or ""]
+    for err in payload.get("errors") or []:
+        detail = err.get("message") if isinstance(err, dict) else str(err)
+        if detail:
+            parts.append(str(detail))
+    return " — ".join(p for p in parts if p)[:300] or fallback
+
+
 def _create_pull_request(owner: str, repo: str, am_branch: str,
                         target_branch: str, project_code: str,
                         workflows_committed: List[str], headers: dict,
                         user: str = None, db: Session = None,
                         body: Optional[str] = None,
-                        title: Optional[str] = None) -> Optional[dict]:
+                        title: Optional[str] = None) -> tuple:
     """
     Create a new Pull Request from the Actions Manager branch to the target branch.
     
@@ -8981,7 +9408,9 @@ def _create_pull_request(owner: str, repo: str, am_branch: str,
         title: Prebuilt PR title, for deliveries that are not a workflow update.
 
     Returns:
-        dict or None: PR data if created successfully, None otherwise
+        tuple: (pr_data, reason) — pr_data is None on failure and ``reason`` carries
+        GitHub's own explanation. "No commits between main and actions-manager/..."
+        is the common one and the caller has nothing to show the user without it.
     """
     pr_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/pulls"
 
@@ -9007,18 +9436,19 @@ def _create_pull_request(owner: str, repo: str, am_branch: str,
         headers_with_auth = _get_authenticated_headers(user, headers)
         if not headers_with_auth:
             print(f"❌ User {user} not authenticated")
-            return None
+            return None, f"GitHub user '{user}' is not authenticated"
         response = requests.post(pr_url, json=pr_payload, headers=headers_with_auth, timeout=GITHUB_TIMEOUT_SECONDS)
     else:
         response = requests.post(pr_url, json=pr_payload, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
-    
+
     if response.status_code == 201:
         pr_data = response.json()
         print(f"✅ Created PR #{pr_data['number']}: {pr_data['html_url']}")
-        return pr_data
-    else:
-        print(f"❌ Failed to create PR: {response.status_code} - {response.text[:200]}")
-        return None
+        return pr_data, None
+
+    reason = _github_reason(response)
+    print(f"❌ Failed to create PR: {response.status_code} - {reason}")
+    return None, f"HTTP {response.status_code}: {reason}"
 
 
 def _update_workflow_to_github(owner: str, repo: str, workflow: dict, 
@@ -9176,6 +9606,13 @@ def _update_workflow_git_hash(db: Session, workflow_name: str, new_sha: str,
     Note the name arrives unprefixed in both naming modes: ``use_prefix`` is
     applied only when building the GitHub path, so prefixing does not protect
     against this collision.
+
+    pending_delete rows are excluded because only the upsert path reaches here
+    — ``_commit_workflows_to_branch`` sends tombstones to
+    ``_remove_workflow_on_branch`` and continues — so a tombstone is never the
+    row this SHA belongs to. Without the filter, a tombstone sharing a live
+    workflow's name can win ``.first()``, and the live row's baseline then never
+    updates: real drift on it reads as synchronized.
     """
     if not new_sha:
         return
@@ -9188,6 +9625,7 @@ def _update_workflow_git_hash(db: Session, workflow_name: str, new_sha: str,
             Project.project_code == project_code,
             Workflow.workflow_name == workflow_name,
             Workflow.reusable_workflow == is_reusable,
+            Workflow.pending_delete.is_(False),
         )
         .first()
     )
@@ -9247,6 +9685,138 @@ def _resolve_effective_target_branches(repo_name: str, owner: str, repo: str, pr
         return None, {"error": f"Failed to resolve branches: {str(e)}", "status": 500}
 
 
+def _delete_workflow_from_branch(owner: str, repo: str, workflow_name: str, project_code: str,
+                                 am_branch: str, headers: dict, user: str, db: Session,
+                                 use_prefix: bool) -> tuple:
+    """Remove a workflow file from ``am_branch``. Returns (outcome, error_message).
+
+    ``outcome`` is DELETE_DELETED / DELETE_ABSENT / DELETE_FAILED, matching
+    _delete_custom_file_from_branch — a campaign carrying only removals must be
+    able to tell "took it out" from "it was not there".
+    """
+    file_name = format_workflow_name(workflow_name, project_code, use_prefix)
+    path = quote(f".github/workflows/{file_name}", safe="/")
+    contents_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}"
+
+    sha_resp = github_get(contents_url, user, db, headers=headers, params={"ref": am_branch})
+    if sha_resp.status_code == 404:
+        print(f"📌 Workflow '{file_name}' already absent from {am_branch}")
+        return DELETE_ABSENT, None
+    if sha_resp.status_code != 200:
+        return DELETE_FAILED, f"{workflow_name}: HTTP {sha_resp.status_code} fetching SHA"
+
+    del_resp = requests.delete(
+        contents_url,
+        headers=headers,
+        json={
+            "message": f"Delete {file_name} via ActionsManager [{project_code}] [skip ci]",
+            "sha": sha_resp.json().get("sha"),
+            "branch": am_branch,
+        },
+        timeout=GITHUB_TIMEOUT_SECONDS,
+    )
+    if del_resp.status_code in (200, 201):
+        print(f"✅ Deleted workflow '{file_name}' from {am_branch}")
+        return DELETE_DELETED, None
+    reason = _github_reason(del_resp)
+    print(f"❌ Failed to delete workflow '{file_name}': {del_resp.status_code} - {reason}")
+    return DELETE_FAILED, f"{workflow_name}: HTTP {del_resp.status_code} - {reason}"
+
+
+def _record_workflow_removal(workflow_name: str, result: tuple,
+                             committed: list, errors: list) -> None:
+    """File a removal's outcome into the campaign's committed/error lists.
+
+    Absent is neither a commit nor a failure — see _commit_custom_files_to_branch
+    for why counting it as a commit produces a pull request against a branch with
+    no diff.
+    """
+    outcome, error = result
+    if outcome == DELETE_DELETED:
+        committed.append(workflow_name)
+    elif outcome == DELETE_FAILED:
+        errors.append(error)
+
+
+def _remove_workflow_on_branch(workflow_name: str, owner: str, repo: str, project_code: str,
+                               am_branch: str, headers: dict, user: str, db: Session,
+                               use_prefix: bool, committed: list, errors: list) -> None:
+    """Take one pending-delete workflow off the AM branch, filing the outcome.
+
+    Wrapped like every other iteration of _commit_workflows_to_branch: an
+    unwrapped timeout here would propagate out of the campaign and abandon the
+    AM branches already cut for earlier repos, instead of failing this one
+    target.
+    """
+    try:
+        result = _delete_workflow_from_branch(
+            owner, repo, workflow_name, project_code, am_branch,
+            headers, user, db, use_prefix
+        )
+    except Exception as e:
+        errors.append(f"{workflow_name}: {str(e)}")
+        print(f"❌ Exception removing workflow '{workflow_name}': {str(e)}")
+        return
+    _record_workflow_removal(workflow_name, result, committed, errors)
+
+
+def _carry_rename_on_branch(workflow: dict, owner: str, repo: str, project_code: str,
+                            am_branch: str, headers: dict, user: str, db: Session,
+                            use_prefix: bool, errors: list) -> None:
+    """Take the old filename off the branch the new one was just written to.
+
+    Git has no rename operation — a rename is a remove plus an add — so both
+    halves have to land on the same AM branch for the pull request to read as a
+    rename and for merging it to finish the job. Called only after the new file
+    committed successfully: removing the old one first would leave the workflow
+    absent from the repository if the write then failed.
+
+    An outcome is deliberately not added to ``committed``. The add already
+    counted this workflow, and counting it twice would report a campaign as
+    carrying more files than it does. Absent is not an error: the file may have
+    been removed by hand, or a previous campaign may have carried the rename and
+    been closed after the remove landed.
+
+    Refuses to remove the path that was just written. ``renamed_from`` records a
+    *name*, and two different names can format to one *filename*: without a
+    prefix ``ci`` and ``ci.yml`` are both ``ci.yml``, so renaming between them
+    made the campaign delete the file it had written moments earlier and merging
+    it removed the workflow from every repository. Compared case-insensitively
+    as well, which covers ``ci`` -> ``ci2`` -> ``CI`` — the two-step route
+    ``_assert_not_case_only_rename`` itself recommends. If GitHub's contents API
+    is case-sensitive that leaves an orphan instead, which is the far cheaper
+    mistake.
+
+    Deliberately NOT a blob-SHA comparison. Git blob SHAs are content-addressed,
+    so a rename that does not also edit the YAML produces the same SHA at both
+    paths — the common case — and skipping on that would reintroduce the orphan
+    this function exists to prevent.
+    """
+    old_name = workflow.get("renamed_from")
+    if not old_name:
+        return
+
+    old_file = format_workflow_name(old_name, project_code, use_prefix)
+    new_file = format_workflow_name(workflow.get("name", ""), project_code, use_prefix)
+    if old_file.lower() == new_file.lower():
+        print(f"📌 '{old_name}' and '{workflow.get('name')}' are both {new_file}; nothing to remove")
+        return
+
+    try:
+        outcome, error = _delete_workflow_from_branch(
+            owner, repo, old_name, project_code, am_branch,
+            headers, user, db, use_prefix
+        )
+    except Exception as e:
+        errors.append(f"{old_name}: {str(e)}")
+        print(f"❌ Exception removing the pre-rename file '{old_name}': {str(e)}")
+        return
+    if outcome == DELETE_FAILED:
+        errors.append(error)
+    elif outcome == DELETE_DELETED:
+        print(f"✅ Carried the rename: removed '{old_name}' from {am_branch}")
+
+
 def _commit_workflows_to_branch(workflows: List[dict], owner: str, repo: str, project_code: str, am_branch: str,
                                  headers: dict, repo_name: str, user: str, db: Session, use_prefix: bool) -> tuple:
     """Commit each workflow to the AM branch. Returns (workflows_committed, workflow_errors)."""
@@ -9254,6 +9824,12 @@ def _commit_workflows_to_branch(workflows: List[dict], owner: str, repo: str, pr
     workflow_errors = []
     for workflow in workflows:
         workflow_name = workflow.get('name', 'unknown')
+        if workflow.get("pending_delete"):
+            _remove_workflow_on_branch(
+                workflow_name, owner, repo, project_code, am_branch,
+                headers, user, db, use_prefix, workflows_committed, workflow_errors,
+            )
+            continue
         print(f"\n🔍 Committing workflow '{workflow_name}' to {am_branch}")
         try:
             status_code, new_sha = _update_workflow_to_github(
@@ -9264,9 +9840,20 @@ def _commit_workflows_to_branch(workflows: List[dict], owner: str, repo: str, pr
                 workflows_committed.append(workflow_name)
                 print(f"✅ Committed workflow '{workflow_name}' (status: {status_code})")
                 _update_workflow_git_hash(db, workflow_name, new_sha, project_code, is_reusable=False)
+                _carry_rename_on_branch(
+                    workflow, owner, repo, project_code, am_branch,
+                    headers, user, db, use_prefix, workflow_errors,
+                )
             elif status_code == 204:
                 workflows_committed.append(workflow_name)
                 print(f"📌 Workflow '{workflow_name}' unchanged (status: 204)")
+                # 204 means the new name is already on this branch, which still
+                # leaves the old one there when a previous campaign was closed
+                # after the add landed but before the remove did.
+                _carry_rename_on_branch(
+                    workflow, owner, repo, project_code, am_branch,
+                    headers, user, db, use_prefix, workflow_errors,
+                )
             else:
                 workflow_errors.append(f"{workflow_name}: HTTP {status_code}")
                 print(f"❌ Failed to commit workflow '{workflow_name}': {status_code}")
@@ -9301,9 +9888,17 @@ def _commit_reusable_workflows_to_branch(rxworkflows: List[dict], owner: str, re
                 workflows_committed.append(workflow_name)
                 print(f"✅ Committed reusable workflow '{workflow_name}' (status: {status_code})")
                 _update_workflow_git_hash(db, workflow_name, new_sha, project_code, is_reusable=True)
+                _carry_rename_on_branch(
+                    workflow, owner, repo, project_code, am_branch,
+                    headers, user, db, use_prefix, workflow_errors,
+                )
             elif status_code == 204:
                 workflows_committed.append(workflow_name)
                 print(f"📌 Reusable workflow '{workflow_name}' unchanged (status: 204)")
+                _carry_rename_on_branch(
+                    workflow, owner, repo, project_code, am_branch,
+                    headers, user, db, use_prefix, workflow_errors,
+                )
             else:
                 workflow_errors.append(f"{workflow_name}: HTTP {status_code}")
                 print(f"❌ Failed to commit reusable workflow '{workflow_name}': {status_code}")
@@ -9315,9 +9910,14 @@ def _commit_reusable_workflows_to_branch(rxworkflows: List[dict], owner: str, re
     return workflows_committed, workflow_errors
 
 
-def _delete_custom_file_from_am_branch(owner: str, repo: str, cf_path: str, am_branch: str, project_code: str,
-                                        user: str, db: Session, headers: dict) -> tuple:
-    """Returns (success, error_message)."""
+def _delete_custom_file_from_branch(owner: str, repo: str, cf_path: str, am_branch: str, project_code: str,
+                                    user: str, db: Session, headers: dict) -> tuple:
+    """Delete ``cf_path`` from ``am_branch``. Returns (outcome, error_message).
+
+    ``outcome`` is one of DELETE_DELETED / DELETE_ABSENT / DELETE_FAILED. Absent is
+    not an error, but it is not a commit either — callers that go on to open a PR
+    must not count it, or they open one against a branch with no diff.
+    """
     # Encoded at the URL, plain in messages: the stored path must not be able to
     # reshape the request (a "?" or "#" in it would otherwise start a query or
     # fragment, and "%xx" would be decoded by GitHub).
@@ -9325,7 +9925,7 @@ def _delete_custom_file_from_am_branch(owner: str, repo: str, cf_path: str, am_b
     sha_resp = github_get(
         f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{cf_url_path}",
         user, db,
-        headers={**headers, "params": {"ref": am_branch}},
+        headers=headers,
         params={"ref": am_branch},
     )
     if sha_resp.status_code == 200:
@@ -9342,13 +9942,13 @@ def _delete_custom_file_from_am_branch(owner: str, repo: str, cf_path: str, am_b
         )
         if del_resp.status_code in (200, 201):
             print(f"✅ Deleted custom file '{cf_path}' from {am_branch}")
-            return True, None
+            return DELETE_DELETED, None
         print(f"❌ Failed to delete custom file '{cf_path}': {del_resp.status_code}")
-        return False, f"{cf_path}: HTTP {del_resp.status_code}"
+        return DELETE_FAILED, f"{cf_path}: HTTP {del_resp.status_code} - {_github_reason(del_resp)}"
     if sha_resp.status_code == 404:
         print(f"📌 Custom file '{cf_path}' already absent from {am_branch}")
-        return True, None
-    return False, f"{cf_path}: HTTP {sha_resp.status_code} fetching SHA"
+        return DELETE_ABSENT, None
+    return DELETE_FAILED, f"{cf_path}: HTTP {sha_resp.status_code} fetching SHA"
 
 
 def _upsert_custom_file_to_am_branch(owner: str, repo: str, cf: dict, am_branch: str, project_code: str,
@@ -9385,6 +9985,106 @@ def _upsert_custom_file_to_am_branch(owner: str, repo: str, cf: dict, am_branch:
     return False, f"{cf_path}: HTTP {put_resp.status_code}"
 
 
+def _project_delivery_targets(db: Session, project: "Project", user: str, headers: dict) -> tuple:
+    """Every (repo_name, owner, repo, branch) ``project`` delivers to.
+
+    Branches come from ``_resolve_effective_target_branches`` — the same path a PR
+    Campaign uses — so a project delivering to ``release/*`` is never silently
+    resolved against the repository's GitHub default branch.
+
+    Returns (targets, failures); ``failures`` are repos whose branches could not be
+    resolved, already shaped like the per-target results the caller returns.
+    """
+    repo_names = [
+        r.repo_name
+        for r in db.query(Repo)
+        .join(ProjectRepo, ProjectRepo.repo_id == Repo.repo_id)
+        .filter(ProjectRepo.project_id == project.project_id)
+        .all()
+    ]
+
+    targets, failures = [], []
+    for repo_name in repo_names:
+        if "/" not in (repo_name or ""):
+            failures.append({"repo": repo_name, "branch": None, "status": DELETE_FAILED,
+                             "error": f"Invalid repository name '{repo_name}'"})
+            continue
+        owner, repo = repo_name.split("/", 1)
+        branches, branch_error = _resolve_effective_target_branches(
+            repo_name, owner, repo, project, db,
+            project.branch_option or "default",
+            project.branch_regex or "",
+            project.branch_max_age_days or 30,
+            headers, user,
+        )
+        if branch_error:
+            failures.append({"repo": repo_name, "branch": None, "status": DELETE_FAILED,
+                             "error": branch_error.get("error")})
+            continue
+        targets.extend((repo_name, owner, repo, branch) for branch in branches)
+    return targets, failures
+
+
+def _delete_file_on_target_branch(target: tuple, cf_path: str, project_code: str,
+                                  user: str, db: Session, headers: dict) -> dict:
+    """Commit the removal straight to the target branch."""
+    repo_name, owner, repo, branch = target
+    outcome, error = _delete_custom_file_from_branch(
+        owner, repo, cf_path, branch, project_code, user, db, headers
+    )
+    return {"repo": repo_name, "branch": branch, "status": outcome, "error": error}
+
+
+def delete_custom_file_directly(db: Session, project: "Project", cf_path: str, user: str) -> dict:
+    """Commit the removal of ``cf_path`` straight to every branch ``project`` delivers to.
+
+    This is the unreviewed path. Removal through a pull request goes through a real
+    PR Campaign instead (``custom_files._delete_via_campaign``), so those deletions
+    are grouped, tracked and merged like every other delivery rather than arriving
+    as loose pull requests the user has to find one repository at a time.
+
+    Returns ``{"targets": [...], "removed": bool, "errors": [...]}``. ``removed`` is
+    True when nothing is left to remove — every target either had the file taken
+    out or never had it — which tells the caller it is safe to drop the record.
+    """
+    headers = _get_authenticated_headers(user, {"Accept": ACCEPT_HEADER})
+    if not headers:
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
+
+    project_code = (project.project_code or "").upper()
+    targets, failures = _project_delivery_targets(db, project, user, headers)
+
+    results = list(failures)
+    for target in targets:
+        try:
+            results.append(
+                _delete_file_on_target_branch(target, cf_path, project_code, user, db, headers)
+            )
+        except Exception as e:
+            print(f"❌ Exception deleting '{cf_path}' from {target[0]} on {target[3]}: {e}")
+            results.append({"repo": target[0], "branch": target[3],
+                            "status": DELETE_FAILED, "error": str(e)})
+
+    errors = [r["error"] for r in results if r["status"] == DELETE_FAILED and r.get("error")]
+    return {"targets": results, "removed": not errors, "errors": errors}
+
+
+def _describe_empty_delivery(workflow_errors: list, custom_file_errors: list) -> str:
+    """Why this target received nothing.
+
+    ``NO_WORKFLOWS_COMMITTED`` on its own is wrong as often as it is right — the
+    usual cause is a pending-delete file GitHub never had, which is not an error
+    and not about workflows.
+    """
+    problems = [e for e in (workflow_errors or []) + (custom_file_errors or []) if e]
+    if problems:
+        return f"{NO_WORKFLOWS_COMMITTED}: {'; '.join(problems)}"
+    return (
+        "Nothing to deliver: every selected file already matches this branch, "
+        "or the files marked for deletion are not present in it"
+    )
+
+
 def _commit_custom_files_to_branch(custom_files: List[dict], owner: str, repo: str, am_branch: str,
                                     project_code: str, user: str, db: Session, headers: dict) -> tuple:
     """Delete or upsert each custom file on the AM branch. Returns (custom_files_committed, custom_file_errors)."""
@@ -9394,9 +10094,15 @@ def _commit_custom_files_to_branch(custom_files: List[dict], owner: str, repo: s
         cf_path = cf.get("file_path", "")
         try:
             if cf.get("pending_delete"):
-                success, error = _delete_custom_file_from_am_branch(
+                outcome, error = _delete_custom_file_from_branch(
                     owner, repo, cf_path, am_branch, project_code, user, db, headers
                 )
+                # A file that was already gone leaves the branch identical to its
+                # base. Counting it as committed is what made the campaign open a
+                # PR with no diff and report GitHub's 422 as a bare "Error".
+                if outcome == DELETE_ABSENT:
+                    continue
+                success = outcome != DELETE_FAILED
             else:
                 success, error = _upsert_custom_file_to_am_branch(
                     owner, repo, cf, am_branch, project_code, user, db, headers
@@ -9457,11 +10163,16 @@ def _commit_codeowners_to_branch(codeowners_for_repo: Optional[dict], owner: str
 
 
 def _build_pr_error_result(workflows_committed: list, workflow_errors: list, custom_files_result: Optional[dict],
-                            am_branch: str, target_branch: str, progress_callback, result_key: str) -> dict:
-    print(f"❌ Failed to create PR for {am_branch} -> {target_branch}")
+                            am_branch: str, target_branch: str, progress_callback, result_key: str,
+                            reason: Optional[str] = None) -> dict:
+    # Report what GitHub said, not just that something failed. The bare constant
+    # left users with a red "Error" chip and no way to tell a permission problem
+    # from a branch that had nothing to merge.
+    message = f"{PR_CREATION_FAILED}: {reason}" if reason else PR_CREATION_FAILED
+    print(f"❌ Failed to create PR for {am_branch} -> {target_branch}: {reason or 'no reason reported'}")
     result = {
         "status": "error",
-        "error": PR_CREATION_FAILED,
+        "error": message,
         "workflows_committed": workflows_committed,
         "workflow_errors": workflow_errors,
     }
@@ -9469,7 +10180,7 @@ def _build_pr_error_result(workflows_committed: list, workflow_errors: list, cus
         result["custom_files_committed"] = custom_files_result.get("custom_files_committed")
         result["custom_file_errors"] = custom_files_result.get("custom_file_errors")
     if progress_callback:
-        progress_callback(result_key, PROGRESS_OPENING_PR, "error", PR_CREATION_FAILED)
+        progress_callback(result_key, PROGRESS_OPENING_PR, "error", message)
     return result
 
 
@@ -9517,19 +10228,23 @@ def _finalize_pr_result(owner: str, repo: str, am_branch: str, target_branch: st
     custom_files_result = delivery.get("custom_files_result")
 
     existing_pr = _check_existing_pr(owner, repo, am_branch, target_branch, headers, user, db)
-    pr = existing_pr or _create_pull_request(
-        owner, repo, am_branch, target_branch, project_code, workflows_committed, headers, user, db,
-        body=_campaign_pr_body(
-            db, project_code, user, workflows_committed, target_branch,
-            delivery.get("base_sha"), custom_files_result, delivery.get("campaign_meta"),
-        ),
-        title=delivery.get("pr_title"),
-    )
+    reason = None
+    if existing_pr:
+        pr = existing_pr
+    else:
+        pr, reason = _create_pull_request(
+            owner, repo, am_branch, target_branch, project_code, workflows_committed, headers, user, db,
+            body=_campaign_pr_body(
+                db, project_code, user, workflows_committed, target_branch,
+                delivery.get("base_sha"), custom_files_result, delivery.get("campaign_meta"),
+            ),
+            title=delivery.get("pr_title"),
+        )
 
     if not pr:
         return _build_pr_error_result(
             workflows_committed, workflow_errors, custom_files_result,
-            am_branch, target_branch, progress_callback, result_key
+            am_branch, target_branch, progress_callback, result_key, reason
         )
 
     return _build_pr_success_result(
@@ -9636,15 +10351,27 @@ def _process_regular_workflows_update(repo_names: List[str], workflows: List[dic
                 custom_file_errors.append(codeowners_error)
 
             if not workflows_committed and not custom_files_committed and not codeowners_committed:
-                print(f"❌ No workflows, custom files, or CODEOWNERS were successfully committed to {am_branch}")
+                nothing_committed = _describe_empty_delivery(workflow_errors, custom_file_errors)
+                print(f"❌ Nothing was committed to {am_branch}: {nothing_committed}")
+                # A branch this run created is byte-identical to its base and can
+                # only ever produce an empty PR, so it is dropped rather than left
+                # as a dead actions-manager/* ref. Only when this run created it:
+                # _create_or_get_am_branch also returns a pre-existing branch (a
+                # 422 "already exists"), and that one may carry an open PR whose
+                # work deleting the ref would close.
+                if branch_created:
+                    _delete_actions_manager_branch(owner, repo, am_branch, target_branch, user)
                 results[result_key] = {
                     "status": "error",
-                    "error": NO_WORKFLOWS_COMMITTED,
+                    "error": nothing_committed,
                     "workflow_errors": workflow_errors,
                     "custom_file_errors": custom_file_errors,
+                    # Distinguishes "the branch never had it" from "this target
+                    # failed", which a caller cannot tell from status alone.
+                    "nothing_to_deliver": not (workflow_errors or custom_file_errors),
                 }
                 if progress_callback:
-                    progress_callback(result_key, PROGRESS_COMMITTING_FILES, "error", NO_WORKFLOWS_COMMITTED)
+                    progress_callback(result_key, PROGRESS_COMMITTING_FILES, "error", nothing_committed)
                 continue
 
             # Step 3/4: update existing PR, or create a new one
@@ -9746,14 +10473,19 @@ def _process_reusable_workflows_update(rxworkflows: List[dict], user: str,
         )
 
         if not workflows_committed:
-            print(f"❌ No reusable workflows were successfully committed to {am_branch}")
+            nothing_committed = _describe_empty_delivery(workflow_errors, [])
+            print(f"❌ Nothing was committed to {am_branch}: {nothing_committed}")
+            # Only a branch this run created — see the caller-repo path above.
+            if branch_created:
+                _delete_actions_manager_branch(owner, repo, am_branch, target_branch, user)
             results[result_key] = {
                 "status": "error",
-                "error": NO_WORKFLOWS_COMMITTED,
-                "workflow_errors": workflow_errors
+                "error": nothing_committed,
+                "workflow_errors": workflow_errors,
+                "nothing_to_deliver": not workflow_errors,
             }
             if progress_callback:
-                progress_callback(result_key, PROGRESS_COMMITTING_FILES, "error", NO_WORKFLOWS_COMMITTED)
+                progress_callback(result_key, PROGRESS_COMMITTING_FILES, "error", nothing_committed)
             continue
 
         # Step 3/4: update existing PR, or create a new one
@@ -10001,6 +10733,171 @@ async def update_workflow(
 
 
 
+def _authorize_workflow_deletion(db: Session, user: str, project_name: str,
+                                 repo_names: List[str]) -> Project:
+    """Resolve and authorize the project a workflow deletion targets.
+
+    ``_find_project_by_name`` authorizes; the global ``ilike`` lookup this
+    replaced did not, so any signed-in caller could name any project. ilike is
+    also the wrong matcher for a name: "_" is a LIKE wildcard and project and
+    workflow names routinely contain one.
+    """
+    project = _find_project_by_name(db, user, project_name)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found in database")
+
+    # Deleting a workflow file is a write to the project's repositories.
+    _require_project_editor(db, user, project)
+
+    # repo_names comes straight from the request body, so without this the
+    # caller chooses which repositories get a file deleted out of them.
+    # _require_repo_in_project is deliberately looser — it also accepts the
+    # linked RWX project's repo so reusable-workflow drift stays resolvable —
+    # and that exception must not extend to deleting files.
+    for requested_repo in repo_names:
+        _require_owned_repo(db, project, requested_repo)
+
+    return project
+
+
+def _validated_delete_delivery(data: dict) -> str:
+    """The requested delivery, defaulting to direct for callers that predate it."""
+    delivery = (data.get("delivery") or DELIVERY_DIRECT).strip()
+    if delivery not in VALID_DELETE_DELIVERIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"delivery must be one of {', '.join(VALID_DELETE_DELIVERIES)}",
+        )
+    return delivery
+
+
+def _campaign_found_nothing_to_remove(results: dict) -> bool:
+    """True when every target reported no error — the file simply was not there.
+
+    _describe_empty_delivery already separates the two reasons a target receives
+    nothing: a real failure, which it lists, and a pending-delete file the branch
+    never had, which is not an error. A campaign that opened no pull request for
+    the second reason has not failed — there was nothing on GitHub to review the
+    removal of.
+    """
+    if not results:
+        return False
+    return all(
+        isinstance(outcome, dict) and outcome.get("nothing_to_deliver")
+        for outcome in results.values()
+    )
+
+
+def _delete_workflow_via_campaign(db: Session, project: Project, workflow_name: str,
+                                  user: str, repo_names: Optional[List[str]] = None) -> dict:
+    """Run a PR Campaign whose only change is removing this workflow.
+
+    Mirrors ``custom_files._delete_via_campaign``: the campaign machinery already
+    cuts the AM branch, removes the file on it, opens the pull request and records
+    a ProjectPRCampaign linking them, so the deletion lands in PR Campaigns with
+    the grouping, status and merge every other delivery gets rather than as a
+    direct commit nobody reviewed.
+
+    The row stays until the campaign merges — that is what
+    _update_project_workflow_statuses drops on the synced_with_github transition.
+    """
+    workflow = db.query(Workflow).join(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project.project_id,
+        func.lower(Workflow.workflow_name) == workflow_name.lower(),
+    ).first()
+    if not workflow:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow '{workflow_name}' not found in project '{project.project_name}'",
+        )
+
+    # A project with no repositories has nowhere to deliver to, so a campaign
+    # would have no target. There is no GitHub copy to review the removal of:
+    # drop the row, as custom_files._delete_via_campaign does. Erroring here
+    # would leave the workflow undeletable for anyone who left the preselected
+    # campaign option alone.
+    if not db.query(ProjectRepo).filter_by(project_id=project.project_id).first():
+        workflow_id = workflow.workflow_id
+        _detach_workflow_from_project(db, project.project_id, workflow)
+        db.commit()
+        drop_workflow_drift(db, project, workflow_id)
+        return {
+            "message": f"✅ '{workflow_name}' removed — this project has no repositories to deliver to",
+            "delivery": DELIVERY_CAMPAIGN,
+            "prs_created": 0,
+            "results": {},
+        }
+
+    previous_status = workflow.workflow_status
+    workflow.pending_delete = True
+    workflow.workflow_status = "committed_locally"
+    db.commit()
+
+    def _unmark():
+        workflow.pending_delete = False
+        workflow.workflow_status = previous_status
+        db.commit()
+
+    payload = CreatePullRequestsRequest(
+        project_name=project.project_name,
+        github_user=user,
+        # Scoped to this one removal. None would mean "everything changed" and
+        # sweep unrelated work into a campaign the user asked for by clicking
+        # Delete.
+        selected_workflows=[workflow.workflow_name],
+        selected_reusable_workflows=[],
+        selected_custom_file_ids=[],
+        selected_codeowners_repos=[],
+        # _authorize_workflow_deletion vetted these. Passing None would make
+        # _get_filtered_repo_names return every project repository, so a caller
+        # who asked to remove the file from two of eight would get all eight.
+        selected_repos=repo_names or None,
+        campaign_name=f"Remove {workflow.workflow_name}",
+        campaign_description=f"Removes {workflow.workflow_name} from {project.project_name}.",
+    )
+
+    try:
+        campaign = create_pull_requests(payload, BackgroundTasks(), db, github_user=user)
+    except Exception:
+        _unmark()
+        raise
+
+    if not campaign.get("prs_created"):
+        # A campaign can return 200 having opened nothing. Leaving the workflow
+        # marked for a deletion no pull request will carry out would strand it.
+        _unmark()
+        results = campaign.get("results") or {}
+        if _campaign_found_nothing_to_remove(results):
+            # Nothing failed — the file is not on any target branch, so there is
+            # no removal to review. Erroring here would leave a workflow the user
+            # asked to delete both undeleted and unexplained.
+            workflow_id = workflow.workflow_id
+            _detach_workflow_from_project(db, project.project_id, workflow)
+            db.commit()
+            drop_workflow_drift(db, project, workflow_id)
+            return {
+                "message": f"✅ '{workflow_name}' removed — it was not present in any target branch",
+                "delivery": DELIVERY_CAMPAIGN,
+                "prs_created": 0,
+                "results": results,
+            }
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"No pull request was opened to remove '{workflow.workflow_name}'",
+                "results": results,
+            },
+        )
+
+    return {
+        "message": f"✅ PR Campaign opened to remove '{workflow.workflow_name}'",
+        "delivery": DELIVERY_CAMPAIGN,
+        "campaign_id": campaign.get("campaign_id"),
+        "prs_created": campaign["prs_created"],
+        "results": campaign.get("results", {}),
+    }
+
+
 @router.delete("/api/delete-workflow", responses=_responses(400, 401, 404, 500))
 async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_db)]):
     """Deletes a GitHub workflow file from all branches where it exists."""
@@ -10008,13 +10905,15 @@ async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_d
         data = await request.json()
         print(f"📌 Debug: Incoming Delete Request: {data}")
 
-        user = data.get("user")
+        user = _resolve_github_user(request.headers.get("X-GitHub-User"), data.get("user"))
         repo_names = data.get("repo_names", [])
-        workflow_name = data.get("workflow_name", "").strip()
         project_name = data.get("project_name", "").strip()
 
-        if not workflow_name:
+        if not (data.get("workflow_name") or "").strip():
             raise HTTPException(status_code=400, detail=MISSING_WORKFLOW_NAME_DETAIL)
+        # This name is interpolated into a GitHub contents path, so it gets the
+        # same validation every other path-forming caller applies.
+        workflow_name = _validate_workflow_name(data.get("workflow_name"))
 
         if user not in user_tokens:
             raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
@@ -10022,17 +10921,17 @@ async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_d
         token = user_tokens[user]
         headers = {
             "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json"
+            "Accept": ACCEPT_HEADER
         }
 
-        # ✅ Fetch project_code from the database
-        project = db.query(Project).filter(Project.project_name.ilike(project_name)).first()
-        if not project:
-            raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found in database")
+        project = _authorize_workflow_deletion(db, user, project_name, repo_names)
 
         project_code = project.project_code.upper()
         use_prefix = project.use_prefix
         print(f"📌 Debug: Using Project Code: {project_code}, Use Prefix: {use_prefix}")
+
+        if _validated_delete_delivery(data) == DELIVERY_CAMPAIGN:
+            return _delete_workflow_via_campaign(db, project, workflow_name, user, repo_names)
 
         results = {}
         formatted_workflow_name = format_workflow_name(workflow_name, project_code, use_prefix)
@@ -10053,7 +10952,7 @@ async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_d
         if deleted_repos:
             deleted_wf = db.query(Workflow).join(ProjectWorkflow).filter(
                 ProjectWorkflow.project_id == project.project_id,
-                Workflow.workflow_name.ilike(workflow_name),
+                func.lower(Workflow.workflow_name) == workflow_name.lower(),
             ).first()
             if deleted_wf:
                 for repo_name in deleted_repos:
@@ -10072,7 +10971,7 @@ async def delete_workflow(request: Request, db: Annotated[Session, Depends(get_d
 async def _delete_workflow_from_repo(client, repo_name: str, formatted_workflow_name: str, workflow_name: str, headers: dict):
     """Delete a workflow file from all branches in a single repository."""
     owner, repo = repo_name.split("/")
-    workflow_path = f".github/workflows/{formatted_workflow_name}"
+    workflow_path = quote(f".github/workflows/{formatted_workflow_name}", safe="/")
 
     # Fetch all branches
     branches_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/branches"
@@ -10130,6 +11029,36 @@ async def _delete_workflow_from_repo(client, repo_name: str, formatted_workflow_
     }
 
 
+_ERR_REUSABLE_NOT_OURS = (
+    "This project does not own the reusable-workflow repository, so the file cannot be "
+    "deleted from GitHub here. Remove it from ActionsManager only, or delete it from the "
+    "Reusable Workflow Project that owns it."
+)
+
+
+def _require_owns_reusable_repo(db: Session, project: Project, user: str) -> str:
+    """Return the reusable-workflow repo, refusing one the project does not own.
+
+    ``_get_reusable_workflow_repo`` returns a *standard* project's linked RWX
+    project's repository, or the ``{user}/am-reuseable-workflow`` fallback —
+    never one of this project's own. Deleting there removes a file every other
+    caller project linking that RWX project depends on, and with use_prefix off
+    the path is the bare workflow name, so it is exactly the shared copy.
+
+    #2006 removed caller-owned reusable workflows from the PR modal for this
+    same reason ("a campaign cannot open a PR against a repository outside the
+    project"). The delete path was left reachable.
+
+    The check is on the resolved repository, not on project_type: an RWX project
+    with no repositories of its own resolves to the fallback, which is equally
+    not ours to delete from.
+    """
+    reusable_repo = _get_reusable_workflow_repo(project, user, db)
+    if not _project_owns_repo(db, project, reusable_repo):
+        raise HTTPException(status_code=409, detail=_ERR_REUSABLE_NOT_OURS)
+    return reusable_repo
+
+
 @router.delete("/api/delete-reusable-workflow", responses=_responses(400, 401, 404, 500))
 async def delete_reusable_workflow(request: Request, db: Annotated[Session, Depends(get_db)]):
     """Deletes a reusable workflow from the am-reuseable-workflow repository."""
@@ -10137,7 +11066,7 @@ async def delete_reusable_workflow(request: Request, db: Annotated[Session, Depe
         data = await request.json()
         print(f"📌 Debug: Incoming Delete Reusable Workflow Request: {data}")
 
-        user = data.get("user")
+        user = _resolve_github_user(request.headers.get("X-GitHub-User"), data.get("user"))
         workflow_name = data.get("workflow_name", "").strip()
         project_name = data.get("project_name", "").strip()
 
@@ -10150,20 +11079,21 @@ async def delete_reusable_workflow(request: Request, db: Annotated[Session, Depe
         token = user_tokens[user]
         headers = {
             "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json"
+            "Accept": ACCEPT_HEADER
         }
 
-        # ✅ Fetch project_code from the database
-        project = db.query(Project).filter(Project.project_name.ilike(project_name)).first()
+        # See delete_workflow: the previous global ilike lookup authorized nobody.
+        project = _find_project_by_name(db, user, project_name)
         if not project:
             raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found in database")
+
+        _require_project_editor(db, user, project)
+        reusable_repo_name = _require_owns_reusable_repo(db, project, user)
 
         project_code = project.project_code.upper()
         use_prefix = project.use_prefix
         print(f"📌 Debug: Using Project Code: {project_code}, Use Prefix: {use_prefix}")
 
-        # 🔧 Target the reusable workflow repository
-        reusable_repo_name = _get_reusable_workflow_repo(project, user, db)
         if "/" not in reusable_repo_name:
             raise HTTPException(status_code=400, detail=f"Invalid reusable repository name: '{reusable_repo_name}'")
             
@@ -10250,7 +11180,7 @@ async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(ge
         data = await request.json()
         print(f"📌 Debug: Incoming Delete DB Workflow Request: {data}")
 
-        user = data.get("user")
+        user = _resolve_github_user(request.headers.get("X-GitHub-User"), data.get("user"))
         workflow_name = data.get("workflow_name", "").strip()
         project_name = data.get("project_name", "").strip()
 
@@ -10260,17 +11190,22 @@ async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(ge
         if user not in user_tokens:
             raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_DETAIL)
 
-        # ✅ Fetch project from the database
-        project = db.query(Project).filter(Project.project_name.ilike(project_name)).first()
+        # Same unscoped lookup its sibling had: this removes another user's
+        # workflow from their project, so it needs the authorizing resolver too.
+        project = _find_project_by_name(db, user, project_name)
         if not project:
             raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found in database")
 
+        _require_project_editor(db, user, project)
+
         print(f"📌 Debug: Found Project '{project_name}' with ID {project.project_id}")
 
-        # 🔧 FIX: Find workflow within the current project scope
+        # Scoped to this project, and matched exactly: ilike would treat the "_"
+        # that workflow names routinely contain as a wildcard and could delete a
+        # neighbouring row.
         workflow = db.query(Workflow).join(ProjectWorkflow).filter(
             ProjectWorkflow.project_id == project.project_id,
-            Workflow.workflow_name.ilike(workflow_name)
+            func.lower(Workflow.workflow_name) == workflow_name.lower()
         ).first()
         
         if not workflow:
@@ -10281,17 +11216,7 @@ async def delete_db_workflow(request: Request, db: Annotated[Session, Depends(ge
         # when the workflow itself gets deleted.
         deleted_workflow_id = workflow.workflow_id
 
-        # ✅ Remove association from current project
-        deleted_associations = db.query(ProjectWorkflow).filter(
-            ProjectWorkflow.project_id == project.project_id,
-            ProjectWorkflow.workflow_id == workflow.workflow_id
-        ).delete()
-        print(f"📌 Removed {deleted_associations} associations from project '{project_name}'")
-
-        # A workflow belongs to exactly one project (unique index on
-        # project_workflows.workflow_id), so removing the association above
-        # always leaves it orphaned — there is no other project to keep it for.
-        db.delete(workflow)
+        _detach_workflow_from_project(db, project.project_id, workflow)
 
         # ✅ Commit changes
         db.commit()
@@ -10690,6 +11615,526 @@ class RestoreVersionRequest(BaseModel):
     project_name: str
     workflow_name: str
     version_id: int
+
+
+class RenameImpactRequest(BaseModel):
+    github_user: Optional[str] = None
+    project_name: str
+    workflow_name: str
+    new_name: str
+    # A project may own a regular *and* a reusable workflow under one name, and
+    # create_or_update_workflow scopes every lookup by this. Without it the
+    # preview's .first() can answer about the other one — a different delivery
+    # repository and a different set of consumers. Optional so existing callers
+    # keep working; when omitted, regular wins deterministically.
+    is_reusable: Optional[bool] = None
+
+
+class RenameImpactTarget(BaseModel):
+    """One (repo, branch) a rename would have to reconcile.
+
+    ``old_file_present`` / ``new_file_present`` are ``None`` when GitHub could
+    not be asked — never ``False``. A failed listing is not the same fact as an
+    empty directory, and reading it as one is what previously made every
+    workflow in a repo look deleted (issue #1981).
+    """
+    repo: str
+    branch: str
+    old_file_present: Optional[bool] = None
+    new_file_present: Optional[bool] = None
+    confirmed_present_at: Optional[str] = None
+
+
+class RenameImpactConsumer(BaseModel):
+    project_name: str
+    workflow_name: str
+    uses_line: str
+
+
+class RenameImpactResponse(BaseModel):
+    classification: str  # never_delivered | delivered | unknown | blocked
+    # "unknown" means GitHub could not be asked. A client must not treat it
+    # as a safe default — it is precisely the state where nothing is known.
+    blocked_reason: Optional[str] = None
+    old_filename: str
+    new_filename: str
+    targets: List[RenameImpactTarget] = []
+    consumers: List[RenameImpactConsumer] = []
+    overrides: List[str] = []
+    warnings: List[str] = []
+
+
+def _rename_blocker_open_pr(db: Session, project: Project, workflow: Workflow) -> Optional[str]:
+    """An open campaign referencing the workflow makes a rename unsafe.
+
+    ``project_pull_requests.workflow_names`` is a name snapshot, and it is the
+    lookup key for ``_has_open_pr_for_workflow`` and for the reusable
+    workflow's global lock. Renaming leaves those rows naming a workflow that
+    no longer exists, so the status restore at merge time stops matching and
+    the reusable lock silently releases — letting a second, conflicting
+    campaign open against the same file.
+    """
+    if workflow.reusable_workflow:
+        if _reusable_workflow_ids_locked_by_open_campaign(db, [workflow.workflow_id]):
+            return ("This reusable workflow is locked by an open PR campaign. "
+                    "Merge or close it before renaming.")
+        return None
+
+    # One query, not one per repository. _has_open_pr_for_workflow re-resolves
+    # the project and its linked projects on every call, so looping it over a
+    # 30-repo project cost ~90 round trips to answer a single question.
+    repo_names = {
+        r.repo_name for r in
+        db.query(Repo).join(ProjectRepo).filter(ProjectRepo.project_id == project.project_id).all()
+    }
+    if not repo_names:
+        return None
+
+    open_prs = db.query(ProjectPullRequest).filter(
+        ProjectPullRequest.project_id == project.project_id,
+        ProjectPullRequest.repo_name.in_(repo_names),
+        ProjectPullRequest.pr_state == "open",
+    ).all()
+    for pr in open_prs:
+        if not pr.workflow_names:
+            continue
+        # Stored joined by ", "; strip each entry, as _has_open_pr_for_workflow does.
+        if workflow.workflow_name in {n.strip() for n in pr.workflow_names.split(",") if n.strip()}:
+            return ("An open pull request already carries this workflow. "
+                    "Merge or close it before renaming.")
+    return None
+
+
+def _rename_blocker_name_collision(db: Session, project: Project, workflow: Workflow,
+                                   new_name: str) -> Optional[str]:
+    """Another workflow of the same kind in this project already owns the new name.
+
+    Names are deliberately not globally unique, but two rows sharing a name
+    inside one project make ``create_or_update_workflow``'s lookup ambiguous
+    and would collide on the same delivered filename.
+
+    Scoped by ``reusable_workflow`` because the write path scopes every lookup
+    that way: a project may own a regular *and* a reusable "deploy", delivered
+    to different repositories, and refusing that rename would block something
+    ``create_or_update_workflow`` performs without complaint.
+
+    Tombstones are included, unlike the read paths. A ``pending_delete`` row
+    still owns its name until its campaign lands, and the write path now
+    refuses to take it (409) — so omitting them here would have the report call
+    a rename safe that the save then rejects.
+    """
+    clash = (
+        db.query(Workflow).join(ProjectWorkflow).filter(
+            ProjectWorkflow.project_id == project.project_id,
+            func.lower(Workflow.workflow_name) == new_name.lower(),
+            Workflow.reusable_workflow == workflow.reusable_workflow,
+            Workflow.workflow_id != workflow.workflow_id,
+        ).first()
+    )
+    if clash and clash.pending_delete:
+        return (f"'{clash.workflow_name}' is queued for removal from GitHub by an open "
+                f"PR campaign. Merge or close that campaign before reusing the name.")
+    if clash:
+        return f"This project already has a workflow named '{clash.workflow_name}'."
+    return None
+
+
+def _rename_consumers(db: Session, project: Project, workflow: Workflow,
+                      user: str) -> List[RenameImpactConsumer]:
+    """Caller workflows whose stored YAML references this reusable workflow.
+
+    One entry per caller *workflow* that actually carries the ``uses:``
+    reference, not per linking project: LinkedReusableWorkflow is unique on
+    (standard_project_id, workflow_id), so counting rows reported "1 caller
+    workflow" for a project with five of them and the user would fix one and
+    break the rest.
+
+    The reference is rendered from the *owning* project's naming mode and its
+    reusable-workflow repository — the caller's own prefix setting and repos are
+    not what the line points at (see ``_load_linked_reusable_workflows`` and
+    ``_get_reusable_workflow_repo``).
+    """
+    if not workflow.reusable_workflow:
+        return []
+
+    # project_workflows.workflow_id is unique, so the workflow the caller
+    # resolved is by definition the owning project — no second lookup needed.
+    filename = format_workflow_name(
+        workflow.workflow_name, (project.project_code or "").upper(), project.use_prefix
+    )
+    repo_ref = _get_reusable_workflow_repo(project, user, db) or "<reusable-workflow-repo>"
+    reference = f"{repo_ref}/.github/workflows/{filename}"
+
+    consumers: List[RenameImpactConsumer] = []
+    caller_project_ids = [
+        row.standard_project_id for row in
+        db.query(LinkedReusableWorkflow)
+        .filter(LinkedReusableWorkflow.workflow_id == workflow.workflow_id).all()
+    ]
+    for caller_id in caller_project_ids:
+        caller = db.query(Project).filter_by(project_id=caller_id).first()
+        if caller is None:
+            continue
+        caller_workflows = (
+            db.query(Workflow).join(ProjectWorkflow).filter(
+                ProjectWorkflow.project_id == caller_id,
+                Workflow.pending_delete.is_(False),
+            ).all()
+        )
+        for caller_workflow in caller_workflows:
+            if reference not in (caller_workflow.workflow_yaml or ""):
+                continue
+            consumers.append(RenameImpactConsumer(
+                project_name=caller.project_name,
+                workflow_name=caller_workflow.workflow_name,
+                uses_line=f"uses: {reference}@<ref>",
+            ))
+    return consumers
+
+
+def _rename_blockers(db: Session, project: Project, workflow: Workflow, new_name: str,
+                     consumers: List[RenameImpactConsumer], delivered: bool) -> Optional[str]:
+    """The first reason this rename must be refused, or None.
+
+    Shared by both callers so they cannot disagree: the read-only report
+    disables the action and says why, and ``_assert_rename_allowed`` raises 409
+    from ``create_or_update_workflow`` when a client renames anyway. Every
+    check here is a database query, which is what lets the save path run it.
+    """
+    # A capitalisation-only change is not a rename ActionsManager can perform:
+    # create_or_update_workflow decides with
+    # `original_name.lower() != new_name.lower()`, so "Build" -> "build" is not
+    # treated as a rename at all and the stored name never changes. Refusing is
+    # honest; warning about consequences of a rename that silently no-ops is not.
+    if (workflow.workflow_name.lower() == new_name.lower()
+            and workflow.workflow_name != new_name):
+        return _CASE_ONLY_RENAME_REFUSAL
+    if workflow.pending_delete:
+        return "This workflow is queued for removal from GitHub and cannot be renamed."
+    if workflow.workflow_status == "under_review":
+        return ("This workflow is under review. Merge or close its pull request "
+                "before renaming.")
+
+    blocker = _rename_blocker_open_pr(db, project, workflow)
+    if blocker:
+        return blocker
+
+    blocker = _rename_blocker_name_collision(db, project, workflow, new_name)
+    if blocker:
+        return blocker
+
+    if consumers and delivered:
+        names = ", ".join(sorted({c.project_name for c in consumers}))
+        return (f"{len(consumers)} caller workflow(s) in {names} reference this reusable "
+                f"workflow by filename. Update their 'uses:' lines first — ActionsManager "
+                f"does not rewrite caller YAML.")
+    return None
+
+
+def _branch_listing(db: Session, repo_name: str, owner: str, repo: str, branch: str,
+                    token: str, warnings: List[str]) -> Optional[dict]:
+    """The workflow-file listing for one (repo, branch), or None if unknown.
+
+    Always revalidates through ``_fetch_tree_using_cache`` rather than replaying
+    ``sha_map_json`` directly. Nothing invalidates that row when GitHub changes,
+    so replaying it answers from a snapshot of whenever drift last ran — and a
+    file added since then is invisible, which on this screen means delivering
+    over someone else's workflow. Revalidating costs a round trip and **not**
+    rate limit: the request carries If-None-Match and a 304 is free, which is
+    the whole reason the ETag is stored.
+
+    Returns None — never an empty dict — when GitHub could not be asked: a
+    failed listing is not the same fact as a directory with no workflows, and
+    the caller must not read one as the other.
+    """
+    try:
+        return _fetch_tree_using_cache(db, repo_name, owner, repo, branch, token)
+    except Exception as exc:
+        # Broad by intent: any failure here is "unknown", and one unreachable
+        # repository must not sink the whole preview.
+        print(f"⚠️ Could not read {repo_name}@{branch}: {exc}")
+        # The exception type only — these wrap DB reads and writes as well as
+        # the GitHub call, and str(exc) on a SQLAlchemy error carries the
+        # statement and its bound parameters into the user's browser.
+        warnings.append(f"Could not read {repo_name}@{branch} ({type(exc).__name__})")
+        return None
+
+
+def _rename_impact_targets_for_repo(db: Session, project: Project, repo_row, owner: str,
+                                    repo: str, old_filename: str, new_filename: str,
+                                    token: str, user: str, headers: dict, confirmed: dict,
+                                    warnings: List[str]) -> tuple:
+    """One repository's (repo, branch) rows for the impact report.
+
+    Returns ``(rows, assessed)``. ``assessed`` is False when the repository
+    could not be evaluated at all, which the caller must not read as "the file
+    is not there" — see ``_rename_impact_targets``.
+
+    Branches are resolved the same way delivery resolves them, never from the
+    repo's GitHub default branch. Resolved live rather than replayed from
+    ``workflow_drift_states``: those rows record the branches drift last saw, so
+    a branch added to the project since then would never be checked and a file
+    the rename orphans there would be invisible.
+    """
+    repo_name = repo_row.repo_name
+    try:
+        branches = _resolve_drift_branches_for_repo(
+            db, project, repo_name, owner, repo, headers, user
+        )
+    except Exception as exc:
+        # Broad by intent, as above: report the repository and keep going,
+        # but tell the caller this repository was never assessed.
+        print(f"⚠️ Could not resolve branches for {repo_name}: {exc}")
+        warnings.append(f"Could not resolve branches for {repo_name} ({type(exc).__name__})")
+        return [], False
+
+    rows: List[RenameImpactTarget] = []
+    for branch in branches:
+        listing = _branch_listing(db, repo_name, owner, repo, branch, token, warnings)
+        stamped = confirmed.get((repo_row.repo_id, branch or ""))
+        rows.append(RenameImpactTarget(
+            repo=repo_name,
+            branch=branch,
+            old_file_present=None if listing is None else old_filename in listing,
+            new_file_present=None if listing is None else new_filename in listing,
+            confirmed_present_at=_utc_iso(stamped),
+        ))
+    return rows, True
+
+
+def _reusable_impact_targets(db: Session, project: Project, workflow: Workflow,
+                             old_filename: str, new_filename: str, token: str,
+                             user: str, headers: dict, confirmed: dict) -> tuple:
+    """Targets for a reusable workflow, resolved the way its delivery resolves.
+
+    Mirrors ``_process_reusable_workflows``: one repository from
+    ``_get_reusable_workflow_repo`` at that repo's default branch, rather than
+    the owning project's ProjectRepo rows and branch config.
+    """
+    repo_name = _get_reusable_workflow_repo(project, user, db)
+    warnings: List[str] = []
+    if not repo_name or "/" not in repo_name:
+        warnings.append("Could not determine the reusable workflow repository.")
+        return [], warnings, [repo_name or "<unknown>"]
+
+    owner, repo = repo_name.split("/", 1)
+    try:
+        branch = get_default_branch(owner, repo, headers, user, db)
+    except Exception as exc:
+        # Unknown, not absent — the caller must not read this as "not delivered".
+        print(f"⚠️ Could not resolve the default branch for {repo_name}: {exc}")
+        warnings.append(f"Could not resolve the default branch for {repo_name} ({type(exc).__name__})")
+        return [], warnings, [repo_name]
+
+    listing = _branch_listing(db, repo_name, owner, repo, branch, token, warnings)
+    repo_row = db.query(Repo).filter(Repo.repo_name == repo_name).first()
+    stamped = confirmed.get((repo_row.repo_id, branch or "")) if repo_row else None
+    return [RenameImpactTarget(
+        repo=repo_name,
+        branch=branch,
+        old_file_present=None if listing is None else old_filename in listing,
+        new_file_present=None if listing is None else new_filename in listing,
+        confirmed_present_at=_utc_iso(stamped),
+    )], warnings, []
+
+
+def _rename_impact_targets(db: Session, project: Project, workflow: Workflow,
+                           old_filename: str, new_filename: str, token: str,
+                           user: str) -> tuple:
+    """Per (repo, branch) presence of the old and new filenames.
+
+    Returns ``(targets, warnings, unassessed_repos)``. ``unassessed_repos`` names
+    the repositories that produced no rows because they could not be evaluated —
+    without it those repositories vanish silently and the caller mistakes
+    "we never looked" for "nothing is there".
+    """
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": ACCEPT_HEADER,
+        "X-GitHub-Api-Version": X_API_VERSION,
+    }
+    confirmed = {
+        (st.repo_id, st.branch): st.confirmed_present_at
+        for st in db.query(WorkflowDriftState).filter(
+            WorkflowDriftState.workflow_id == workflow.workflow_id
+        ).all()
+    }
+
+    if workflow.reusable_workflow:
+        # Reusable workflows are not delivered to the project's own repositories.
+        # Delivery and drift both resolve them through _get_reusable_workflow_repo
+        # (see _process_reusable_workflows), which for an RWX project is its own
+        # repo, for a caller the linked RWX project's, and otherwise the
+        # {user}/am-reuseable-workflow fallback. Scanning ProjectRepo instead
+        # produced no rows at all for an RWX project with no ProjectRepo row —
+        # and no rows reads as "not delivered", which silently releases the
+        # linked-consumer refusal this report exists to apply.
+        return _reusable_impact_targets(
+            db, project, workflow, old_filename, new_filename, token, user, headers, confirmed
+        )
+    repo_rows = (
+        db.query(Repo).join(ProjectRepo).filter(ProjectRepo.project_id == project.project_id).all()
+    )
+    targets: List[RenameImpactTarget] = []
+    warnings: List[str] = []
+    unassessed: List[str] = []
+    for repo_row in repo_rows:
+        if "/" not in repo_row.repo_name:
+            warnings.append(f"Skipped '{repo_row.repo_name}': not in owner/repo form.")
+            unassessed.append(repo_row.repo_name)
+            continue
+        owner, repo = repo_row.repo_name.split("/", 1)
+        rows, assessed = _rename_impact_targets_for_repo(
+            db, project, repo_row, owner, repo, old_filename, new_filename,
+            token, user, headers, confirmed, warnings,
+        )
+        targets.extend(rows)
+        if not assessed:
+            unassessed.append(repo_row.repo_name)
+    return targets, warnings, unassessed
+
+
+def _rename_impact_warnings(project: Project,
+                            targets: List[RenameImpactTarget]) -> List[str]:
+    """Consequences worth stating that are not blockers."""
+    warnings: List[str] = []
+
+    if not project.use_prefix:
+        # A file already sitting at the new path is not this project's: a
+        # workflow of ours owning that name would have been refused as a name
+        # collision before we got here. Whether the *old* file is still there
+        # is irrelevant — the overwrite happens either way.
+        colliding = sorted({t.repo for t in targets if t.new_file_present})
+        if colliding:
+            warnings.append(
+                f"This project does not use the AM_ prefix, and a file with the new name "
+                f"already exists in {', '.join(colliding)} that ActionsManager has not "
+                f"delivered. Delivering would overwrite it."
+            )
+
+    warnings.append(
+        "Build metrics recorded under the old filename stay attached to it, so this "
+        "workflow's run history will show a break at the rename."
+    )
+    return warnings
+
+
+@router.post("/api/workflows/rename-impact", responses=_responses(400, 401, 403, 404, 500))
+def workflow_rename_impact(
+    payload: RenameImpactRequest,
+    db: Annotated[Session, Depends(get_db)],
+    x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
+):
+    """What renaming a workflow would do, without doing any of it.
+
+    No project state is changed and no pull request is opened. Not literally
+    write-free, though: revalidating a listing refreshes ``workflow_tree_cache``
+    and branch-recency rows on this session, the same rows a drift check
+    maintains. Renaming
+    changes the delivered filename, so the old file stays in every repository
+    under its old name unless something removes it — this is what the
+    confirmation dialog shows before the user commits to that.
+
+    Cost: the same as one drift check — a branch resolution per repository plus
+    one listing per (repo, branch). Those listings are **conditional**: each
+    carries ``If-None-Match`` from the stored ETag, and an unchanged branch
+    answers 304, which does not count against the rate limit. Presence is
+    deliberately not replayed from ``workflow_tree_cache`` without
+    revalidating, and branches are deliberately not replayed from
+    ``workflow_drift_states``: both are snapshots of whenever drift last ran,
+    and answering from them hides a file or a branch added since.
+    """
+    github_user = _resolve_github_user(x_github_user, payload.github_user)
+    token, project, project_code = _validate_user_and_get_project(
+        db, github_user, payload.project_name
+    )
+    _require_project_editor(db, github_user, project)
+
+    # Both names go through the same normalisation the write path applies
+    # (create_or_update_workflow strips the prefix from original_name and
+    # new_name alike). Stripping only one made the preview 404 on the displayed
+    # "AM_CODE_name" while the rename itself would have found the row.
+    old_name = _validate_workflow_name(_strip_duplicated_project_prefix(
+        db, project.project_id, payload.workflow_name
+    ))
+    new_name = _validate_workflow_name(_strip_duplicated_project_prefix(
+        db, project.project_id, payload.new_name
+    ))
+
+    lookup = db.query(Workflow).join(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project.project_id,
+        func.lower(Workflow.workflow_name) == old_name.lower(),
+        Workflow.pending_delete.is_(False),
+    )
+    if payload.is_reusable is not None:
+        lookup = lookup.filter((Workflow.reusable_workflow.is_(True) if payload.is_reusable
+             # isnot(True) matches legacy rows where the column is NULL,
+             # which is the convention everywhere else in this file. is_(False)
+             # missed them, 404ing the preview for a workflow the save can see.
+             else Workflow.reusable_workflow.isnot(True)))
+    # Ordered so an unscoped request resolves the regular workflow rather than
+    # whichever row the database happened to return first.
+    workflow = lookup.order_by(Workflow.reusable_workflow).first()
+    if workflow is None:
+        raise HTTPException(status_code=404, detail=f"Workflow '{old_name}' not found in this project")
+
+    old_filename = format_workflow_name(workflow.workflow_name, project_code, project.use_prefix)
+    new_filename = format_workflow_name(new_name, project_code, project.use_prefix)
+
+    targets, target_warnings, unassessed = _rename_impact_targets(
+        db, project, workflow, old_filename, new_filename, token, github_user
+    )
+    consumers = _rename_consumers(db, project, workflow, github_user)
+
+    # "Delivered" is a claim about history: a file seen at the old path now, or
+    # a check that once confirmed it there. workflow_git_hash cannot answer it —
+    # it is zeroed by any local edit and set to a PR branch SHA by a campaign
+    # that has not landed.
+    #
+    # Three states, not two. `old_file_present` is None when GitHub could not be
+    # asked, and None is falsy — so folding it into a boolean would turn an
+    # outage into "never delivered" and hand back a rename that should have been
+    # refused. Not knowing is its own answer.
+    known_delivered = any(
+        t.old_file_present is True or t.confirmed_present_at for t in targets
+    )
+    unknown = bool(unassessed) or any(t.old_file_present is None for t in targets)
+
+    override_repos = sorted({
+        name for (name,) in db.query(Repo.repo_name).join(
+            RepoWorkflowOverride, RepoWorkflowOverride.repo_id == Repo.repo_id
+        ).filter(
+            RepoWorkflowOverride.project_id == project.project_id,
+            RepoWorkflowOverride.workflow_id == workflow.workflow_id,
+        ).all()
+    })
+
+    # Blockers see unknown as possibly-delivered, so a GitHub outage cannot
+    # quietly release the reusable-workflow refusal.
+    blocked_reason = _rename_blockers(
+        db, project, workflow, new_name, consumers,
+        delivered=known_delivered or unknown,
+    )
+    if blocked_reason:
+        classification = "blocked"
+    elif known_delivered:
+        classification = "delivered"
+    elif unknown:
+        classification = "unknown"
+    else:
+        classification = "never_delivered"
+
+    return RenameImpactResponse(
+        classification=classification,
+        blocked_reason=blocked_reason,
+        old_filename=old_filename,
+        new_filename=new_filename,
+        targets=targets,
+        consumers=consumers,
+        overrides=override_repos,
+        warnings=target_warnings + _rename_impact_warnings(project, targets),
+    )
+
 
 @router.get("/api/workflows/{workflow_name}/versions", responses=_responses(401, 404, 500))
 async def get_workflow_versions(

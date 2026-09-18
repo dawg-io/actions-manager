@@ -9,14 +9,15 @@ Handles GitHub repository ruleset management including:
 """
 
 import json
-from typing import Annotated, List, Optional
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
+from typing import Annotated, List, Optional, Tuple
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from pydantic import BaseModel
 import httpx
+from config import GITHUB_TIMEOUT_SECONDS
 from database import get_db
-from models import Ruleset, Project, ProjectRuleset, Account
+from models import Ruleset, Project, ProjectRepo, ProjectRuleset, Account, Repo
 import os
 import auth as auth_module
 from auth import user_tokens
@@ -28,6 +29,27 @@ router = APIRouter()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ACCOUNT_NOT_FOUND = "User account not found"
 RULESET_NOT_FOUND = "Ruleset not found"
+
+# Which copies of a ruleset a removal destroys.
+#
+# "project"            — drops only the ActionsManager records; the ruleset stays
+#                        enforced on every repository it was applied to.
+# "github"             — the inverse: stops enforcing it on those repositories
+#                        but keeps the definition here, so it can be applied
+#                        again. A branch-protection policy is worth keeping
+#                        after you lift it.
+# "project_and_github" — both.
+#
+# "project" is the default because it is what this route always did — a
+# parameterless DELETE must not start reaching GitHub.
+_SCOPE_PROJECT = "project"
+_SCOPE_GITHUB = "github"
+_SCOPE_PROJECT_AND_GITHUB = "project_and_github"
+_VALID_SCOPES = (_SCOPE_PROJECT, _SCOPE_GITHUB, _SCOPE_PROJECT_AND_GITHUB)
+_SCOPES_REACHING_GITHUB = (_SCOPE_GITHUB, _SCOPE_PROJECT_AND_GITHUB)
+
+GITHUB_ACCEPT_JSON = "application/vnd.github+json"
+GITHUB_API_VERSION = "2022-11-28"
 
 
 class RulesetCreate(BaseModel):
@@ -231,14 +253,29 @@ async def get_project_rulesets(
         raise HTTPException(status_code=500, detail=f"Error fetching rulesets: {str(e)}")
 
 
-@router.post("/api/rulesets/{ruleset_id}/apply")
+@router.post(
+    "/api/rulesets/{ruleset_id}/apply",
+    responses={
+        403: {"description": "Session does not own the named user"},
+        404: {"description": "Account or ruleset not found"},
+        500: {"description": "Error applying ruleset"},
+    },
+)
 async def apply_ruleset_to_repos(
     ruleset_id: int,
     request_data: ApplyRulesetRequest,
+    request: Request,
     db: Annotated[Session, Depends(get_db)]
 ):
     """Apply a ruleset to specified repositories"""
-    
+
+    # github_user is client-supplied and names whose GitHub token gets used.
+    # Scoping the ruleset query to that account is not access control — the
+    # caller picks the account — so without this any signed-in member could
+    # name someone else and create rulesets on their repositories under their
+    # identity. Asserted before the try so the catch-all cannot swallow it.
+    auth_module.assert_session_owns_user(request_data.github_user, request, db)
+
     try:
         # Get user account
         user_account = db.query(Account).filter(Account.github_user == request_data.github_user).first()
@@ -283,18 +320,34 @@ async def apply_ruleset_to_repos(
             "error_count": len(errors)
         }
         
+    except HTTPException:
+        # Without this the catch-all below reports the 404s raised above as 500s.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error applying ruleset: {str(e)}")
 
 
-@router.post("/api/rulesets/{ruleset_id}/sync-status")
+@router.post(
+    "/api/rulesets/{ruleset_id}/sync-status",
+    responses={
+        401: {"description": "Not authenticated with GitHub"},
+        403: {"description": "Session does not own the named user"},
+        404: {"description": "Account or ruleset not found"},
+        500: {"description": "Error checking ruleset sync status"},
+    },
+)
 async def check_ruleset_sync_status(
     ruleset_id: int,
     request_data: RulesetSyncStatusRequest,
+    request: Request,
     db: Annotated[Session, Depends(get_db)]
 ):
     """Check if a ruleset exists across all specified repositories"""
-    
+
+    # Same client-supplied name as the apply route: it selects whose token reads
+    # the repositories, so it has to be proven before it is used.
+    auth_module.assert_session_owns_user(request_data.github_user, request, db)
+
     try:
         # Get user account
         user_account = db.query(Account).filter(Account.github_user == request_data.github_user).first()
@@ -321,8 +374,8 @@ async def check_ruleset_sync_status(
         token = user_tokens[request_data.github_user]
         headers = {
             "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28"
+            "Accept": GITHUB_ACCEPT_JSON,
+            "X-GitHub-Api-Version": GITHUB_API_VERSION
         }
         
         repo_statuses = {}
@@ -340,7 +393,7 @@ async def check_ruleset_sync_status(
                 try:
                     # Get repository rulesets
                     api_url = f"https://api.github.com/repos/{owner}/{repo}/rulesets"
-                    response = await client.get(api_url, headers=headers, timeout=30)
+                    response = await client.get(api_url, headers=headers, timeout=GITHUB_TIMEOUT_SECONDS)
                     
                     if response.status_code == 200:
                         rulesets = response.json()
@@ -410,14 +463,171 @@ async def check_ruleset_sync_status(
         raise HTTPException(status_code=500, detail=f"Error checking ruleset sync status: {str(e)}")
 
 
-@router.delete("/api/rulesets/{ruleset_id}")
+def _repos_targeted_by_ruleset(db: Session, ruleset_id: int) -> List[str]:
+    """Every repository the ruleset's projects target — where a GitHub copy can be."""
+    rows = (
+        db.query(Repo.repo_name)
+        .join(ProjectRepo, ProjectRepo.repo_id == Repo.repo_id)
+        .join(ProjectRuleset, ProjectRuleset.project_id == ProjectRepo.project_id)
+        .filter(ProjectRuleset.ruleset_id == ruleset_id)
+        .distinct()
+        .all()
+    )
+    return [name for (name,) in rows]
+
+
+async def _delete_repo_ruleset(
+    client: httpx.AsyncClient,
+    headers: dict,
+    github_user: str,
+    repo_name: str,
+    ruleset_name: str,
+) -> Tuple[bool, Optional[str]]:
+    """Delete one repository's copy of *ruleset_name*.
+
+    Returns ``(deleted, error)``. ``(False, None)`` means the repository has no
+    ruleset by that name — never applied, or already removed by hand — which is
+    an acceptable end state, not a failure.
+
+    The GitHub-side id is looked up by name rather than stored: nothing has ever
+    recorded it, so a new column would be NULL for every ruleset applied before
+    this existed — exactly the leftovers worth deleting.
+    """
+    owner, repo = repo_name.split('/', 1) if '/' in repo_name else (github_user, repo_name)
+    api_base = f"https://api.github.com/repos/{owner}/{repo}/rulesets"
+
+    listing = await client.get(
+        api_base,
+        headers=headers,
+        # includes_parents defaults to TRUE, which mixes the organization and
+        # enterprise rulesets inherited by this repository into the listing.
+        # Matching by name across that could hand back an org ruleset's id, and
+        # DELETE on this repo-scoped path cannot delete one — it 404s, which
+        # below counts as removed. The row would then be dropped with the
+        # repository's own ruleset still enforced: exactly the leftover #2011 is
+        # about. It also keeps the single page below sufficient, since a
+        # repository's own rulesets do not reach 100.
+        params={"per_page": 100, "includes_parents": "false"},
+        timeout=GITHUB_TIMEOUT_SECONDS,
+    )
+    if listing.status_code != 200:
+        return False, f"could not list rulesets (HTTP {listing.status_code})"
+
+    target_id = next(
+        (item.get("id") for item in listing.json() if item.get("name") == ruleset_name),
+        None,
+    )
+    if target_id is None:
+        return False, None
+
+    response = await client.delete(
+        f"{api_base}/{target_id}", headers=headers, timeout=GITHUB_TIMEOUT_SECONDS
+    )
+    # 404: the id came from this repository's own rulesets moments ago, so a
+    # miss now means something else deleted it in between. Same end state.
+    if response.status_code in (204, 404):
+        return True, None
+    return False, f"could not delete ruleset (HTTP {response.status_code})"
+
+
+async def _delete_ruleset_from_repos(
+    github_user: str, repo_names: List[str], ruleset_name: str
+) -> Tuple[List[str], List[str]]:
+    """Delete *ruleset_name* from every repository. Returns (removed_from, errors)."""
+    if github_user not in user_tokens:
+        raise HTTPException(status_code=401, detail="User not authenticated with GitHub")
+
+    headers = {
+        "Authorization": f"token {user_tokens[github_user]}",
+        "Accept": GITHUB_ACCEPT_JSON,
+        "X-GitHub-Api-Version": GITHUB_API_VERSION
+    }
+
+    removed_from: List[str] = []
+    errors: List[str] = []
+
+    async with httpx.AsyncClient() as client:
+        for repo_name in repo_names:
+            try:
+                deleted, error = await _delete_repo_ruleset(
+                    client, headers, github_user, repo_name, ruleset_name
+                )
+            except httpx.RequestError as e:
+                deleted, error = False, f"network error: {str(e)}"
+
+            if error:
+                errors.append(f"{repo_name}: {error}")
+            elif deleted:
+                removed_from.append(repo_name)
+
+    return removed_from, errors
+
+
+async def _remove_ruleset_from_github(
+    db: Session, ruleset: Ruleset, github_user: str
+) -> List[str]:
+    """Delete the ruleset from every repository its projects target.
+
+    Raises 502 on any failure, which keeps the caller's rows in place: dropping
+    them would leave a ruleset enforcing branch protection with nothing in
+    ActionsManager still pointing at it — the whole point of the GitHub option.
+    """
+    # The name GitHub knows it by, which the stored JSON can disagree with.
+    github_name = json.loads(ruleset.ruleset_json).get("name", ruleset.ruleset_name)
+
+    removed_from, errors = await _delete_ruleset_from_repos(
+        github_user, _repos_targeted_by_ruleset(db, ruleset.ruleset_id), github_name
+    )
+
+    if errors:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"Could not remove ruleset '{github_name}' from every repository",
+                "errors": errors,
+                "removed_from_repos": removed_from,
+            },
+        )
+
+    return removed_from
+
+
+@router.delete(
+    "/api/rulesets/{ruleset_id}",
+    # SonarQube S8415 wants every status this route raises declared. 403 comes
+    # from assert_session_owns_user, 400 from an unknown scope, 401/502 from the
+    # GitHub half below, the two 404s from the lookups, and 500 from the
+    # catch-all.
+    responses={
+        400: {"description": "Unknown removal scope"},
+        401: {"description": "Not authenticated with GitHub"},
+        403: {"description": "Session does not own the named user"},
+        404: {"description": "Account or ruleset not found"},
+        500: {"description": "Error deleting ruleset"},
+        502: {"description": "GitHub rejected part of the removal"},
+    },
+)
 async def delete_ruleset(
     ruleset_id: int,
     github_user: str,
-    db: Annotated[Session, Depends(get_db)]
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    scope: Annotated[str, Query(description="'project', 'github' or 'project_and_github'")] = _SCOPE_PROJECT,
 ):
-    """Delete a ruleset"""
-    
+    """Delete a ruleset from ActionsManager, and optionally from GitHub too"""
+
+    # github_user is client-supplied and proves nothing on its own. Scoping the
+    # query below to that account looks protective, but the caller picks the
+    # account — without this, any signed-in member could name someone else and
+    # delete their rulesets.
+    auth_module.assert_session_owns_user(github_user, request, db)
+
+    if scope not in _VALID_SCOPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope must be one of {', '.join(_VALID_SCOPES)}",
+        )
+
     try:
         # Get user account
         user_account = db.query(Account).filter(Account.github_user == github_user).first()
@@ -433,7 +643,27 @@ async def delete_ruleset(
             raise HTTPException(status_code=404, detail=RULESET_NOT_FOUND)
         
         ruleset_name = ruleset.ruleset_name
-        
+
+        removed_from: List[str] = []
+        if scope in _SCOPES_REACHING_GITHUB:
+            removed_from = await _remove_ruleset_from_github(db, ruleset, github_user)
+
+        # A GitHub-only removal lifts the policy without forgetting it: the rows
+        # stay so the same ruleset can be applied again from the same project.
+        if scope == _SCOPE_GITHUB:
+            return {
+                "success": True,
+                # Claiming a removal that touched no repository reads as done
+                # when nothing happened — a project whose repositories were
+                # never saved resolves no targets at all.
+                "message": (
+                    f"Ruleset '{ruleset_name}' removed from GitHub"
+                    if removed_from
+                    else f"Ruleset '{ruleset_name}' was not applied to any of this project's repositories, so nothing was removed"
+                ),
+                "removed_from_repos": removed_from
+            }
+
         # Delete associated project relationships
         db.query(ProjectRuleset).filter(ProjectRuleset.ruleset_id == ruleset_id).delete()
         
@@ -443,9 +673,14 @@ async def delete_ruleset(
         
         return {
             "success": True,
-            "message": f"Ruleset '{ruleset_name}' deleted successfully"
+            "message": f"Ruleset '{ruleset_name}' deleted successfully",
+            "removed_from_repos": removed_from
         }
         
+    except HTTPException:
+        # Without this, the catch-all below turns the 404s raised above into a
+        # 500 — and would do the same to any auth failure raised inside the try.
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error deleting ruleset: {str(e)}")
@@ -466,8 +701,8 @@ async def apply_ruleset_to_repo(github_user: str, repo_name: str, ruleset_data: 
         # Prepare headers for GitHub API
         headers = {
             "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
+            "Accept": GITHUB_ACCEPT_JSON,
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
             "Content-Type": "application/json"
         }
         
@@ -510,7 +745,7 @@ async def apply_ruleset_to_repo(github_user: str, repo_name: str, ruleset_data: 
                 api_url,
                 headers=headers,
                 json=api_ruleset_data,
-                timeout=30
+                timeout=GITHUB_TIMEOUT_SECONDS
             )
         
             print(f"📋 GitHub API response status: {response.status_code}")
