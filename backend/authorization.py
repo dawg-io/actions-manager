@@ -192,6 +192,14 @@ def check_project_access(
     pm = get_project_membership(db, member.user_id, project_id)
     if pm:
         return pm.project_role
+
+    # A full workspace member belongs to the workspace, and this application is
+    # single-workspace, so every project in it is theirs to see. A
+    # ProjectMembership row is what raises them to project_editor on one of
+    # them, not what makes the project visible. read_only members stay on
+    # explicit grants: for them this table is the only way in.
+    if member.workspace_role == "member":
+        return "project_viewer"
     return None
 
 

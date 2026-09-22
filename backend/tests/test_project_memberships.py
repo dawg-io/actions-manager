@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import app
 from database import Base
-from models import Account, WorkspaceMember, Project, ProjectMembership
+from models import Account, WorkspaceMember, Project, ProjectMembership, Workflow, ProjectWorkflow
 from authorization import _get_db as auth_get_db
 from workspace_members import get_db as ws_get_db
 from project_memberships import get_db as pm_get_db
@@ -610,9 +610,21 @@ class TestAuthorizationHelpers:
         assert is_project_admin(member) is False
 
     def test_check_project_access_member(self, member_user, sample_project, test_db):
-        """Member role without explicit membership returns None (no access)."""
+        """A member with no grant is a viewer, not shut out.
+
+        This application is single-workspace, so belonging to the workspace is
+        what makes a project visible. A ProjectMembership row raises the member
+        to project_editor on one of them; it is not what lets them see it.
+        """
         from authorization import check_project_access
         member = test_db.query(WorkspaceMember).filter(WorkspaceMember.user_id == member_user.user_id).first()
+        result = check_project_access(test_db, member, sample_project.project_id)
+        assert result == "project_viewer"
+
+    def test_check_project_access_readonly_without_grant(self, readonly_user, sample_project, test_db):
+        """read_only is the role that still needs an explicit grant to see anything."""
+        from authorization import check_project_access
+        member = test_db.query(WorkspaceMember).filter(WorkspaceMember.user_id == readonly_user.user_id).first()
         result = check_project_access(test_db, member, sample_project.project_id)
         assert result is None
 
@@ -625,13 +637,15 @@ class TestAuthorizationHelpers:
 class TestMemberRole:
     """Tests for the member workspace role behavior.
 
-    After Phase 3 RBAC refinement, members need explicit ProjectMembership
-    to access projects (no implicit full access).
+    A member sees every project in the workspace; a ProjectMembership row is
+    what raises them to project_editor on a particular one. read_only members
+    are the ones who need an explicit grant to see anything at all.
     """
 
-    def test_member_sees_assigned_projects(self, admin_user, member_user, sample_project, second_project, test_db):
-        """Member should only see projects they are explicitly assigned to."""
-        # Assign member to sample_project only
+    def test_member_sees_the_whole_workspace_not_only_assigned_projects(
+        self, admin_user, member_user, sample_project, second_project, test_db
+    ):
+        """A grant on one project does not narrow the member to that project."""
         test_db.add(ProjectMembership(
             user_id=member_user.user_id,
             project_id=sample_project.project_id,
@@ -644,17 +658,25 @@ class TestMemberRole:
             headers=_auth_headers(member_user),
         )
         assert resp.status_code == 200
-        assert len(resp.json()) == 1
-        assert resp.json()[0]["project_name"] == "Test Project"
+        names = {p["project_name"] for p in resp.json()}
+        assert len(resp.json()) == 2
+        assert "Test Project" in names
 
-    def test_member_without_membership_sees_no_projects(self, admin_user, member_user, sample_project, second_project):
-        """Member without any ProjectMembership should see no projects."""
+    def test_member_without_any_membership_still_sees_the_workspace(
+        self, admin_user, member_user, sample_project, second_project
+    ):
+        """Adding someone as a member is what gives them the workspace.
+
+        Previously this returned nothing, so the Member role bought a user
+        exactly the same visibility as read_only and looked broken on the
+        Workspace Members page.
+        """
         resp = client.get(
             f"/api/projects/?github_user={admin_user.github_user}",
             headers=_auth_headers(member_user),
         )
         assert resp.status_code == 200
-        assert len(resp.json()) == 0
+        assert len(resp.json()) == 2
 
     def test_member_own_url_sees_assigned_projects(self, admin_user, member_user, sample_project, second_project, test_db):
         """Member navigating with their own username sees assigned projects."""
@@ -693,13 +715,140 @@ class TestMemberRole:
         )
         assert resp.status_code == 200
 
-    def test_member_cannot_access_project_without_membership(self, admin_user, member_user, sample_project):
-        """Member without membership cannot load a specific project."""
+    def test_member_can_view_a_project_without_membership(self, admin_user, member_user, sample_project):
+        """Loading a project needs no grant, and reports the viewer role."""
         resp = client.get(
             f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
             headers=_auth_headers(member_user),
         )
+        assert resp.status_code == 200
+        assert resp.json()["caller_project_role"] == "project_viewer"
+
+    def test_member_opens_a_project_owned_by_someone_else(
+        self, admin_user, member_user, sample_project
+    ):
+        """The URL carries the member's own name, not the owner's.
+
+        get_project resolves by owner first, and only admins fell back to a
+        workspace-wide lookup - its comment said "admin/member" but the code
+        checked admin alone. So a member could see the project in the list and
+        then get a 404 opening it, which the UI renders as an empty project
+        rather than an error.
+        """
+        resp = client.get(
+            f"/api/projects/{sample_project.project_name}?github_user={member_user.github_user}",
+            headers=_auth_headers(member_user),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["caller_project_role"] == "project_viewer"
+
+    def test_member_sees_the_content_of_a_project_they_have_no_grant_on(
+        self, admin_user, member_user, sample_project, test_db
+    ):
+        """Read-only means the content is readable, not that it is absent."""
+        workflow = Workflow(
+            workflow_name="build-stuff",
+            workflow_yaml="on: push",
+            reusable_workflow=False,
+            workflow_status="synced_with_github",
+        )
+        test_db.add(workflow)
+        test_db.commit()
+        test_db.add(ProjectWorkflow(
+            project_id=sample_project.project_id, workflow_id=workflow.workflow_id,
+        ))
+        test_db.commit()
+
+        resp = client.get(
+            f"/api/projects/{sample_project.project_name}?github_user={admin_user.github_user}",
+            headers=_auth_headers(member_user),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [w["name"] for w in body["workflows"]] == ["build-stuff"]
+        assert body["caller_project_role"] == "project_viewer"
+
+    def test_a_members_own_project_wins_a_name_collision(
+        self, admin_user, member_user, sample_project, test_db
+    ):
+        """Project names are unique per owner, not globally.
+
+        The workspace-wide lookup a member now gets must come *after* the
+        owner-scoped one. Resolving it first makes a caller's own project
+        unreachable by name and hands them a stranger's same-named project —
+        on a destructive route such as DELETE /api/projects/{name}, the wrong
+        project entirely, chosen by an unordered .first().
+        """
+        import projects as projects_module
+        import workflows as workflows_module
+
+        mine = Project(
+            project_name=sample_project.project_name,   # same name, different owner
+            user_id=member_user.user_id,
+            project_code="MINE",
+        )
+        test_db.add(mine)
+        test_db.commit()
+        test_db.refresh(mine)
+
+        caller = test_db.query(WorkspaceMember).filter(
+            WorkspaceMember.user_id == member_user.user_id
+        ).first()
+
+        resolved = projects_module._find_project_by_name(
+            test_db, sample_project.project_name, caller, member_user.github_user,
+        )
+        assert resolved.project_id == mine.project_id, "projects.py resolved someone else's project"
+
+        resolved = workflows_module._find_project_by_name(
+            test_db, member_user.github_user, sample_project.project_name,
+        )
+        assert resolved.project_id == mine.project_id, "workflows.py resolved someone else's project"
+
+    def test_a_member_still_reaches_a_project_they_do_not_own(
+        self, admin_user, member_user, sample_project, test_db
+    ):
+        """With no collision, the workspace-wide lookup still applies."""
+        import projects as projects_module
+
+        caller = test_db.query(WorkspaceMember).filter(
+            WorkspaceMember.user_id == member_user.user_id
+        ).first()
+
+        resolved = projects_module._find_project_by_name(
+            test_db, sample_project.project_name, caller, member_user.github_user,
+        )
+        assert resolved is not None
+        assert resolved.project_id == sample_project.project_id
+
+    def test_member_without_membership_still_cannot_write(self, admin_user, member_user, sample_project):
+        """Seeing a project is not editing it.
+
+        This is what makes viewer-by-default safe: visibility widened, but every
+        write still requires an explicit project_editor grant.
+        """
+        resp = client.patch(
+            f"/api/projects/{sample_project.project_id}/project-color",
+            json={"github_user": admin_user.github_user, "project_color": "blue"},
+            headers=_auth_headers(member_user),
+        )
         assert resp.status_code == 403
+
+    def test_member_with_an_editor_grant_can_write(self, admin_user, member_user, sample_project, test_db):
+        """And the grant is what turns that into write access."""
+        test_db.add(ProjectMembership(
+            user_id=member_user.user_id,
+            project_id=sample_project.project_id,
+            project_role="project_editor",
+        ))
+        test_db.commit()
+
+        resp = client.patch(
+            f"/api/projects/{sample_project.project_id}/project-color",
+            json={"github_user": admin_user.github_user, "project_color": "blue"},
+            headers=_auth_headers(member_user),
+        )
+        assert resp.status_code == 200, resp.text
 
 
 # ──────────────────────────────────────────────

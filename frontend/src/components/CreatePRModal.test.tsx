@@ -275,6 +275,74 @@ describe("CreatePRModal", () => {
     expect(screen.getByText("shared-test.yml")).toBeInTheDocument();
   });
 
+  describe("reusable workflows the project owns", () => {
+    // Reproduces the reported project: a Caller Workflow Project holding both
+    // regular workflows and its own reusable workflows in the same repos. The
+    // modal offered no reusable section at all, so ook.yml could not be picked
+    // and never reached the campaign.
+    const ownedProps = {
+      ...baseProps,
+      repositories: [{ name: "whatsupdawg/test1" }, { name: "whatsupdawg/test2" }],
+      workflows: [
+        { name: "build-and-test", status: "committed_locally" },
+        { name: "build-stuff", status: "synced_with_github" },
+      ],
+      reusableWorkflows: [
+        { name: "ook", status: "committed_locally", deliversToProjectRepos: true },
+        { name: "shared-workflow", status: "synced_with_github", deliversToProjectRepos: true },
+      ],
+    };
+
+    it("offers a reusable workflow the project owns", () => {
+      render(<CreatePRModal {...ownedProps} />);
+
+      expect(screen.getByText("ook.yml")).toBeInTheDocument();
+      expect(screen.getByText(/1 standard, 1 reusable/i)).toBeInTheDocument();
+    });
+
+    it("counts it against every selected repo, not one source repo", () => {
+      render(<CreatePRModal {...ownedProps} />);
+
+      // Two repos, both getting the regular and the owned reusable workflow.
+      expect(
+        screen.getByRole("button", { name: /create 2 pr.*2 workflow/i })
+      ).toBeInTheDocument();
+    });
+
+    it("still counts the repos when only the reusable workflow is picked", () => {
+      render(<CreatePRModal {...ownedProps} />);
+
+      const item = screen.getByText("build-and-test.yml").closest(".repo-item");
+      const checkbox = item!.querySelector("input[type='checkbox']") as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      // Deselecting the regular workflow must not drop the target repos: an
+      // owned reusable workflow goes to them too.
+      expect(
+        screen.getByRole("button", { name: /create 2 pr.*1 workflow/i })
+      ).toBeInTheDocument();
+    });
+
+    it("sends it to the backend as a reusable workflow", async () => {
+      (pullRequestApi.createPullRequests as Mock).mockResolvedValue({
+        message: "ok", results: {}, prs_created: 2,
+      });
+
+      render(<CreatePRModal {...ownedProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /create 2 pr/i }));
+
+      await waitFor(() => {
+        expect(pullRequestApi.createPullRequests).toHaveBeenCalled();
+      });
+      const options = (pullRequestApi.createPullRequests as Mock).mock.calls[0][2];
+      expect(options.selectedReusableWorkflows).toEqual(["ook"]);
+      expect(options.selectedWorkflows).toEqual(["build-and-test"]);
+      expect(options.selectedRepos).toEqual(
+        expect.arrayContaining(["whatsupdawg/test1", "whatsupdawg/test2"])
+      );
+    });
+  });
+
   describe("linked reusable workflows", () => {
     it("includes linked reusable workflows in total workflow count", () => {
       render(

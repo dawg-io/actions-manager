@@ -108,10 +108,14 @@ const ProjectMembers: React.FC<ProjectMembersProps> = ({
     }
   }, [loadMembers, loadWorkspaceMembers, isAdmin]);
 
-  // Filter workspace members to only show read_only users not already assigned
+  // Everyone except admins, who already have full access to every project and
+  // so have nothing to be granted. A grant means different things per role: it
+  // gives a member edit rights on this project, and gives a read-only user
+  // sight of it at all.
   const availableUsers = allWorkspaceMembers.filter(
     (wm) =>
-      wm.workspace_role === 'read_only' &&
+      wm.workspace_role !== 'admin' &&
+      wm.workspace_role !== 'co_admin' &&
       !members.some((pm) => pm.user_id === wm.user_id)
   );
 
@@ -270,7 +274,7 @@ const ProjectMembers: React.FC<ProjectMembersProps> = ({
           </div>
           {availableUsers.length === 0 && (
             <p className="mt-2 text-xs text-text-secondary dark:text-secondary-dark">
-              No unassigned read-only workspace members available. All read-only users are already assigned to this project, or there are no read-only users in the workspace.
+              No unassigned workspace members available. Everyone except admins, who already have full access to every project, is already assigned here.
             </p>
           )}
         </div>
@@ -278,7 +282,7 @@ const ProjectMembers: React.FC<ProjectMembersProps> = ({
 
       {/* Info banner */}
       <div className="mb-4 px-4 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
-        ℹ️ Admin workspace role has automatic full access to all projects. Member and read-only users need explicit project assignments.
+        ℹ️ Admins have full access to every project. Members see every project read-only and need an assignment here to edit this one. Read-only users need an assignment to see it at all, and never get write access.
       </div>
 
       {/* Members list */}
@@ -294,7 +298,7 @@ const ProjectMembers: React.FC<ProjectMembersProps> = ({
           <p>No members assigned to this project yet.</p>
           {isAdmin && (
             <p className="mt-2 text-sm">
-              Use the &quot;Add Member&quot; button to grant read-only users access to this project.
+              Use the &quot;Add Member&quot; button to give a member edit rights here, or to give a read-only user access.
             </p>
           )}
         </div>

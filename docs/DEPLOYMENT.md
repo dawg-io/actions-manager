@@ -132,7 +132,7 @@ docker compose -f docker-compose.cloud.yml up --build -d
 - Frontend: Configured domain (e.g., `https://yourdomain.com`)
 - Backend: Same domain with `/api/*` prefix
 
-For complete cloud deployment guide, see [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md).
+For complete cloud deployment guide, see [CLOUD_DEPLOYMENT.md](../internal-docs/CLOUD_DEPLOYMENT.md).
 
 ### Cloud Configuration
 
@@ -265,7 +265,7 @@ docker compose -f docker-compose.self-hosted.yml build
 
 ### Pipeline Quick Reference
 
-For detailed pipeline commands and troubleshooting, see [PIPELINE_QUICK_REFERENCE.md](../PIPELINE_QUICK_REFERENCE.md).
+For detailed pipeline commands and troubleshooting, see [PIPELINE_QUICK_REFERENCE.md](../internal-docs/pipeline/PIPELINE_QUICK_REFERENCE.md).
 
 ## Production Checklist
 
@@ -512,7 +512,7 @@ docker exec actions-manager-backend env | grep GITHUB_CLIENT_ID
 ## Related Documentation
 
 - **[Self-Hosted Installation](SELF_HOSTED_INSTALL.md)** - Complete self-hosted guide
-- **[Cloud Deployment](CLOUD_DEPLOYMENT.md)** - Complete cloud guide
+- **[Cloud Deployment](../internal-docs/CLOUD_DEPLOYMENT.md)** - Complete cloud guide
 - **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - Configuration reference
 - **[Architecture](ARCHITECTURE.md)** - System design
 - **[CI/CD Pipeline](../CI_CD_PIPELINE.md)** - Pipeline details

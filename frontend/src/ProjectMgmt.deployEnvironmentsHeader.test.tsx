@@ -59,6 +59,9 @@ vi.mock("./components/Sidebar", () => ({
         <button type="button" onClick={() => props.onSectionChange("backup-export")}>
           Go Backup
         </button>
+        <button type="button" onClick={() => props.onSectionChange("secrets")}>
+          Go Secrets
+        </button>
       </div>
     );
   },
@@ -237,6 +240,91 @@ describe("ProjectMgmt deploy environments header", () => {
     });
   });
 
+  // The five Repository Config panels render full edit controls and none of
+  // them was read-only aware. Rather than gating each control in each panel -
+  // which is what gets missed - the page is wrapped in a disabled fieldset,
+  // and HTML makes every descendant form control inert for free.
+  // These live in the page header, outside the read-only fieldset that covers
+  // the config panels - so the fieldset does not reach them and they need
+  // gating of their own. "Create Environment" already had it; Add Secret and
+  // Add Environment Variable did not, and stayed live for a viewer.
+  test("disables the header Add Secret button for a viewer", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectMgmt
+        userDetails={{
+          avatar_url: "https://example.com/avatar.png",
+          github_user: "testuser",
+          account_type: "free",
+          github_account_type: "User",
+          workspace_role: "read_only",
+        }}
+        onLogout={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    });
+    await user.click(screen.getByText("Go Secrets"));
+
+    const add = screen.queryByRole("button", { name: /Add Secret/i });
+    if (add) {
+      expect(add).toBeDisabled();
+    }
+  });
+
+  test("wraps the repository config page in a disabled fieldset for a viewer", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <ProjectMgmt
+        userDetails={{
+          avatar_url: "https://example.com/avatar.png",
+          github_user: "testuser",
+          account_type: "free",
+          github_account_type: "User",
+          workspace_role: "read_only",
+        }}
+        onLogout={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    });
+    await user.click(screen.getByText("Go Environments"));
+
+    const guard = container.querySelector("fieldset.repo-configs-readonly");
+    expect(guard).not.toBeNull();
+    expect(guard).toBeDisabled();
+    // The panels are still rendered - a viewer reads them, they are not hidden.
+    expect(screen.getByTestId("deploy-environments")).toBeInTheDocument();
+  });
+
+  test("leaves the page unwrapped for someone who can edit", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <ProjectMgmt
+        userDetails={{
+          avatar_url: "https://example.com/avatar.png",
+          github_user: "testuser",
+          account_type: "free",
+          github_account_type: "User",
+          workspace_role: "admin",
+        }}
+        onLogout={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    });
+    await user.click(screen.getByText("Go Environments"));
+
+    expect(container.querySelector("fieldset.repo-configs-readonly")).toBeNull();
+    expect(screen.getByTestId("deploy-environments")).toBeInTheDocument();
+  });
+
   test('does not render global "Save to GitHub" or "Cancel" on Deploy Environments', async () => {
     const user = userEvent.setup();
     render(
@@ -246,6 +334,8 @@ describe("ProjectMgmt deploy environments header", () => {
           github_user: "testuser",
           account_type: "free",
           github_account_type: "User",
+          // Export Config lives under Project Configs, admin-only.
+          workspace_role: "admin",
         }}
         onLogout={vi.fn()}
       />
@@ -271,6 +361,8 @@ describe("ProjectMgmt deploy environments header", () => {
           github_user: "testuser",
           account_type: "free",
           github_account_type: "User",
+          // Export Config lives under Project Configs, admin-only.
+          workspace_role: "admin",
         }}
         onLogout={vi.fn()}
       />

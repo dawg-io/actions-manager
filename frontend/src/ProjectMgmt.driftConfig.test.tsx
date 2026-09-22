@@ -242,6 +242,8 @@ const userDetails = {
   github_user: "alice",
   account_type: "free",
   github_account_type: "User" as const,
+  // Drift Detection lives under Project Configs, which is workspace-admin only.
+  workspace_role: "admin",
 };
 
 const PROJECT = {
@@ -301,6 +303,29 @@ describe("ProjectMgmt - per-project drift schedule", () => {
       merged_prs: 0,
       total_prs: 0,
     });
+  });
+
+  // Reached by calling onSectionChange directly rather than clicking the
+  // sidebar - the same path a stale link or hand-typed URL takes. Hiding the
+  // sidebar group is for the eye; this is the check that keeps a non-admin out.
+  test("does not render Drift Detection for a member who navigates to it directly", async () => {
+    render(
+      <ProjectMgmt
+        userDetails={{ ...userDetails, workspace_role: "member" }}
+        onLogout={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(capturedOnSectionChange).not.toBeNull());
+    await act(async () => {
+      capturedOnSectionChange!("drift-config");
+    });
+
+    expect(screen.queryByTestId("project-drift-interval")).not.toBeInTheDocument();
+  });
+
+  test("renders Drift Detection for an admin", async () => {
+    await renderDriftSection();
+    expect(screen.getByTestId("project-drift-interval")).toBeInTheDocument();
   });
 
   test("a project with no override shows the inherited workspace default", async () => {

@@ -101,7 +101,7 @@ backend/python-packages/
 **/copilot-*.md
 **/*-copilot-*.md
 **/*_SUMMARY.md
-!docs/DOCUMENTATION_CLEANUP_SUMMARY.md
+!internal-docs/DOCUMENTATION_CLEANUP_SUMMARY.md
 **/*_COMPLETE.md
 **/*_COMPLETION.md
 **/*_FIX_*.md

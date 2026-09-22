@@ -217,10 +217,20 @@ def _find_project_by_id(db: Session, project_id: int, caller_member, github_user
     if github_user:
         user = db.query(Account).filter(Account.github_user == github_user.strip()).first()
         if user:
-            return db.query(Project).filter(
+            owned = db.query(Project).filter(
                 Project.project_id == project_id,
                 Project.user_id == user.user_id,
             ).first()
+            if owned:
+                return owned
+
+    # A full member sees every project in this single-workspace model, by id as
+    # well as by name. Without this a member could open a project and then have
+    # its by-id screens - build metrics, backup export - answer 404: the same
+    # "listed but will not open" symptom, one screen along.
+    if caller_member and caller_member.workspace_role == "member":
+        return db.query(Project).filter(Project.project_id == project_id).first()
+
     return None
 
 
@@ -254,7 +264,9 @@ def _find_project_by_name(db: Session, project_name: str, caller_member, github_
             Project.project_name.ilike(project_name.strip())
         ).first()
 
-    # Non-admin members (member, read_only): check ProjectMembership for explicit project access
+    # Non-admin members (member, read_only): an explicit grant resolves first,
+    # so a name the caller was granted wins over a same-named project they only
+    # see by virtue of membership.
     if caller_member and caller_member.workspace_role in ("member", "read_only"):
         project = db.query(Project).join(
             ProjectMembership, ProjectMembership.project_id == Project.project_id
@@ -269,10 +281,25 @@ def _find_project_by_name(db: Session, project_name: str, caller_member, github_
     if github_user:
         user = db.query(Account).filter(Account.github_user == github_user.strip()).first()
         if user:
-            return db.query(Project).filter(
+            owned = db.query(Project).filter(
                 Project.project_name.ilike(project_name.strip()),
                 Project.user_id == user.user_id,
             ).first()
+            if owned:
+                return owned
+
+    # A full member sees every project in this single-workspace model, so a name
+    # they hold no grant for still resolves. read_only does not.
+    #
+    # Last, deliberately. Project names are unique per owner, not globally, so
+    # resolving workspace-wide ahead of the owner-scoped lookup above would make
+    # a caller's own project unreachable by name and hand them somebody else's
+    # same-named one - on a destructive route, the wrong project entirely.
+    if caller_member and caller_member.workspace_role == "member":
+        return db.query(Project).filter(
+            Project.project_name.ilike(project_name.strip())
+        ).first()
+
     return None
 
 # ✅ Define Schema for Workflows
@@ -1508,9 +1535,13 @@ def get_projects(
 
     caller_member = _resolve_caller_member(db, x_github_user)
 
-    if caller_member and not is_project_admin(caller_member):
-        # Non-admin (member/read_only): return projects the caller is explicitly assigned to
-        # via ProjectMembership (regardless of project owner — projects may belong to any account)
+    if caller_member and not is_project_admin(caller_member) and caller_member.workspace_role == "read_only":
+        # read_only: only the projects the caller is explicitly assigned to via
+        # ProjectMembership (regardless of project owner — projects may belong
+        # to any account). A full member sees the whole workspace instead, and
+        # falls through to the query below; being able to see a project is not
+        # being able to change it, which every write gate gets from
+        # check_project_access returning project_viewer for them.
         rows = (
             db.query(
                 Project,
@@ -2339,8 +2370,10 @@ def get_project(
         if project:
             user = db.query(Account).filter(Account.user_id == project.user_id).first()
 
-    # For non-admin callers, look up via ProjectMembership
-    # (the project may belong to a different account)
+    # For non-admin callers, look up via ProjectMembership first
+    # (the project may belong to a different account). A grant resolves ahead
+    # of the workspace-wide lookup below, so an explicitly granted project wins
+    # a name collision.
     if not project and caller_member and not is_project_admin(caller_member):
         project = (
             db.query(Project)
@@ -2353,6 +2386,20 @@ def get_project(
         )
         if project:
             # Re-resolve the owning account for account_type in the response
+            user = db.query(Account).filter(Account.user_id == project.user_id).first()
+
+    # A full member sees every project in this single-workspace model, so one
+    # they hold no grant on still opens. What they get is read-only: the access
+    # check below resolves them to project_viewer, which every write gate
+    # refuses. Without this the project was listed but would not open, and the
+    # UI rendered its empty state rather than an error.
+    if not project and caller_member and caller_member.workspace_role == "member":
+        project = (
+            db.query(Project)
+            .filter(Project.project_name.ilike(project_name.strip()))
+            .first()
+        )
+        if project:
             user = db.query(Account).filter(Account.user_id == project.user_id).first()
 
     if not project:
@@ -2515,6 +2562,12 @@ def delete_project(
         if not project:
             raise HTTPException(status_code=404, detail="❌ Project not found or access denied")
 
+        # Resolving the project was the entire access check here: the 404 above
+        # doubles as "or access denied". That only held while the lookup itself
+        # was narrow, and it never distinguished a viewer from an editor - a
+        # project_viewer grant resolves the project and could delete it.
+        _require_project_editor(db, caller_member, project.project_id)
+
         _delete_project_display_order(db, project.project_id)
         db.delete(project)
         db.commit()
@@ -2524,6 +2577,13 @@ def delete_project(
         
         return {"message": "✅ Project deleted successfully!"}
 
+    except HTTPException:
+        # Without this the generic handler below swallows every deliberate
+        # status this endpoint raises and re-reports it as a 500 carrying the
+        # original detail - the 404 for an unknown project, and now the 403 for
+        # a caller without write access.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error deleting project: {str(e)}")
@@ -2549,6 +2609,8 @@ def toggle_reusable_workflows(
 
         if not project:
             raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND)
+
+        _require_project_editor(db, caller_member, project.project_id)
 
         # Update the reusable workflows setting
         project.reusable_workflows_enabled = payload.enabled
@@ -2665,6 +2727,11 @@ def link_reusable_workflow(
         if not standard_project:
             raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
 
+        # Linking writes a LinkedReusableWorkflow row into this project and
+        # changes what its campaigns deliver, so it needs write access to it —
+        # the same gate its unlink counterpart carries.
+        _require_project_editor(db, caller_member, standard_project.project_id)
+
         rwx_project = _find_project_by_id(db, payload.rwx_project_id, caller_member, payload.github_user)
         if not rwx_project or rwx_project.project_type != "rwx":
             raise HTTPException(status_code=404, detail="RWX project not found")
@@ -2733,6 +2800,8 @@ def unlink_reusable_workflow(
         standard_project = _find_project_by_name(db, project_name, caller_member, github_user)
         if not standard_project:
             raise HTTPException(status_code=404, detail=_ERR_PROJECT_NOT_FOUND_PLAIN)
+
+        _require_project_editor(db, caller_member, standard_project.project_id)
 
         link = db.query(LinkedReusableWorkflow).filter(
             LinkedReusableWorkflow.standard_project_id == standard_project.project_id,
