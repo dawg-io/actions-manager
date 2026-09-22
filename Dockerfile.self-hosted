@@ -71,6 +71,15 @@ RUN echo "Build date: ${BUILD_DATE}" && \
 # contains.
 FROM ghcr.io/dawg-io/actions-manager/base-backend:latest
 
+# The source points at the public repo, not the one building the image: GHCR
+# links a package to the repo named here, and promote-to-public.yml copies
+# this image byte-for-byte into ghcr.io/dawg-io/actions-manager, so the label
+# must already name dawg-io for that package to appear on the public repo.
+LABEL org.opencontainers.image.title="Actions-Manager Self-Hosted" \
+      org.opencontainers.image.description="Self-hosted single-container release of ActionsManager" \
+      org.opencontainers.image.source="https://github.com/dawg-io/actions-manager" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 # Install nginx for serving static files, and gosu to drop root privileges
 # at runtime after fixing volume ownership (see start.sh below).
 RUN apt-get update && \

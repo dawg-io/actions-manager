@@ -339,6 +339,18 @@ class TestDockerfile:
         dockerfile = REPO_ROOT / "frontend" / "Dockerfile"
         assert dockerfile.exists(), "frontend/Dockerfile not found"
 
+    def test_self_hosted_image_source_label_names_public_repo(self):
+        """GHCR only lists the promoted package on dawg-io/actions-manager when
+        the image's source label names that repo; the image is copied there
+        unchanged, so the label has to be baked in at build time."""
+        dockerfile = (REPO_ROOT / "Dockerfile.self-hosted").read_text()
+        final_stage = dockerfile.rsplit("\nFROM ", 1)[1]
+
+        assert (
+            'org.opencontainers.image.source="https://github.com/dawg-io/actions-manager"'
+            in final_stage
+        )
+
     def test_nginx_preserves_upstream_forwarded_proto(self):
         """The container's own nginx must not overwrite the outer proxy's scheme.
 
