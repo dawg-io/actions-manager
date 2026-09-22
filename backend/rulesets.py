@@ -21,6 +21,12 @@ from models import Ruleset, Project, ProjectRepo, ProjectRuleset, Account, Repo
 import os
 import auth as auth_module
 from auth import user_tokens
+from workflows import (
+    _find_project_by_name,
+    _require_project_editor,
+    require_project_write_access,
+    require_repo_write_access,
+)
 
 
 router = APIRouter()
@@ -82,13 +88,18 @@ class RulesetSyncStatusRequest(BaseModel):
 
 @router.post("/api/rulesets/upload")
 async def upload_ruleset_file(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     file: Annotated[UploadFile, File()],
     project_name: Annotated[str, Form()],
     github_user: Annotated[str, Form()],
 ):
     """Upload a ruleset JSON file and store it in the database"""
-    
+
+    # github_user arrives as a form field and proves nothing on its own, and
+    # storing a ruleset against a project is a write to that project.
+    require_project_write_access(db, request, github_user, project_name)
+
     if not file.filename.endswith('.json'):
         raise HTTPException(status_code=400, detail="File must be a JSON file")
     
@@ -155,13 +166,20 @@ async def upload_ruleset_file(
 
 @router.post("/api/rulesets/create")
 async def create_ruleset(
+    request: Request,
     ruleset_data: RulesetCreate,
     db: Annotated[Session, Depends(get_db)],
     project_name: str = None,
     github_user: str = None
 ):
     """Create a new ruleset from JSON data"""
-    
+
+    # Only gated when a project is named: this route also creates rulesets with
+    # no project attached, which is its own problem (#2063) rather than this
+    # one. When a project is named, attaching to it is a write to it.
+    if project_name:
+        require_project_write_access(db, request, github_user, project_name)
+
     try:
         # Get user account
         user_account = db.query(Account).filter(Account.github_user == github_user).first()
@@ -221,10 +239,12 @@ async def get_project_rulesets(
         if not user_account:
             raise HTTPException(status_code=404, detail=ACCOUNT_NOT_FOUND)
         
-        # Get project
-        project = db.query(Project).filter(
-            and_(Project.project_name == project_name, Project.user_id == user_account.user_id)
-        ).first()
+        # Resolve by access rather than ownership. The owner-scoped lookup this
+        # used to do meant the panel only ever loaded for the account that owns
+        # the project: every other caller - including a workspace admin on a
+        # project they did not create - got a 404 that the UI shows as
+        # "Error loading rulesets".
+        project = _find_project_by_name(db, github_user, project_name)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -249,6 +269,11 @@ async def get_project_rulesets(
             ]
         }
         
+    except HTTPException:
+        # Without this the handler below swallows this route's own 404 and
+        # re-reports it as a 500 carrying the original detail, which is what
+        # the UI was showing as "Error loading rulesets".
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching rulesets: {str(e)}")
 
@@ -275,6 +300,11 @@ async def apply_ruleset_to_repos(
     # name someone else and create rulesets on their repositories under their
     # identity. Asserted before the try so the catch-all cannot swallow it.
     auth_module.assert_session_owns_user(request_data.github_user, request, db)
+    # Applying writes the ruleset into those repositories. They carry no
+    # project_name, so authorization comes from the projects the repositories
+    # belong to.
+    for _repo in request_data.repo_names:
+        require_repo_write_access(db, request, request_data.github_user, _repo)
 
     try:
         # Get user account
@@ -463,6 +493,32 @@ async def check_ruleset_sync_status(
         raise HTTPException(status_code=500, detail=f"Error checking ruleset sync status: {str(e)}")
 
 
+def _require_editor_on_rulesets_project(db: Session, github_user: str, ruleset_id: int) -> None:
+    """A ruleset is edited through the projects it is attached to.
+
+    Deleting one removes it from those projects and, for the GitHub scopes,
+    from their repositories — so it needs write access to one of them. An
+    unattached ruleset has no project to check (that orphan state is #2063);
+    it is left to the ownership check the route already performs.
+    """
+    links = db.query(ProjectRuleset).filter(ProjectRuleset.ruleset_id == ruleset_id).all()
+    if not links:
+        return
+    for link in links:
+        project = db.query(Project).filter(Project.project_id == link.project_id).first()
+        if not project:
+            continue
+        try:
+            _require_project_editor(db, github_user, project)
+            return
+        except HTTPException:
+            continue
+    raise HTTPException(
+        status_code=403,
+        detail="Insufficient project permissions. Required: project_editor",
+    )
+
+
 def _repos_targeted_by_ruleset(db: Session, ruleset_id: int) -> List[str]:
     """Every repository the ruleset's projects target — where a GitHub copy can be."""
     rows = (
@@ -621,6 +677,9 @@ async def delete_ruleset(
     # account — without this, any signed-in member could name someone else and
     # delete their rulesets.
     auth_module.assert_session_owns_user(github_user, request, db)
+    # Deleting detaches the ruleset from its projects and, for the GitHub
+    # scopes, removes it from their repositories.
+    _require_editor_on_rulesets_project(db, github_user, ruleset_id)
 
     if scope not in _VALID_SCOPES:
         raise HTTPException(

@@ -425,6 +425,40 @@ body {
   padding: var(--spacing-xl);
 }
 
+/* Wraps the repository config page for a project viewer, where `disabled` on
+ * the fieldset is what makes every control inside inert. Purely structural:
+ * a fieldset carries a default border, padding, margin and min-width that
+ * would otherwise box the page and break its flex children, so all four are
+ * reset. The controls inside keep their own :disabled styling. */
+.repo-configs-readonly {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Everything inside is inert because the fieldset disables it, but several of
+ * these controls paint themselves from their own `disabled` *prop* rather than
+ * the native :disabled state - PrefixedInput styles its container that way. So
+ * the page could be fully inert and still look editable, which is worse than
+ * either: it invites a viewer to try something that cannot work. These rules
+ * make the page read the way it behaves. */
+.repo-configs-readonly button:disabled,
+.repo-configs-readonly input:disabled,
+.repo-configs-readonly select:disabled,
+.repo-configs-readonly textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A wrapper that carries the field's own surface - the prefix chip and border
+ * live on the container, so it has to follow the input it wraps. */
+.repo-configs-readonly .input:has(input:disabled),
+.repo-configs-readonly .file-input-wrapper:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .repo-config-section {
   display: flex;
   flex-direction: column;

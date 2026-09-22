@@ -212,8 +212,10 @@ Workspace/application-level membership for multi-user support.
 
 **Role Descriptions**:
 - `admin` — Full management access; bypasses all project-level permission checks.
-- `member` — Standard user; requires explicit `project_memberships` grants for project access and can view and edit assigned projects.
-- `read_only` — View-only role; requires explicit `project_memberships` grants for project access.
+- `member` — Sees every project in the workspace (this application is single-workspace), read-only by default. A `project_memberships` row raises them to `project_editor` on a particular project; without one they resolve as `project_viewer` and every write is refused.
+- `read_only` — Requires an explicit `project_memberships` grant to see a project at all, and never writes: `WriteProtectionMiddleware` refuses non-safe methods for this role regardless of any grant.
+
+So a grant means different things per role: for a `member` it confers **write** access to one project; for a `read_only` user it confers **visibility**.
 
 ---
 

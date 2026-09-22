@@ -50,6 +50,12 @@ A campaign does not have to cover the whole project. Adding a repository to a pr
 campaign [scoped to just that repository]({% link features/projects.md %}#adding-a-repository-to-a-project-that-already-has-workflows),
 so the repositories already in sync are left alone.
 
+Starting a campaign requires **editor** access to the project. A campaign commits
+files and opens pull requests in every repository in scope, so project viewers can
+open the project and read the workflow but the campaign is rejected. Project owners
+and workspace admins always qualify — see
+[Permissions]({% link features/permissions.md %}).
+
 ## Campaign Dashboard
 
 ![PR campaign dashboard showing campaign stats, status, and per-repository pull requests](../assets/screenshots/pr-campaigns/pr-campaign.png)
@@ -90,6 +96,10 @@ From the campaign dashboard you can:
 - **Bulk close** — close all open PRs without merging
 - **Sync status** — refresh PR state from GitHub
 
+Merging and closing require **editor** access, like the campaign itself, and reach only
+the pull requests ActionsManager opened for this project — a pull request it has no
+record of is refused rather than acted on.
+
 ## PR Metadata
 
 ActionsManager adds consistent metadata to campaign PRs:
@@ -128,6 +138,11 @@ Flagged repositories stay visible in the preview with the reason, rather than be
 Before a campaign can be created for critical changes, ActionsManager can run a **preflight validation** step — a validation PR that must be reviewed and merged before the full campaign proceeds. This ensures that the change is reviewed by at least one person before it is deployed across all repositories.
 
 Preflight does not gate a rollback: it validates the change you are rolling *out* against a validation repository, which says nothing about reverting one. The inverse-diff review is a rollback's own gate.
+
+Running preflight opens a pull request in the validation repository, so it requires
+**editor** access on the same terms as the campaign it validates. So does merging or
+closing that validation pull request: merging it is what marks preflight approved, and
+approved preflight is what lets a campaign run.
 
 ## Related Topics
 

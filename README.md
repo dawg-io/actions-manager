@@ -224,7 +224,7 @@ The first public release is **ActionsManager Self-Hosted Beta**. It is free duri
 The application contains tier and license-key code paths used for development and future planning. During this beta, public documentation should not be read as a live paid-plan offer. Free beta access does not grant permanent free access to future paid features.
 
 **→ [Commercial License Overview](COMMERCIAL-LICENSE.md)**
-**→ [License Key Notes](docs/LICENSE_KEYS.md)**
+**→ [License Key Notes](internal-docs/LICENSE_KEYS.md)**
 
 ## 📋 Installation Requirements
 
@@ -261,7 +261,7 @@ Credential selection works like this: a saved PAT is used when configured, other
 ActionsManager supports two deployment modes. See [Deployment Modes Comparison](DOCKER_DEPLOYMENT_MODES.md) for architecture diagrams and a full comparison, or [INSTALLATION.md](INSTALLATION.md) for the complete Docker run / Docker Compose walkthrough (SSL/TLS, backups, production hardening).
 
 - **Self-Hosted** — the single-container image shown in [Quick Start](#-quick-start-self-hosted-beta) above, on port 8080.
-- **Cloud/SaaS (future, not part of this beta)** — multi-container deployment with GitHub Marketplace billing and required PostgreSQL. Retained in this repository as a planning reference only. See [Complete Cloud Deployment Guide](docs/CLOUD_DEPLOYMENT.md).
+- **Cloud/SaaS (future, not part of this beta)** — multi-container deployment with GitHub Marketplace billing and required PostgreSQL. Retained in this repository as a planning reference only. See [Complete Cloud Deployment Guide](internal-docs/CLOUD_DEPLOYMENT.md).
 
 ## 📚 Documentation
 
@@ -274,7 +274,7 @@ ActionsManager supports two deployment modes. See [Deployment Modes Comparison](
 ### Configuration
 - **[Environment Variables](docs/ENVIRONMENT_VARIABLES.md)** - Complete reference for all configuration options
 - **[GitHub PAT Setup](docs/GITHUB_PAT_SETUP.md)** - Fine-grained and classic PAT setup, permissions, and troubleshooting
-- **[License Keys](docs/LICENSE_KEYS.md)** - Self-hosted license-key behavior and future tier notes
+- **[License Keys](internal-docs/LICENSE_KEYS.md)** - Self-hosted license-key behavior and future tier notes
 - **[Licensing Model](LICENSING_MODEL.md)** - Community/Core and future commercial model notes
 - **[Privacy Notice](PRIVACY.md)** - Self-hosted beta privacy notice
 - **[Security Policy](SECURITY.md)** - Vulnerability reporting and hardening guidance
@@ -287,7 +287,7 @@ ActionsManager supports two deployment modes. See [Deployment Modes Comparison](
 ### Advanced Topics
 - **[Marketplace Integration](MARKETPLACE_WEBHOOKS.md)** - Future Cloud/SaaS planning reference; not active for the self-hosted beta
 - **[CI/CD Pipeline](CI_CD_PIPELINE.md)** - Automated testing and deployment workflow reference
-- **[Pipeline Quick Reference](docs/pipeline/PIPELINE_QUICK_REFERENCE.md)** - Local commands and troubleshooting
+- **[Pipeline Quick Reference](internal-docs/pipeline/PIPELINE_QUICK_REFERENCE.md)** - Local commands and troubleshooting
 
 ### For Contributors
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Fork/branch/PR workflow, code review expectations

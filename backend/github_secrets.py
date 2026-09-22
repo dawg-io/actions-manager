@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 import httpx
 import base64
 import nacl.public
 from sqlalchemy.orm import Session
 from typing import Annotated
 from database import get_db
+import auth as auth_module
 from auth import user_tokens
+from workflows import require_project_write_access
 from models import Project, Account, ProjectSecret  # ✅ Import ProjectSecret for storing secret names
 
 router = APIRouter()
@@ -203,6 +205,12 @@ async def create_secrets(request: Request, db: Annotated[Session, Depends(get_db
 
         if user not in user_tokens:
             return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
+        # The caller's name arrives in the request body and selects whose GitHub
+        # token is used, so it is proven here rather than trusted, and the
+        # project is checked for write access: this route changes the project's
+        # secrets in GitHub.
+        require_project_write_access(db, request, user, project_name)
+
 
         # Validate account limits for free accounts
         limit_error = await _validate_account_limits(user, project_name, secrets, repo_names, db)
@@ -253,6 +261,12 @@ async def create_secrets(request: Request, db: Annotated[Session, Depends(get_db
 
         return {"message": "✅ Secrets processed", "results": results}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Exception: {str(e)}")
         return {"error": str(e)}
@@ -281,6 +295,12 @@ def _store_unprefixed_secret_names(db: Session, project, secrets: list):
     try:
         db.commit()
         print(f"✅ Stored {len(secrets)} secret names locally")
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         db.rollback()
         print(f"⚠️ Warning: Could not store secret names: {str(e)}")
@@ -288,7 +308,7 @@ def _store_unprefixed_secret_names(db: Session, project, secrets: list):
 
 
 @router.get("/api/get-secrets")
-async def get_secrets(user: str, repo_name: str, project_name: str, db: Annotated[Session, Depends(get_db)]):
+async def get_secrets(user: str, repo_name: str, project_name: str, db: Annotated[Session, Depends(get_db)], request: Request = None):
     """Fetches GitHub secrets for a project.
     - If use_prefix=True: Filters GitHub secrets matching 'AM_<PROJECT_CODE>_*' format
     - If use_prefix=False: Retrieves secret names from ProjectSecret table and verifies they exist in GitHub
@@ -301,6 +321,11 @@ async def get_secrets(user: str, repo_name: str, project_name: str, db: Annotate
 
         if user not in user_tokens:
             return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
+        # A read: the caller's name still has to be proven, because it selects
+        # whose GitHub token is used, but reading does not require write access.
+        if request is not None:
+            auth_module.assert_session_owns_user(user, request, db)
+
 
         token = user_tokens[user]
         headers = {
@@ -356,6 +381,12 @@ async def get_secrets(user: str, repo_name: str, project_name: str, db: Annotate
 
         return {"secrets": project_secrets}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error in /api/get-secrets: {str(e)}")
         return {"error": str(e)}
@@ -374,6 +405,12 @@ async def delete_secrets(request: Request, db: Annotated[Session, Depends(get_db
 
         if user not in user_tokens:
             return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
+        # The caller's name arrives in the request body and selects whose GitHub
+        # token is used, so it is proven here rather than trusted, and the
+        # project is checked for write access: this route changes the project's
+        # secrets in GitHub.
+        require_project_write_access(db, request, user, project_name)
+
 
         # ✅ Free accounts can delete secrets (within their limits)
         # Note: We allow deletion for free accounts since they need to manage their limited secrets
@@ -416,6 +453,12 @@ async def delete_secrets(request: Request, db: Annotated[Session, Depends(get_db
 
         return {"message": "✅ GitHub Repository Secrets deleted!", "results": results}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Exception: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -432,6 +475,12 @@ async def sync_secret(request: Request, db: Annotated[Session, Depends(get_db)])
 
         if user not in user_tokens:
             return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
+        # The caller's name arrives in the request body and selects whose GitHub
+        # token is used, so it is proven here rather than trusted, and the
+        # project is checked for write access: this route changes the project's
+        # secrets in GitHub.
+        require_project_write_access(db, request, user, project_name)
+
 
         # Check account type - allow sync for free accounts since they're not creating new secrets
         # Note: We allow sync for free accounts since they're managing existing secrets, not creating new ones
@@ -447,19 +496,30 @@ async def sync_secret(request: Request, db: Annotated[Session, Depends(get_db)])
         # Instead, we'll return an error asking the user to recreate the secret
         return {"error": "Cannot sync secrets because GitHub API doesn't allow reading secret values. Please delete and recreate the secret to add it to all repositories.", "status": 400}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error syncing secret: {str(e)}")
         return {"error": str(e), "status": 500}
 
 
 @router.get("/api/secrets-count")
-async def get_secrets_count(user: str, project_name: str, repo_names: str, db: Annotated[Session, Depends(get_db)]):
+async def get_secrets_count(user: str, project_name: str, repo_names: str, db: Annotated[Session, Depends(get_db)], request: Request = None):
     """Get the count of secrets for a project"""
     try:
         print(f"📌 Getting secrets count for user={user}, project={project_name}, repos={repo_names}")
         
         if user not in user_tokens:
             return {"error": NOT_AUTHENTICATED_DETAIL, "status": 401}
+        # A read: the caller's name still has to be proven, because it selects
+        # whose GitHub token is used, but reading does not require write access.
+        if request is not None:
+            auth_module.assert_session_owns_user(user, request, db)
+
         
         # Parse repo names
         repo_list = [repo.strip() for repo in repo_names.split(",") if repo.strip()]
@@ -477,6 +537,12 @@ async def get_secrets_count(user: str, project_name: str, repo_names: str, db: A
         
         return {"count": count}
         
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error getting secrets count: {str(e)}")
         return {"error": str(e), "status": 500}

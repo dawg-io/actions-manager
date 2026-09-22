@@ -23,7 +23,7 @@ interface CreatePRModalProps {
    * repository that holds none of them, "changed only" would under-deliver.
    */
   preselectAllWorkflows?: boolean;
-  reusableWorkflows?: Array<{ name: string; status?: string; sourceRepo?: string; isLinked?: boolean }>;
+  reusableWorkflows?: Array<{ name: string; status?: string; sourceRepo?: string; isLinked?: boolean; deliversToProjectRepos?: boolean }>;
   /** Project code and naming mode, so rows name the file that lands on GitHub. */
   projectCode?: string;
   usePrefix?: boolean;
@@ -741,7 +741,7 @@ interface PRCreationFormProps {
   changedReusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string }>;
   unchangedReusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string }>;
   workflows: Array<{ name: string; status?: string; displayName?: string }>;
-  reusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string }>;
+  reusableWorkflows: Array<{ name: string; status?: string; sourceRepo?: string; displayName?: string; deliversToProjectRepos?: boolean }>;
   changedCustomFiles: Array<{ id: number; file_path: string; file_status: string; pending_delete: boolean }>;
   selectedCustomFileIds: Set<number>;
   onToggleCustomFile: (id: number) => void;
@@ -1070,13 +1070,22 @@ const CreatePRModal: React.FC<CreatePRModalProps> = ({
     return sourceRepos;
   }, [reusableWorkflows, selectedReusableWorkflows]);
 
+  // A reusable workflow this project owns is delivered to the project's own
+  // repositories, like any other file it changed - not to a single source repo.
+  const ownedReusableSelected = useMemo(
+    () => reusableWorkflows.some((w) => w.deliversToProjectRepos && selectedReusableWorkflows.has(w.name)),
+    [reusableWorkflows, selectedReusableWorkflows],
+  );
+
   const totalPRTargetRepos = useMemo(() => {
     const allTargets = new Set<string>();
-    if (selectedWorkflows.size > 0 || selectedCustomFileIds.size > 0) { selectedRepos.forEach((repo) => allTargets.add(repo)); }
+    if (selectedWorkflows.size > 0 || selectedCustomFileIds.size > 0 || ownedReusableSelected) {
+      selectedRepos.forEach((repo) => allTargets.add(repo));
+    }
     selectedReusableSourceRepos.forEach((repo) => allTargets.add(repo));
     selectedCodeownersRepos.forEach((repo) => allTargets.add(repo));
     return allTargets;
-  }, [selectedRepos, selectedReusableSourceRepos, selectedWorkflows.size, selectedCustomFileIds.size, selectedCodeownersRepos]);
+  }, [selectedRepos, selectedReusableSourceRepos, ownedReusableSelected, selectedWorkflows.size, selectedCustomFileIds.size, selectedCodeownersRepos]);
 
   const formattedPreflightStatus = useMemo(() => {
     const s = preflight.status || "not_run";

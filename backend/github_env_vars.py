@@ -1,11 +1,13 @@
 import httpx
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from urllib.parse import quote
 from typing import Annotated
 from database import get_db
+import auth as auth_module
 from auth import user_tokens
+from workflows import require_project_write_access, require_repo_write_access
 from models import Project, Account, ProjectEnvVar  # ✅ Import ProjectEnvVar for storing env var names
 
 router = APIRouter()
@@ -366,6 +368,12 @@ async def update_env_vars(request: Request, db: Annotated[Session, Depends(get_d
         # Validate request data
         data = await request.json()
         user, repo_names, env_vars, project_name = _validate_request_data(data)
+        # The caller's name comes from the request body and selects whose
+        # GitHub token is used, so it is proven rather than trusted, and the
+        # project is checked for write access: this route changes configuration
+        # in the project's repositories.
+        require_project_write_access(db, request, user, project_name)
+
 
         # Check authentication
         headers = _get_auth_headers(user)
@@ -406,6 +414,12 @@ async def update_env_vars(request: Request, db: Annotated[Session, Depends(get_d
 
         return {"message": "✅ GitHub Repository Variables updated!", "results": results}
     
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error updating env vars: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -525,6 +539,12 @@ async def get_env_vars(user: str, repo_name: str, project_name: str, db: Annotat
 
         return {"env_vars": project_env_vars}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error in /api/get-env-vars: {str(e)}")
         return {"error": str(e)}
@@ -539,6 +559,11 @@ async def delete_env_vars(request: Request, db: Annotated[Session, Depends(get_d
         project_name = data.get("project_name", "").strip()
         repo_names = data.get("repo_names", [])
         env_vars = data.get("env") if isinstance(data.get("env"), list) else []
+
+        # Proven rather than trusted: the caller's name selects whose GitHub
+        # token is used. Write access to the project is required because this
+        # route changes configuration in its repositories.
+        require_project_write_access(db, request, user, project_name)
 
         if user not in user_tokens:
             return {"error": AUTH_STRING, "status": 401}
@@ -590,6 +615,12 @@ async def delete_env_vars(request: Request, db: Annotated[Session, Depends(get_d
 
         return {"message": "✅ GitHub Repository Variables deleted!", "results": results}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Exception: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -623,6 +654,11 @@ async def sync_env_var(request: Request, db: Annotated[Session, Depends(get_db)]
         project_name = data.get("project_name", "").strip()
         repo_names = data.get("repo_names", [])
         env_key = data.get("env_key", "").strip()
+
+        # Proven rather than trusted: the caller's name selects whose GitHub
+        # token is used. Write access to the project is required because this
+        # route changes configuration in its repositories.
+        require_project_write_access(db, request, user, project_name)
 
         if user not in user_tokens:
             return {"error": AUTH_STRING, "status": 401}
@@ -675,6 +711,12 @@ async def sync_env_var(request: Request, db: Annotated[Session, Depends(get_db)]
 
         return {"message": f"✅ Environment variable '{env_key}' synced!", "results": results}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error syncing env var: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -718,6 +760,12 @@ async def create_environment(request: Request, db: Annotated[Session, Depends(ge
         user = data.get("user")
         repo_name = data.get("repo_name")
         environment_name = data.get("environment_name")
+
+        # No project_name on this route - an environment is created on a
+        # repository. A caller may configure a repository belonging to a
+        # project they can edit; GitHub's own permissions were the only
+        # check before, and those are not ActionsManager's role model.
+        require_repo_write_access(db, request, user, repo_name)
 
         if user not in user_tokens:
             return {"error": AUTH_STRING, "status": 401}
@@ -771,6 +819,12 @@ async def create_environment(request: Request, db: Annotated[Session, Depends(ge
             else:
                 return {"error": response.json(), "status": response.status_code}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error creating environment: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -801,6 +855,12 @@ async def get_environments(user: str, repo_name: str, db: Annotated[Session, Dep
             else:
                 return {"error": f"Failed to fetch environments for {repo_name}", "status": response.status_code}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error fetching environments: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -814,6 +874,11 @@ async def delete_environment(request: Request, db: Annotated[Session, Depends(ge
         user = data.get("user")
         repo_names = data.get("repo_names", [])
         environment_name = data.get("environment_name", "")
+
+        # As create-environment: repo-scoped, so authorization comes from the
+        # projects those repositories belong to.
+        for _repo in repo_names:
+            require_repo_write_access(db, request, user, _repo)
 
         if not isinstance(environment_name, str) or not environment_name.strip():
             return {"error": "Missing or invalid environment name", "status": 400}
@@ -853,6 +918,12 @@ async def delete_environment(request: Request, db: Annotated[Session, Depends(ge
 
         return {"message": "✅ Deployment environments deleted!", "results": results}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Exception: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -864,6 +935,12 @@ async def sync_environment(request: Request, db: Annotated[Session, Depends(get_
     try:
         data = await request.json()
         user, project_name, repo_names, environment_name = _validate_sync_environment_request(data)
+        # The caller's name comes from the request body and selects whose
+        # GitHub token is used, so it is proven rather than trusted, and the
+        # project is checked for write access: this route changes configuration
+        # in the project's repositories.
+        require_project_write_access(db, request, user, project_name)
+
 
         if user not in user_tokens:
             return {"error": AUTH_STRING, "status": 401}
@@ -893,6 +970,12 @@ async def sync_environment(request: Request, db: Annotated[Session, Depends(get_
             "results": results
         }
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error syncing environment: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -923,6 +1006,12 @@ async def get_env_vars_count(user: str, project_name: str, repo_names: str, db: 
         
         return {"count": count}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error getting env vars count: {str(e)}")
         return {"error": str(e), "status": 500}
@@ -946,6 +1035,12 @@ async def get_environments_count(user: str, repo_names: str, db: Annotated[Sessi
         
         return {"count": count}
 
+    except HTTPException:
+        # A deliberate status - the authorization refusal above, or a 404 -
+        # must reach the client as that status. The handler below turns
+        # anything it catches into a 200 carrying an error body, which is a
+        # refused write reported as success.
+        raise
     except Exception as e:
         print(f"❌ Error getting environments count: {str(e)}")
         return {"error": str(e), "status": 500}

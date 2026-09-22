@@ -44,7 +44,8 @@ When you edit a workflow definition in ActionsManager, the platform:
 
 Saving a workflow requires **editor** access to the project. Project viewers can open
 a workflow and read its YAML, but the save is rejected. Project owners and workspace
-admins always qualify.
+admins always qualify. See [Permissions]({% link features/permissions.md %}) for who
+gets editor access and how it is granted.
 
 ### Renaming a Workflow
 
@@ -256,6 +257,13 @@ With **Save & Create PR Campaign**, the workflows filed into a Reusable Workflow
 Project are saved there *locally* — no PR Campaign is created for them, because that
 project is what delivers them.
 
+Reusable workflows you keep in the caller project are treated the other way round. The
+project owns them, so they belong in its repositories, and the campaign carries them to
+every repository you selected alongside everything else it delivers. Ownership is what
+decides this, not the reusable label: a workflow this project owns goes to this
+project's repositories, and only a workflow *linked* from a Reusable Workflow Project
+goes to that project's repository instead.
+
 ### Reusable workflows in a Caller Workflow Project
 
 A Caller Workflow Project that owns a reusable workflow now lists it, labelled
@@ -267,6 +275,11 @@ These rows were always stored — earlier releases wrote them to the database an
 never rendered them. After upgrading, a caller project may show reusable workflows you
 imported some time ago that were previously invisible. Nothing was created; they are
 simply no longer hidden.
+
+A PR campaign offers these alongside the project's regular workflows and delivers them
+to the repositories you selected, because this project owns them. A **linked** reusable
+workflow behaves differently: it is delivered to the repository of the Reusable Workflow
+Project that owns it, not to this project's repositories.
 
 Such a workflow cannot be deleted from GitHub through the caller project — see
 [Removing a Workflow](#removing-a-workflow).

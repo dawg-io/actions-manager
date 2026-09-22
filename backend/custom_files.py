@@ -131,6 +131,11 @@ def _get_project_for_user(db: Session, project_id: int, github_user: str) -> Pro
         (workspace_member and is_project_admin(workspace_member))
         or project.user_id == account.user_id
         or bool(db.query(ProjectMembership).filter_by(user_id=account.user_id, project_id=project_id).first())
+        # A full workspace member reads every project in this single-workspace
+        # model. Safe to widen only because every write behind this helper now
+        # carries its own project_editor gate; until this change it *was* the
+        # gate for create, update and restore.
+        or bool(workspace_member and workspace_member.workspace_role == "member")
     )
     if not has_access:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -259,7 +264,12 @@ def create_custom_file(
     x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
 ):
     user = _resolve_user(x_github_user, payload.github_user)
-    _get_project_for_user(db, project_id, user)
+    _project = _get_project_for_user(db, project_id, user)
+
+    # Creating, editing and restoring a custom file all change what this
+    # project delivers, so seeing the project is not enough - the resolve
+    # above proves only that. delete_custom_file already carried this.
+    _require_project_editor(db, _project, user)
 
     path_error = validate_file_path(payload.file_path)
     if path_error:
@@ -299,7 +309,12 @@ def update_custom_file(
     x_github_user: Annotated[Optional[str], Header(alias="X-GitHub-User")] = None,
 ):
     user = _resolve_user(x_github_user, payload.github_user)
-    _get_project_for_user(db, project_id, user)
+    _project = _get_project_for_user(db, project_id, user)
+
+    # Creating, editing and restoring a custom file all change what this
+    # project delivers, so seeing the project is not enough - the resolve
+    # above proves only that. delete_custom_file already carried this.
+    _require_project_editor(db, _project, user)
 
     cf = db.query(CustomFile).filter_by(id=file_id, project_id=project_id).first()
     if not cf:
@@ -549,7 +564,12 @@ def restore_custom_file(
     github_user: Optional[str] = None,
 ):
     user = _resolve_user(x_github_user, github_user)
-    _get_project_for_user(db, project_id, user)
+    _project = _get_project_for_user(db, project_id, user)
+
+    # Creating, editing and restoring a custom file all change what this
+    # project delivers, so seeing the project is not enough - the resolve
+    # above proves only that. delete_custom_file already carried this.
+    _require_project_editor(db, _project, user)
 
     cf = db.query(CustomFile).filter_by(id=file_id, project_id=project_id).first()
     if not cf:

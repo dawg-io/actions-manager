@@ -1,5 +1,12 @@
 # Actions Manager Documentation
 
+> **Editing these docs:** `docs/` in the public repository
+> ([dawg-io/actions-manager](https://github.com/dawg-io/actions-manager)) is generated
+> by the release promotion and is replaced wholesale on every release — a commit made
+> directly against the public copy is overwritten by the next one. A pull request there
+> is still the right way to propose a documentation change: a maintainer ports it into
+> the development repository, and it ships back out with the following release.
+
 Welcome to the Actions Manager documentation! This guide will help you find the information you need to use, deploy, and contribute to Actions Manager.
 
 ## 📚 Documentation Index
@@ -8,13 +15,13 @@ Welcome to the Actions Manager documentation! This guide will help you find the 
 
 - **[Quick Start Guide](QUICK_START.md)** - Get up and running in 5-15 minutes
 - **[Installation](SELF_HOSTED_INSTALL.md)** - Self-hosted deployment guide
-- **[Cloud Deployment](CLOUD_DEPLOYMENT.md)** - Multi-tenant SaaS setup
+- **[Cloud Deployment](../internal-docs/CLOUD_DEPLOYMENT.md)** - Multi-tenant SaaS setup
 
 ### For Users
 
 - **[GitHub PAT Setup](GITHUB_PAT_SETUP.md)** - Fine-grained and classic PAT setup, permissions, and troubleshooting
 - **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - Configuration reference
-- **[License Keys](LICENSE_KEYS.md)** - License key management (self-hosted)
+- **[License Keys](../internal-docs/LICENSE_KEYS.md)** - License key management (self-hosted)
 - **[Licensing Model](../LICENSING_MODEL.md)** - Open-source, commercial, EULA, SaaS terms, and privacy overview
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and solutions
 - **[Workflow Delivery Modes](guides/WORKFLOW_DELIVERY_MODES.md)** - Direct commit vs PR-based delivery
@@ -63,9 +70,7 @@ docs/
 ├── TROUBLESHOOTING.md          # Common issues
 ├── FRONTEND_DEVELOPMENT.md     # Frontend guide
 ├── SELF_HOSTED_INSTALL.md     # Self-hosted installation
-├── CLOUD_DEPLOYMENT.md        # Cloud/SaaS deployment
 ├── ENVIRONMENT_VARIABLES.md   # Configuration reference
-├── LICENSE_KEYS.md            # License management
 ├── guides/
 │   ├── WORKFLOW_DELIVERY_MODES.md  # Direct commit vs PR-based delivery
 │   └── MIGRATION_DIRECT_TO_PR.md   # Migration guide
@@ -88,7 +93,7 @@ docs/
 
 **End Users:**
 1. [Quick Start](QUICK_START.md)
-2. [Self-Hosted Install](SELF_HOSTED_INSTALL.md) or [Cloud Deployment](CLOUD_DEPLOYMENT.md)
+2. [Self-Hosted Install](SELF_HOSTED_INSTALL.md) or [Cloud Deployment](../internal-docs/CLOUD_DEPLOYMENT.md)
 3. [Environment Variables](ENVIRONMENT_VARIABLES.md)
 4. [Troubleshooting](TROUBLESHOOTING.md)
 

@@ -1169,6 +1169,201 @@ class TestImportDefaultTargetRepos:
         assert "owner/repo1" in pr_request_arg.selected_repos
 
 
+class TestImportCampaignActuallyRuns:
+    """The campaign import mode really opens a campaign (#2070).
+
+    TestImportDefaultTargetRepos patches ``workflows.create_pull_requests``
+    itself, and a MagicMock accepts any signature — so it kept passing while
+    the real call was missing a required positional argument and raising
+    TypeError into the surrounding ``except Exception`` on every import. This
+    mocks *below* create_pull_requests instead, so the real function is called
+    and its signature is exercised.
+    """
+
+    def test_campaign_mode_opens_a_campaign(self):
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        content = base64.b64encode(b"name: CI\non: push").decode()
+        blob = MagicMock(status_code=200)
+        blob.json.return_value = {"content": content, "sha": "shaABC"}
+
+        with patch("workflow_import.requests.get", return_value=blob), \
+             patch("workflows._process_reusable_workflows_update", return_value={}), \
+             patch("workflows._process_regular_workflows_update") as mock_deliver:
+            mock_deliver.return_value = {
+                "owner/repo1 on main": {
+                    "status": "pr_created",
+                    "pr_url": "https://github.com/owner/repo1/pull/1",
+                    "pr_number": 1,
+                    "workflows_committed": ["ci"],
+                }
+            }
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json={
+                    "github_user": "testuser",
+                    "project_name": "TestProject",
+                    "workflows": [{
+                        "source_repo": "owner/repo1",
+                        "source_branch": "main",
+                        "workflow_path": ".github/workflows/ci.yml",
+                    }],
+                    "import_mode": "save_and_create_pr_campaign",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+
+        # The campaign really ran: no swallowed exception, and delivery reached.
+        assert data["pr_results"] is not None
+        assert "error" not in data["pr_results"], data["pr_results"]["error"]
+        assert data["pr_results"]["prs_created"] == 1
+        assert mock_deliver.called
+
+        # And the user is told the truth about it.
+        assert "created PR Campaign" in data["message"]
+
+        db = TestingSessionLocal()
+        try:
+            prs = db.query(ProjectPullRequest).filter(
+                ProjectPullRequest.project_id == project_id
+            ).all()
+        finally:
+            db.close()
+        assert [pr.repo_name for pr in prs] == ["owner/repo1"]
+
+    def test_campaign_mode_delivers_a_reusable_workflow(self):
+        """A reusable workflow this project owns goes to this project's repos.
+
+        Owning it is what decides where it is delivered — the reusable label
+        does not move it anywhere else. Only a workflow linked from a Reusable
+        Workflow Project goes to that project's repository instead.
+        """
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        reusable = base64.b64encode(
+            b"name: Shared\non:\n  workflow_call:\njobs: {}\n"
+        ).decode()
+        blob = MagicMock(status_code=200)
+        blob.json.return_value = {"content": reusable, "sha": "shaREUSE"}
+
+        with patch("workflow_import.requests.get", return_value=blob), \
+             patch("workflows._process_reusable_workflows_update") as mock_reusable, \
+             patch("workflows._process_regular_workflows_update") as mock_deliver:
+            mock_reusable.return_value = {}
+            mock_deliver.return_value = {
+                "owner/repo1 on main": {
+                    "status": "pr_created",
+                    "pr_url": "https://github.com/owner/repo1/pull/2",
+                    "pr_number": 2,
+                    "workflows_committed": ["shared"],
+                }
+            }
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json={
+                    "github_user": "testuser",
+                    "project_name": "TestProject",
+                    "workflows": [{
+                        "source_repo": "owner/repo1",
+                        "source_branch": "main",
+                        "workflow_path": ".github/workflows/shared.yml",
+                    }],
+                    "import_mode": "save_and_create_pr_campaign",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["results"][0]["status"] == "success"
+
+        assert mock_deliver.called, "reusable workflow was left out of the campaign"
+        kwargs = mock_deliver.call_args.kwargs
+        assert [w["name"] for w in kwargs["workflows"]] == ["shared"]
+        assert list(kwargs["repo_names"]) == ["owner/repo1"]
+
+        # Not shipped to a separate reusable-workflow repository as well.
+        assert not mock_reusable.called
+
+    def test_campaign_mode_delivers_both_kinds_together(self):
+        """A mixed import puts both kinds in the same campaign, same repos."""
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        bodies = {
+            ".github/workflows/ci.yml": b"name: CI\non: push",
+            ".github/workflows/shared.yml": b"name: Shared\non:\n  workflow_call:\njobs: {}\n",
+        }
+
+        def _blob(url, *_args, **_kwargs):
+            path = next(p for p in bodies if p in url)
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {
+                "content": base64.b64encode(bodies[path]).decode(), "sha": "sha" + path,
+            }
+            return resp
+
+        with patch("workflow_import.requests.get", side_effect=_blob), \
+             patch("workflows._process_reusable_workflows_update", return_value={}) as mock_reusable, \
+             patch("workflows._process_regular_workflows_update", return_value={}) as mock_deliver:
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json={
+                    "github_user": "testuser",
+                    "project_name": "TestProject",
+                    "workflows": [
+                        {"source_repo": "owner/repo1", "source_branch": "main",
+                         "workflow_path": ".github/workflows/ci.yml"},
+                        {"source_repo": "owner/repo1", "source_branch": "main",
+                         "workflow_path": ".github/workflows/shared.yml"},
+                    ],
+                    "import_mode": "save_and_create_pr_campaign",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert all(r["status"] == "success" for r in resp.json()["results"])
+
+        delivered = sorted(w["name"] for w in mock_deliver.call_args.kwargs["workflows"])
+        assert delivered == ["ci", "shared"], delivered
+        assert not mock_reusable.called
+
+    def test_save_local_only_still_imports_a_reusable_workflow(self):
+        """The refusal is scoped to campaign mode, not to reusable imports."""
+        db = TestingSessionLocal()
+        _user_id, project_id, _repo_id = _setup_project(db)
+        db.close()
+
+        reusable = base64.b64encode(
+            b"name: Shared\non:\n  workflow_call:\njobs: {}\n"
+        ).decode()
+        blob = MagicMock(status_code=200)
+        blob.json.return_value = {"content": reusable, "sha": "shaREUSE"}
+
+        with patch("workflow_import.requests.get", return_value=blob):
+            resp = client.post(
+                f"/api/projects/{project_id}/workflow-import",
+                json={
+                    "github_user": "testuser",
+                    "project_name": "TestProject",
+                    "workflows": [{
+                        "source_repo": "owner/repo1",
+                        "source_branch": "main",
+                        "workflow_path": ".github/workflows/shared.yml",
+                    }],
+                    "import_mode": "save_local_only",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["results"][0]["status"] == "success"
+
+
 # ---------------------------------------------------------------------------
 # Reusable workflow import (issue: reusable workflows silently lost on import)
 # ---------------------------------------------------------------------------

@@ -721,7 +721,9 @@ def _find_project_by_name(db: Session, github_user: str, project_name: str):
             Project.project_name.ilike(project_name.strip())
         ).first()
 
-    # Non-admin members (member, read_only): check ProjectMembership for explicit project access
+    # Non-admin members (member, read_only): an explicit grant resolves first,
+    # so a name the caller was granted wins over a same-named project they only
+    # see by virtue of membership.
     if member and member.workspace_role in ("member", "read_only"):
         project = db.query(Project).join(
             ProjectMembership, ProjectMembership.project_id == Project.project_id
@@ -732,11 +734,29 @@ def _find_project_by_name(db: Session, github_user: str, project_name: str):
         if project:
             return project
 
-    # Non-privileged: ownership-based lookup only
-    return db.query(Project).filter(
+    # Non-privileged: ownership-based lookup.
+    owned = db.query(Project).filter(
         Project.user_id == account.user_id,
         Project.project_name.ilike(project_name.strip()),
     ).first()
+    if owned:
+        return owned
+
+    # A full member sees every project in this single-workspace model, so a name
+    # they hold no grant for still resolves. read_only does not.
+    #
+    # Last, deliberately. Project names are unique per owner, not globally, so
+    # resolving workspace-wide ahead of the owner-scoped lookup above would make
+    # a caller's own project unreachable by name and hand them somebody else's
+    # same-named one. The fast path at the top of this function is an exact
+    # match, so a caller asking for their own project in different casing
+    # reaches the owner-scoped query here rather than a stranger's.
+    if member and member.workspace_role == "member":
+        return db.query(Project).filter(
+            Project.project_name.ilike(project_name.strip())
+        ).first()
+
+    return None
 
 def count_project_workflows(user: str, project_name: str) -> int:
     """Helper function to count regular workflows for a project"""
@@ -3185,7 +3205,12 @@ def resolve_drift(
         
         if not project:
             raise HTTPException(status_code=404, detail=PROJECT_ERROR)
-        
+
+        # Resolving the project was the whole access check here. Drift
+        # resolution writes: "use_github" stores caller-supplied content into
+        # workflow_yaml, and the other modes commit to the repositories.
+        _require_project_editor(db, github_user, project)
+
         workflow = (
             db.query(Workflow)
             .join(ProjectWorkflow, Workflow.workflow_id == ProjectWorkflow.workflow_id)
@@ -3476,6 +3501,65 @@ def _require_project_editor(db: Session, github_user: str, project: Project) -> 
         raise HTTPException(status_code=403, detail=_ERR_INSUFFICIENT_PROJECT_ROLE)
 
 
+def require_project_write_access(db: Session, request, github_user: str, project_name: str) -> Project:
+    """Prove the caller is who they claim, and may write to this project.
+
+    For routes that take the caller's own name as a client-supplied field and
+    then act with that user's GitHub token. Three things have to hold, and the
+    secrets, environment-variable and ruleset modules were checking none of
+    them:
+
+    1. the session owns the name it was given - the parameter is chosen by the
+       caller, so it proves nothing on its own (see assert_session_owns_user);
+    2. the project resolves for *this* caller, through the access-aware lookup
+       rather than a bare global name match;
+    3. the caller holds project_editor on it, because every route using this
+       writes to GitHub or to the project's stored configuration.
+
+    Returns the resolved project so callers need not look it up twice.
+    """
+    auth_module.assert_session_owns_user(github_user, request, db)
+    project = _find_project_by_name(db, github_user, project_name)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")
+    _require_project_editor(db, github_user, project)
+    return project
+
+
+def require_repo_write_access(db: Session, request, github_user: str, repo_name: str) -> Project:
+    """Prove write access for a route that names a repository and no project.
+
+    Deployment environments are created on a repository, so these routes carry
+    no project_name to gate on. The rule that does apply: a caller may
+    configure a repository when it belongs to at least one project they can
+    edit. Without that, the repository is not theirs to configure *through
+    ActionsManager*, whatever their own GitHub token would allow — which is the
+    boundary these routes were relying on, and it is GitHub's, not ours.
+
+    Returns the project that granted access, for callers that want to log it.
+    """
+    auth_module.assert_session_owns_user(github_user, request, db)
+
+    repo = db.query(Repo).filter(Repo.repo_name == (repo_name or "").strip()).first()
+    if not repo:
+        raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
+
+    linked = (
+        db.query(Project)
+        .join(ProjectRepo, ProjectRepo.project_id == Project.project_id)
+        .filter(ProjectRepo.repo_id == repo.repo_id)
+        .all()
+    )
+    for project in linked:
+        try:
+            _require_project_editor(db, github_user, project)
+            return project
+        except HTTPException:
+            continue
+
+    raise HTTPException(status_code=403, detail=_ERR_INSUFFICIENT_PROJECT_ROLE)
+
+
 def _require_repo_in_project(db: Session, project: Project, repo_name: str, github_user: str) -> None:
     """Require that *repo_name* is a repository this project may write to.
 
@@ -3530,6 +3614,32 @@ def _require_owned_repo(db: Session, project: Project, repo_name: str) -> None:
     _require_owned_repo_format(repo_name)
     if not _project_owns_repo(db, project, repo_name):
         raise HTTPException(status_code=400, detail=_ERR_REPO_NOT_IN_PROJECT)
+
+
+def _require_recorded_pull_request(
+    db: Session, project: Project, repo_name: str, pr_number: int
+) -> ProjectPullRequest:
+    """Require that this project actually opened *pr_number* in *repo_name*.
+
+    Merge and close took both straight from the request and checked neither
+    against the project, so the target was caller-chosen. Every legitimate
+    caller works from the project's own PR list, and _handle_merged_pull_request
+    already looks this row up - it just tolerated the row being absent while
+    still running the "no open PRs left" transitions afterwards, so merging an
+    unrecorded pull request could move project and workflow state off the back
+    of an unrelated merge.
+    """
+    pr_record = db.query(ProjectPullRequest).filter_by(
+        project_id=project.project_id,
+        repo_name=repo_name.strip(),
+        pr_number=pr_number,
+    ).first()
+    if not pr_record:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No pull request #{pr_number} is recorded for this project in {repo_name}",
+        )
+    return pr_record
 
 
 def _record_drift_check_failure(db: Session, project: Project, message: str) -> None:
@@ -5284,18 +5394,53 @@ def _mark_codeowners_committed(db: Session, project_id: int, repo_id: int, new_s
         db.rollback()
 
 
-def _includes_regular_workflows(payload) -> bool:
+def _owned_reusable_selected(project: Project, payload, db: Session) -> list:
+    """Reusable workflows this project owns and this run selected.
+
+    What decides where a workflow is delivered is whether the project *owns* it,
+    not whether it carries the reusable label. A workflow a standard project
+    owns lives in that project's own repositories, so it is delivered with the
+    rest of the files that project changed. Only a workflow LINKED from a
+    Reusable Workflow Project belongs in that project's repository instead.
+
+    RWX projects are left alone: their own repo is already what
+    _get_reusable_workflow_repo resolves to, and their prefix handling differs.
+    """
+    if project.project_type == "rwx" or payload.selected_reusable_workflows is None:
+        return []
+    owned = db.query(Workflow).join(ProjectWorkflow).filter(
+        ProjectWorkflow.project_id == project.project_id,
+        Workflow.reusable_workflow == True
+    ).all()
+    selected_norm = {
+        _normalize_reusable_workflow_name(n) for n in payload.selected_reusable_workflows
+    }
+    return [
+        w for w in owned
+        if _normalize_reusable_workflow_name(w.workflow_name) in selected_norm
+    ]
+
+
+def _includes_regular_workflows(payload, project: Optional[Project] = None,
+                                db: Optional[Session] = None) -> bool:
     """Whether this run delivers to the project's caller repos at all.
 
     Regular workflows are included when the caller explicitly listed
     selected_workflows, or when neither workflow type was requested (the
-    backward-compatible default). A reusable-only run never touches the caller
-    repos, so they are not targets of that campaign.
+    backward-compatible default).
+
+    A run carrying reusable workflows the project *owns* also targets those
+    repos, because that is where they live — pass project and db to have that
+    counted. Only a linked-reusable-only run leaves the caller repos untouched.
     """
-    return (
+    if (
         payload.selected_workflows is not None
         or payload.selected_reusable_workflows is None
-    )
+    ):
+        return True
+    if project is None or db is None:
+        return False
+    return bool(_owned_reusable_selected(project, payload, db))
 
 
 def _campaign_meta(payload, project: Project, db: Session,
@@ -5330,6 +5475,7 @@ def _build_regular_workflow_results(project: Project, payload: "CreatePullReques
     custom_files = custom_files or []
     workflow_dicts = []
     selected_names = []
+    delivered: list = []
     if include_regular:
         all_regular_workflows = db.query(Workflow).join(ProjectWorkflow).filter(
             ProjectWorkflow.project_id == project.project_id,
@@ -5338,6 +5484,14 @@ def _build_regular_workflow_results(project: Project, payload: "CreatePullReques
         regular_workflows = all_regular_workflows
         if payload.selected_workflows is not None:
             regular_workflows = [w for w in regular_workflows if w.workflow_name in payload.selected_workflows]
+        delivered = list(regular_workflows)
+
+    # A reusable workflow this project owns lives in these same repositories, so
+    # it travels with them. Disjoint from the query above, which excludes
+    # reusable rows, so no deduplication is needed.
+    delivered.extend(_owned_reusable_selected(project, payload, db))
+
+    if delivered:
         workflow_dicts = [
             {"name": w.workflow_name, "content": w.workflow_yaml,
              "pending_delete": bool(w.pending_delete),
@@ -5346,9 +5500,9 @@ def _build_regular_workflow_results(project: Project, payload: "CreatePullReques
              # the pull request shows a rename rather than an unrelated new
              # file plus an orphan.
              "renamed_from": w.renamed_from}
-            for w in regular_workflows if w.workflow_name and w.workflow_yaml
+            for w in delivered if w.workflow_name and w.workflow_yaml
         ]
-        selected_names = [w.workflow_name for w in regular_workflows if w.workflow_name]
+        selected_names = [w.workflow_name for w in delivered if w.workflow_name]
 
     if not workflow_dicts and not custom_files and not codeowners_files:
         return {}, []
@@ -5440,11 +5594,19 @@ def _build_reusable_workflow_results(project: Project, payload: "CreatePullReque
     """
     if payload.selected_reusable_workflows is None:
         return {}, []
-    # Workflows owned directly by this project (RWX projects)
-    owned = db.query(Workflow).join(ProjectWorkflow).filter(
-        ProjectWorkflow.project_id == project.project_id,
-        Workflow.reusable_workflow == True
-    ).all()
+    # Workflows owned directly by this project (RWX projects).
+    #
+    # A standard project's own reusable workflows are deliberately NOT here:
+    # they live in that project's own repositories and are delivered with the
+    # rest of its files by _build_regular_workflow_results. Sending them here
+    # too would open a second pull request against the reusable-workflow repo
+    # for a file that is not in it.
+    owned = []
+    if project.project_type == "rwx":
+        owned = db.query(Workflow).join(ProjectWorkflow).filter(
+            ProjectWorkflow.project_id == project.project_id,
+            Workflow.reusable_workflow == True
+        ).all()
     # Workflows linked from RWX projects (standard projects)
     linked_rows = db.query(Workflow, LinkedReusableWorkflow, Project).join(
         LinkedReusableWorkflow, LinkedReusableWorkflow.workflow_id == Workflow.workflow_id
@@ -5791,7 +5953,7 @@ def _run_create_pull_requests_async(task_id: str, payload: CreatePullRequestsReq
             pr_count, campaign_id = _save_prs_and_update_status(
                 results, project, selected_workflow_names, selected_reusable_workflow_names, db,
                 github_user=github_user, custom_file_ids=custom_file_ids,
-                repo_names=repo_names if _includes_regular_workflows(payload) else [],
+                repo_names=repo_names if _includes_regular_workflows(payload, project, db) else [],
                 campaign_name=payload.campaign_name, campaign_description=payload.campaign_description,
             )
 
@@ -5826,7 +5988,7 @@ def _run_create_pull_requests_async(task_id: str, payload: CreatePullRequestsReq
         pr_campaign_tasks[task_id]["error"] = str(e)
 
 
-@router.post("/api/create-pull-requests", responses=_responses(400, 401, 404, 409, 500))
+@router.post("/api/create-pull-requests", responses=_responses(400, 401, 403, 404, 409, 500))
 def create_pull_requests(
     payload: CreatePullRequestsRequest,
     background_tasks: BackgroundTasks,
@@ -5845,6 +6007,15 @@ def create_pull_requests(
     if github_user is None:
         github_user = _resolve_github_user(x_github_user, payload.github_user)
 
+    token, project = _get_project_and_token(payload, db, github_user=github_user)
+    # A campaign commits workflow files and opens pull requests across every
+    # repository in the project, so proving the caller can *see* it is not
+    # enough - _get_project_and_token never reads ProjectMembership.project_role.
+    # Same reasoning as drift resolution and campaign rollback, which write to
+    # GitHub for the same reason. Resolved before the async branch so a
+    # read-only member gets a 403 rather than a task id that fails out of sight.
+    _require_project_editor(db, github_user, project)
+
     if payload.async_mode:
         task_id = str(uuid.uuid4())
         pr_campaign_tasks[task_id] = {
@@ -5857,7 +6028,6 @@ def create_pull_requests(
         return {"task_id": task_id, "status": "running"}
 
     try:
-        token, project = _get_project_and_token(payload, db, github_user=github_user)
         _ensure_preflight_allows_campaign(project, github_user=github_user, token=token, db=db)
         repo_names = _get_filtered_repo_names(project, payload.selected_repos, db)
         headers = {
@@ -5882,7 +6052,7 @@ def create_pull_requests(
         pr_count, campaign_id = _save_prs_and_update_status(
             results, project, selected_workflow_names, selected_reusable_workflow_names, db,
             github_user=github_user, custom_file_ids=custom_file_ids,
-            repo_names=repo_names if _includes_regular_workflows(payload) else [],
+            repo_names=repo_names if _includes_regular_workflows(payload, project, db) else [],
             campaign_name=payload.campaign_name, campaign_description=payload.campaign_description,
         )
         if has_codeowners and campaign_id is None:
@@ -5933,6 +6103,9 @@ def run_preflight_validation(
     github_user = _resolve_github_user(x_github_user, payload.github_user)
     try:
         token, project = _get_project_and_token(payload, db, github_user=github_user)
+        # Preflight opens a pull request in the validation repository, so it is a
+        # GitHub write and needs the same gate as the campaign it validates.
+        _require_project_editor(db, github_user, project)
         validation_repo = _get_validation_repo_name(project, db)
         if not validation_repo:
             raise HTTPException(status_code=400, detail="Preflight validation is not configured.")
@@ -6574,6 +6747,9 @@ def close_preflight_validation_pr(
         project = _find_project_by_name(db, github_user, payload.project_name)
         if not project:
             raise HTTPException(status_code=404, detail=PROJECT_ERROR)
+        # Closing the validation PR writes to GitHub and can delete its source
+        # branch, so it needs the same gate as running preflight.
+        _require_project_editor(db, github_user, project)
 
         pr_url = project.last_preflight_pr_url
         if not pr_url:
@@ -6637,6 +6813,13 @@ def merge_preflight_validation_pr(
     github_user = _resolve_github_user(x_github_user, payload.github_user)
     try:
         project = _find_project_by_name(db, github_user, payload.project_name)
+        if not project:
+            raise HTTPException(status_code=404, detail=PROJECT_ERROR)
+        # Merging the validation PR sets preflight to approved, and approved
+        # preflight is what _ensure_preflight_allows_campaign checks before a
+        # campaign may run. Without this the gate on running preflight can be
+        # walked around by the role it exists to stop.
+        _require_project_editor(db, github_user, project)
 
         owner, repo, pr_number, headers, _ = _validate_merge_preflight_request(
             github_user, project, db
@@ -7478,7 +7661,7 @@ def _handle_merged_pull_request(*, response, project, repo_name, pr_number, owne
     }
 
 
-@router.put("/api/merge-pull-request", responses=_responses(400, 401, 404, 500))
+@router.put("/api/merge-pull-request", responses=_responses(400, 401, 403, 404, 500))
 def merge_pull_request(
     payload: MergePullRequestRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -7510,7 +7693,10 @@ def merge_pull_request(
         # Validate repo_name format
         if "/" not in repo_name:
             raise HTTPException(status_code=400, detail="Invalid repository name format. Expected 'owner/repo'")
-        
+
+        _require_project_editor(db, github_user, project)
+        _require_recorded_pull_request(db, project, repo_name, pr_number)
+
         owner, repo = repo_name.split("/", 1)
         
         # Merge PR using GitHub API
@@ -7570,7 +7756,7 @@ def merge_pull_request(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/close-pull-request", responses=_responses(400, 401, 404, 500))
+@router.patch("/api/close-pull-request", responses=_responses(400, 401, 403, 404, 500))
 def close_pull_request(
     payload: ClosePullRequestRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -7602,7 +7788,10 @@ def close_pull_request(
         # Validate repo_name format
         if "/" not in repo_name:
             raise HTTPException(status_code=400, detail="Invalid repository name format. Expected 'owner/repo'")
-        
+
+        _require_project_editor(db, github_user, project)
+        _require_recorded_pull_request(db, project, repo_name, pr_number)
+
         owner, repo = repo_name.split("/", 1)
         
         # Close PR using GitHub API
@@ -12267,7 +12456,11 @@ async def restore_workflow_version(
         
         if not project:
             raise HTTPException(status_code=404, detail=PROJECT_ERROR)
-        
+
+        # Restoring overwrites workflow_yaml with a stored version and zeroes
+        # the git hash, so it is a write like any other.
+        _require_project_editor(db, payload.github_user, project)
+
         # Find workflow within this project
         workflow = db.query(Workflow).join(ProjectWorkflow).filter(
             ProjectWorkflow.project_id == project.project_id,

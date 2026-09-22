@@ -52,6 +52,10 @@ interface SidebarProps {
   repositoryVisibilityScope?: 'public' | 'private';
   usePrefix?: boolean;
   isReadOnly?: boolean;
+  /** Project Configs is workspace-admin only. Distinct from isReadOnly, which
+   *  is true for a project_viewer — an *editor* does not get this section
+   *  either, so the two cannot be collapsed into one flag. */
+  isWorkspaceAdmin?: boolean;
   onLinkReusableWorkflow?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -97,6 +101,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   repositoryVisibilityScope,
   usePrefix,
   isReadOnly,
+  isWorkspaceAdmin = false,
   onLinkReusableWorkflow,
   isCollapsed,
   onToggleCollapse,
@@ -299,8 +304,13 @@ const Sidebar: React.FC<SidebarProps> = ({
           })}
         </div>
 
-        {/* Bottom section: Project Configs – pinned to bottom, Jira-style */}
-        {(projectType === 'standard' || projectType === 'rwx') && (
+        {/* Bottom section: Project Configs – pinned to bottom, Jira-style.
+            Workspace admins only: this group manages the project itself —
+            members, drift configuration, export, deletion — rather than the
+            work inside it. Editors and viewers do not see it at all. The
+            sections are guarded where they render too; hiding a button is not
+            access control. */}
+        {isWorkspaceAdmin && (projectType === 'standard' || projectType === 'rwx') && (
           <div className="mt-auto border-t border-slate-200 dark:border-slate-700 pt-4 space-y-1">
             <button
               className={`sidebar-item sidebar-group-header ${isProjectConfigActive ? 'active' : ''}`}

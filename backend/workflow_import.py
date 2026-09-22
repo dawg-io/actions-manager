@@ -16,10 +16,11 @@ All imported workflows use existing state model values:
 import re
 import requests
 import base64
+import traceback
 from datetime import datetime, timezone
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -718,6 +719,9 @@ def import_workflows(
     }
 
     import_results: List[ImportResult] = []
+    # A campaign carries reusable workflows in their own field, so the two kinds
+    # have to be told apart when the payload is built below.
+    reusable_stems: set = set()
 
     for item in payload.workflows:
         try:
@@ -831,6 +835,9 @@ def import_workflows(
                     latest_version.version_metadata = json.dumps(existing_meta)
                     db.commit()
 
+            if is_reusable:
+                reusable_stems.add(workflow_stem)
+
             import_results.append(ImportResult(
                 workflow_path=item.workflow_path,
                 source_repo=item.source_repo,
@@ -882,18 +889,45 @@ def import_workflows(
         if successful_workflow_names and effective_target_repos:
             try:
                 from workflows import create_pull_requests, CreatePullRequestsRequest
+                # Reusable workflows travel in their own field.
+                # _build_reusable_workflow_results covers both the ones this
+                # project owns and the ones it links from an RWX project, but
+                # only when selected_reusable_workflows is set - left None it
+                # returns nothing, which is how an imported reusable workflow
+                # used to end up saved and absent from every pull request.
+                #
+                # "or None" is load-bearing on both lines: None means "no
+                # workflows of this kind", while an empty list would still mark
+                # this a regular-workflow run (see _includes_regular_workflows).
+                regular_names = [
+                    n for n in successful_workflow_names if n not in reusable_stems
+                ]
+                reusable_names = [
+                    n for n in successful_workflow_names if n in reusable_stems
+                ]
                 pr_payload = CreatePullRequestsRequest(
                     github_user=payload.github_user,
                     project_name=payload.project_name,
                     selected_repos=effective_target_repos,
-                    selected_workflows=successful_workflow_names,
+                    selected_workflows=regular_names or None,
+                    selected_reusable_workflows=reusable_names or None,
                 )
-                # Call the existing PR creation function directly
-                pr_response = create_pull_requests(pr_payload, db=db)
+                # create_pull_requests is a route function
+                # (payload, background_tasks, db, ...); called directly it needs
+                # background_tasks supplied positionally and db passed
+                # explicitly. async_mode defaults False, so BackgroundTasks()
+                # is never used.
+                pr_response = create_pull_requests(
+                    pr_payload, BackgroundTasks(), db, github_user=payload.github_user
+                )
                 pr_results = pr_response
                 # Refresh project state after PR creation
                 db.refresh(project)
             except Exception as e:
+                # This reported a signature error to the user as a campaign
+                # failure and to the logs not at all, which is how the call
+                # above stayed broken (#2070).
+                traceback.print_exc()
                 pr_results = {"error": str(e)}
 
     error_count = sum(1 for r in import_results if r.status == "error")

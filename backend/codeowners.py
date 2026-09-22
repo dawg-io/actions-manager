@@ -33,7 +33,7 @@ from models import (
     ProjectRepo,
     Repo,
 )
-from workflows import _find_project_by_name, _fetch_branch_protection
+from workflows import _find_project_by_name, _fetch_branch_protection, _require_project_editor
 
 
 router = APIRouter()
@@ -301,6 +301,10 @@ def save_codeowners_draft(
 ):
     """Save a CODEOWNERS draft to the database."""
     _, project = _resolve_caller_and_project(db, payload.github_user, payload.project_name, x_github_user)
+    # _resolve_caller_and_project proves who the caller is and that they can see
+    # the project; it never reads ProjectMembership.project_role. Saving the
+    # draft overwrites this project's stored CODEOWNERS content.
+    _require_project_editor(db, payload.github_user, project)
     repo = _resolve_repo_in_project(db, project, repo_ref)
     file_path = _validate_file_path(payload.file_path)
 
@@ -479,6 +483,10 @@ def deploy_codeowners(
         raise HTTPException(status_code=400, detail="mode must be 'direct' or 'pr'")
 
     token, project = _resolve_caller_and_project(db, payload.github_user, payload.project_name, x_github_user)
+    # Deploying commits CODEOWNERS to the project's repositories, directly on a
+    # branch or through a pull request, so it needs write access to the project
+    # rather than only the ability to see it.
+    _require_project_editor(db, payload.github_user, project)
     repo = _resolve_repo_in_project(db, project, repo_ref)
     owner, repo_short = _split_repo(repo.repo_name)
     headers = _gh_headers(token)

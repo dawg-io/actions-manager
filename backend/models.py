@@ -125,8 +125,10 @@ class WorkspaceMember(Base):
     Tracks which users belong to the Actions Manager workspace and their role.
     Roles:
       - admin: Full management access (original owner)
-      - member: Standard user — can view and edit assigned projects
-      - read_only: Can view but cannot modify (default for new users)
+      - member: Sees every project in the workspace; edits the ones a
+        ProjectMembership row grants them project_editor on
+      - read_only: Sees only explicitly granted projects, and never writes
+        (WriteProtectionMiddleware refuses non-safe methods outright)
     
     Designed so project-level permissions can be added cleanly in Phase 2
     via a separate ProjectMemberPermission table referencing this membership.
@@ -597,9 +599,13 @@ class ProjectMembership(Base):
       - project_editor: can edit workflows, create PRs, manage project config
       - project_viewer: read-only access to the project
 
-    Admins bypass this table and have implicit full access to
-    all projects.  This table is only consulted for read_only workspace members
-    who need explicit per-project grants.
+    Admins bypass this table and have implicit full access to all projects.
+
+    For a ``member``, this table grants *write* access: they already see every
+    project in the workspace as a viewer, and a row here raises them to
+    project_editor on one of them. For a ``read_only`` member it is the only way
+    in at all - without a row they see nothing, and the middleware refuses their
+    writes regardless of what a row says.
 
     Designed for future extensibility (e.g. teams, additional roles).
     """

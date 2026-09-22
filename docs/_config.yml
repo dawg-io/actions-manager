@@ -65,22 +65,18 @@ defaults:
 # Exclude from build
 exclude:
   - ARCHITECTURE.md
-  - CLOUD_DEPLOYMENT.md
   - DEPLOYMENT.md
   - DEPLOYMENT_GUIDE_INDEX.md
   - DEVELOPMENT.md
-  - DOCUMENTATION_CLEANUP_SUMMARY.md
   - ENVIRONMENT_VARIABLES.md
   - FRONTEND_DEVELOPMENT.md
   - GITHUB_PAT_SETUP.md
   - GITHUB_PERMISSION_VALIDATION.md
-  - LICENSE_KEYS.md
   - QUICK_START.md
   - SELF_HOSTED_INSTALL.md
   - TROUBLESHOOTING.md
   - archive/
   - guides/
-  - pipeline/
   - Gemfile
   - Gemfile.lock
   - node_modules

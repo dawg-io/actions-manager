@@ -392,3 +392,28 @@ class TestStoreEnvVarNamesInDb:
         if mock_db.add_all.called:
             added_records = mock_db.add_all.call_args[0][0]
             assert len(added_records) == 0
+
+
+# ---------------------------------------------------------------------------
+# These tests call the route functions directly with a mock request object.
+#
+# The write routes now prove the caller's identity against the session and
+# require project_editor on the project, neither of which a mock request can
+# satisfy - and neither of which is what these tests cover: they exercise the
+# CRUD behaviour of the routes. Authorization has its own tests, which drive
+# the real application rather than calling the functions.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _bypass_write_authorization():
+    import contextlib
+    from unittest.mock import patch as _patch
+    import github_env_vars as _mod
+
+    with contextlib.ExitStack() as stack:
+        for name in ("require_project_write_access", "require_repo_write_access"):
+            if hasattr(_mod, name):
+                stack.enter_context(_patch.object(_mod, name, return_value=None))
+        stack.enter_context(
+            _patch.object(_mod.auth_module, "assert_session_owns_user", return_value=None)
+        )
+        yield

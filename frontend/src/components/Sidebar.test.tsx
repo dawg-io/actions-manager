@@ -8,11 +8,48 @@ import Sidebar from './Sidebar';
 const topLevelSections = ['Project Files', 'PR Campaigns', 'Build Metrics'];
 
 describe('Sidebar', () => {
+  describe('Project Configs is workspace-admin only', () => {
+    // This group manages the project itself — members, drift configuration,
+    // export, deletion — rather than the work inside it. Editors and viewers
+    // do not see it at all, which is why it cannot key off isReadOnly: that
+    // is false for an editor.
+    test('a viewer does not see the group', () => {
+      render(<Sidebar projectType="standard" isReadOnly isCollapsed={false} />);
+      expect(screen.queryByRole('button', { name: /Project Configs/i })).not.toBeInTheDocument();
+    });
+
+    test('an editor does not see it either', () => {
+      // isReadOnly false and still not an admin — the case a single
+      // read-only flag would have got wrong.
+      render(<Sidebar projectType="standard" isReadOnly={false} isCollapsed={false} />);
+      expect(screen.queryByRole('button', { name: /Project Configs/i })).not.toBeInTheDocument();
+    });
+
+    test('an admin sees it', () => {
+      render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
+      expect(screen.getByRole('button', { name: /Project Configs/i })).toBeInTheDocument();
+    });
+
+    test('an rwx project hides it from non-admins too', () => {
+      render(<Sidebar projectType="rwx" isCollapsed={false} />);
+      expect(screen.queryByRole('button', { name: /Project Configs/i })).not.toBeInTheDocument();
+    });
+
+    test('hiding the group hides its sections, not just the header', () => {
+      render(<Sidebar projectType="standard" isCollapsed={false} />);
+      for (const label of [/Project Info/i, /Project Members/i, /Drift Detection/i,
+                           /Export Config/i, /Danger Zone/i]) {
+        expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+      }
+    });
+  });
+
   const user = userEvent.setup();
 
   test('expanded vs collapsed header & project code display', () => {
     const { rerender } = render(
       <Sidebar
+        isWorkspaceAdmin
         isCollapsed={false}
         projectCode="PRJ"
       />
@@ -23,7 +60,7 @@ describe('Sidebar', () => {
     expect(screen.getByText(/Project Key: PRJ/)).toBeInTheDocument();
 
     // Collapse
-    rerender(<Sidebar isCollapsed projectCode="PRJ" />);
+    rerender(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" />);
 
     // Collapsed: shield icon-only logo still rendered, project code shown but
     // not the long "Project Key:" line
@@ -37,6 +74,7 @@ describe('Sidebar', () => {
     const onProjectNameSave = vi.fn();
     render(
       <Sidebar
+        isWorkspaceAdmin
         isCollapsed={false}
         projectName="ABC"
         onProjectNameSave={onProjectNameSave}
@@ -60,7 +98,7 @@ describe('Sidebar', () => {
     const onToggleCollapse = vi.fn();
 
     const { rerender, container } = render(
-      <Sidebar isCollapsed={false} onToggleCollapse={onToggleCollapse} />
+      <Sidebar isWorkspaceAdmin isCollapsed={false} onToggleCollapse={onToggleCollapse} />
     );
 
     // Expanded state -> title says "Collapse sidebar"
@@ -76,14 +114,14 @@ describe('Sidebar', () => {
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
     // Collapsed state -> title says "Expand sidebar", toggle remains visible
-    rerender(<Sidebar isCollapsed onToggleCollapse={onToggleCollapse} />);
+    rerender(<Sidebar isWorkspaceAdmin isCollapsed onToggleCollapse={onToggleCollapse} />);
     const expandBtnCollapsed = screen.getByTitle('Expand sidebar');
     expect(expandBtnCollapsed).toBeInTheDocument();
     expect(container.querySelector('.sidebar-header .sidebar-collapse-button')).toBe(expandBtnCollapsed);
   });
 
   test('in collapsed mode, top-level section buttons expose labels via title and hide text labels', () => {
-    render(<Sidebar isCollapsed />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed />);
 
     for (const label of topLevelSections) {
       expect(screen.getByTitle(label)).toBeInTheDocument();
@@ -93,7 +131,7 @@ describe('Sidebar', () => {
 
   test('clicking Project Files calls onSectionChange with workflows key', async () => {
     const onSectionChange = vi.fn();
-    render(<Sidebar projectType="rwx" onSectionChange={onSectionChange} isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" onSectionChange={onSectionChange} isCollapsed={false} />);
 
     await user.click(screen.getByRole('button', { name: /Project Files/i }));
     expect(onSectionChange).toHaveBeenCalledWith('workflows');
@@ -101,7 +139,7 @@ describe('Sidebar', () => {
 
   test('clicking Build Metrics routes to the build metrics view', async () => {
     const onSectionChange = vi.fn();
-    render(<Sidebar onSectionChange={onSectionChange} isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin onSectionChange={onSectionChange} isCollapsed={false} />);
 
     await user.click(screen.getByRole('button', { name: /Build Metrics/i }));
     expect(onSectionChange).toHaveBeenCalledWith('build-metrics');
@@ -109,7 +147,7 @@ describe('Sidebar', () => {
 
   test('sidebar shows PR Campaigns and routes to PR campaign view', async () => {
     const onSectionChange = vi.fn();
-    render(<Sidebar projectType="rwx" onSectionChange={onSectionChange} isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" onSectionChange={onSectionChange} isCollapsed={false} />);
 
     expect(screen.queryByText('PR History')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /PR Campaigns/i }));
@@ -117,37 +155,37 @@ describe('Sidebar', () => {
   });
 
   test('standard project does not show Linked Workflows nav item (moved to Add Workflow flow)', async () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     // Project Configs group must be expanded first to reveal sub-items
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.queryByRole('button', { name: /Linked Workflows/i })).not.toBeInTheDocument();
   });
 
   test('rwx project does not show Linked Workflows nav item', async () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} />);
     // Expand Project Configs to check its children
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.queryByRole('button', { name: /Linked Workflows/i })).not.toBeInTheDocument();
   });
 
   test('when collapsed, Project Configs group header is accessible via title only', () => {
-    render(<Sidebar projectType="standard" isCollapsed />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed />);
     expect(screen.getByTitle('Project Configs')).toBeInTheDocument();
     expect(screen.queryByText('Project Configs')).not.toBeInTheDocument();
   });
 
   test('standard project shows Project Configs group header', () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     expect(screen.getByRole('button', { name: /Project Configs/i })).toBeInTheDocument();
   });
 
   test('rwx project shows Project Configs group header', () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} />);
     expect(screen.getByRole('button', { name: /Project Configs/i })).toBeInTheDocument();
   });
 
   test('Project Configs group expands and collapses on click', async () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     const groupHeader = screen.getByRole('button', { name: /Project Configs/i });
 
     // Initially collapsed – Project Info not visible
@@ -163,18 +201,18 @@ describe('Sidebar', () => {
   });
 
   test('Project Configs group auto-expands when active section is project-info', () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} activeSection="project-info" />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} activeSection="project-info" />);
     expect(screen.getByRole('button', { name: /Project Info/i })).toBeInTheDocument();
   });
 
   test('rwx project shows Linked Projects nav item', async () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} />);
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.getByRole('button', { name: /Linked Projects/i })).toBeInTheDocument();
   });
 
   test('standard project does not show Linked Projects nav item', async () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.queryByRole('button', { name: /Linked Projects/i })).not.toBeInTheDocument();
   });
@@ -183,6 +221,7 @@ describe('Sidebar', () => {
     const onSectionChange = vi.fn();
     render(
       <Sidebar
+        isWorkspaceAdmin
         projectType="rwx"
         onSectionChange={onSectionChange}
         isCollapsed={false}
@@ -195,24 +234,24 @@ describe('Sidebar', () => {
   });
 
   test('Project Configs group auto-expands when active section is linked-projects', () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} activeSection="linked-projects" />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} activeSection="linked-projects" />);
     expect(screen.getByRole('button', { name: /Linked Projects/i })).toBeInTheDocument();
   });
 
   test('when collapsed, Linked Projects is accessible via title only', () => {
-    render(<Sidebar projectType="rwx" isCollapsed activeSection="linked-projects" />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed activeSection="linked-projects" />);
     expect(screen.getByTitle('Linked Projects')).toBeInTheDocument();
     expect(screen.queryByText('Linked Projects')).not.toBeInTheDocument();
   });
 
   test('standard project shows Danger Zone nav item', async () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.getByRole('button', { name: /Danger Zone/i })).toBeInTheDocument();
   });
 
   test('rwx project shows Danger Zone nav item', async () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} />);
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.getByRole('button', { name: /Danger Zone/i })).toBeInTheDocument();
   });
@@ -221,6 +260,7 @@ describe('Sidebar', () => {
     const onSectionChange = vi.fn();
     render(
       <Sidebar
+        isWorkspaceAdmin
         projectType="standard"
         onSectionChange={onSectionChange}
         isCollapsed={false}
@@ -232,12 +272,12 @@ describe('Sidebar', () => {
   });
 
   test('Project Configs group auto-expands when active section is danger-zone', () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} activeSection="danger-zone" />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} activeSection="danger-zone" />);
     expect(screen.getByRole('button', { name: /Danger Zone/i })).toBeInTheDocument();
   });
 
   test('when collapsed, Danger Zone is accessible via title only', () => {
-    render(<Sidebar projectType="standard" isCollapsed activeSection="danger-zone" />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed activeSection="danger-zone" />);
     expect(screen.getByTitle('Danger Zone')).toBeInTheDocument();
     expect(screen.queryByText('Danger Zone')).not.toBeInTheDocument();
   });
@@ -245,34 +285,34 @@ describe('Sidebar', () => {
   // --- Mode badge (usePrefix) ---
 
   test('expanded sidebar shows prefix mode badge when usePrefix=true', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" usePrefix={true} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" usePrefix={true} />);
     expect(screen.getByRole('generic', { name: /Resource naming mode: Prefix Mode/i })).toBeInTheDocument();
   });
 
   test('expanded sidebar shows no-prefix mode badge when usePrefix=false', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" usePrefix={false} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" usePrefix={false} />);
     expect(screen.getByRole('generic', { name: /Resource naming mode: No Prefix Mode/i })).toBeInTheDocument();
   });
 
   test('expanded sidebar omits mode badge when usePrefix is not provided', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" />);
     expect(screen.queryByRole('generic', { name: /Resource naming mode:/i })).not.toBeInTheDocument();
   });
 
   test('collapsed sidebar title includes mode when usePrefix=true', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" usePrefix={true} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" usePrefix={true} />);
     const el = screen.getByTitle(/Project Key: PRJ.*Prefix Mode/);
     expect(el).toBeInTheDocument();
   });
 
   test('collapsed sidebar title includes mode when usePrefix=false', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" usePrefix={false} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" usePrefix={false} />);
     const el = screen.getByTitle(/Project Key: PRJ.*No Prefix Mode/);
     expect(el).toBeInTheDocument();
   });
 
   test('collapsed sidebar title omits mode when usePrefix is not provided', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" />);
     const el = screen.getByTitle(/Project Key: PRJ/);
     expect(el).toBeInTheDocument();
   });
@@ -280,28 +320,28 @@ describe('Sidebar', () => {
   // --- Project Type badge ---
 
   test('expanded sidebar shows project type badge for standard type', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" projectType="standard" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" projectType="standard" />);
     expect(screen.getByRole('generic', { name: /Project type: Caller Workflow Project/i })).toBeInTheDocument();
   });
 
   test('expanded sidebar shows project type badge for rwx type', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" projectType="rwx" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" projectType="rwx" />);
     expect(screen.getByRole('generic', { name: /Project type: Reusable Workflow Project/i })).toBeInTheDocument();
   });
 
   test('expanded sidebar defaults to standard project type badge when projectType is not provided', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" />);
     expect(screen.getByRole('generic', { name: /Project type: Caller Workflow Project/i })).toBeInTheDocument();
   });
 
   test('collapsed sidebar title includes project type for standard', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" projectType="standard" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" projectType="standard" />);
     const el = screen.getByTitle(/Caller Workflow Project/);
     expect(el).toBeInTheDocument();
   });
 
   test('collapsed sidebar title includes project type for rwx', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" projectType="rwx" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" projectType="rwx" />);
     const el = screen.getByTitle(/Reusable Workflow Project/);
     expect(el).toBeInTheDocument();
   });
@@ -309,13 +349,13 @@ describe('Sidebar', () => {
   // --- Project Info nav item ---
 
   test('standard project shows Project Info nav item inside Project Configs', async () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.getByRole('button', { name: /Project Info/i })).toBeInTheDocument();
   });
 
   test('rwx project shows Project Info nav item inside Project Configs', async () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} />);
     await user.click(screen.getByRole('button', { name: /Project Configs/i }));
     expect(screen.getByRole('button', { name: /Project Info/i })).toBeInTheDocument();
   });
@@ -324,6 +364,7 @@ describe('Sidebar', () => {
     const onSectionChange = vi.fn();
     render(
       <Sidebar
+        isWorkspaceAdmin
         projectType="standard"
         onSectionChange={onSectionChange}
         isCollapsed={false}
@@ -335,17 +376,17 @@ describe('Sidebar', () => {
   });
 
   test('Project Configs group auto-expands when activeSection is project-info (standard)', () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} activeSection="project-info" />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} activeSection="project-info" />);
     expect(screen.getByRole('button', { name: /Project Info/i })).toBeInTheDocument();
   });
 
   test('Project Configs group auto-expands when activeSection is project-info (rwx)', () => {
-    render(<Sidebar projectType="rwx" isCollapsed={false} activeSection="project-info" />);
+    render(<Sidebar isWorkspaceAdmin projectType="rwx" isCollapsed={false} activeSection="project-info" />);
     expect(screen.getByRole('button', { name: /Project Info/i })).toBeInTheDocument();
   });
 
   test('when collapsed, Project Info is accessible via title only', () => {
-    render(<Sidebar projectType="standard" isCollapsed activeSection="project-info" />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed activeSection="project-info" />);
     expect(screen.getByTitle('Project Info')).toBeInTheDocument();
     expect(screen.queryByText('Project Info')).not.toBeInTheDocument();
   });
@@ -353,28 +394,28 @@ describe('Sidebar', () => {
   // --- Read Only badge ---
 
   test('expanded sidebar shows read-only badge when isReadOnly=true', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" isReadOnly={true} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" isReadOnly={true} />);
     expect(screen.getByRole('generic', { name: /Access level: Read Only/i })).toBeInTheDocument();
   });
 
   test('expanded sidebar does not show read-only badge when isReadOnly is false', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" isReadOnly={false} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" isReadOnly={false} />);
     expect(screen.queryByRole('generic', { name: /Access level: Read Only/i })).not.toBeInTheDocument();
   });
 
   test('expanded sidebar does not show read-only badge when isReadOnly is not provided', () => {
-    render(<Sidebar isCollapsed={false} projectCode="PRJ" />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed={false} projectCode="PRJ" />);
     expect(screen.queryByRole('generic', { name: /Access level: Read Only/i })).not.toBeInTheDocument();
   });
 
   test('collapsed sidebar title includes read-only when isReadOnly=true', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" isReadOnly={true} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" isReadOnly={true} />);
     const el = screen.getByTitle(/Read Only/);
     expect(el).toBeInTheDocument();
   });
 
   test('collapsed sidebar title does not include read-only when isReadOnly is false', () => {
-    render(<Sidebar isCollapsed projectCode="PRJ" isReadOnly={false} />);
+    render(<Sidebar isWorkspaceAdmin isCollapsed projectCode="PRJ" isReadOnly={false} />);
     const el = screen.getByTitle(/Project Key: PRJ/);
     expect(el.title).not.toContain('Read Only');
   });
@@ -382,7 +423,7 @@ describe('Sidebar', () => {
   // --- Sidebar layout: Project Configs pinned to bottom ---
 
   test('Project Configs wrapper has mt-auto class (pinned to bottom)', () => {
-    const { container } = render(<Sidebar projectType="standard" isCollapsed={false} />);
+    const { container } = render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     const nav = container.querySelector('nav.sidebar-nav');
     expect(nav).not.toBeNull();
     // The bottom section containing Project Configs should have mt-auto
@@ -391,7 +432,7 @@ describe('Sidebar', () => {
   });
 
   test('Project Configs renders after Repository Configs items in DOM order', () => {
-    const { container } = render(<Sidebar projectType="standard" isCollapsed={false} />);
+    const { container } = render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     const nav = container.querySelector('nav.sidebar-nav')!;
     const buttons = Array.from(nav.querySelectorAll('button'));
     const reposAndBranchesIdx = buttons.findIndex(b => b.textContent?.includes('Repositories & Branches'));
@@ -405,7 +446,7 @@ describe('Sidebar', () => {
   // --- Repository Configs: flat first-class sidebar items ---
 
   test('Repository Configs are rendered as flat first-class sidebar items (no parent group)', () => {
-    render(<Sidebar projectType="standard" isCollapsed={false} />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} />);
     // The collapsible parent must be gone
     expect(screen.queryByRole('button', { name: /^Repository Configs$/i })).not.toBeInTheDocument();
     // Five repo config items (CODEOWNERS moved to Project Files editor)
@@ -427,6 +468,7 @@ describe('Sidebar', () => {
     const onSectionChange = vi.fn();
     render(
       <Sidebar
+        isWorkspaceAdmin
         projectType="standard"
         onSectionChange={onSectionChange}
         isCollapsed={false}
@@ -438,14 +480,14 @@ describe('Sidebar', () => {
 
   test('active repository-config item gets the active class', () => {
     render(
-      <Sidebar projectType="standard" isCollapsed={false} activeSection="environments" />
+      <Sidebar isWorkspaceAdmin projectType="standard" isCollapsed={false} activeSection="environments" />
     );
     const activeBtn = screen.getByRole('button', { name: /Deploy Environments/i });
     expect(activeBtn).toHaveClass('active');
   });
 
   test('when collapsed, repo config items remain reachable by accessible name (aria-label)', () => {
-    render(<Sidebar projectType="standard" isCollapsed />);
+    render(<Sidebar isWorkspaceAdmin projectType="standard" isCollapsed />);
     expect(
       screen.getByRole('button', { name: /Repositories & Branches/i })
     ).toBeInTheDocument();
@@ -456,7 +498,7 @@ describe('Sidebar', () => {
 
   describe('pending delivery count', () => {
     test('shows the count beside Repositories & Branches', () => {
-      render(<Sidebar projectType="standard" pendingDeliveryCount={2} />);
+      render(<Sidebar isWorkspaceAdmin projectType="standard" pendingDeliveryCount={2} />);
       const badge = screen.getByTestId('sidebar-pending-delivery-count');
       expect(badge).toHaveTextContent('2');
       expect(
@@ -467,7 +509,7 @@ describe('Sidebar', () => {
     });
 
     test('says "repository" for a single one', () => {
-      render(<Sidebar projectType="standard" pendingDeliveryCount={1} />);
+      render(<Sidebar isWorkspaceAdmin projectType="standard" pendingDeliveryCount={1} />);
       expect(
         screen.getByRole('button', {
           name: 'Repositories & Branches — 1 repository not delivered yet',
@@ -476,7 +518,7 @@ describe('Sidebar', () => {
     });
 
     test('hides the count at zero, leaving the plain label', () => {
-      render(<Sidebar projectType="standard" pendingDeliveryCount={0} />);
+      render(<Sidebar isWorkspaceAdmin projectType="standard" pendingDeliveryCount={0} />);
       expect(
         screen.queryByTestId('sidebar-pending-delivery-count'),
       ).not.toBeInTheDocument();
@@ -486,7 +528,7 @@ describe('Sidebar', () => {
     });
 
     test('badges one item only — never a second config section', () => {
-      render(<Sidebar projectType="standard" pendingDeliveryCount={3} />);
+      render(<Sidebar isWorkspaceAdmin projectType="standard" pendingDeliveryCount={3} />);
       expect(screen.getAllByTestId('sidebar-pending-delivery-count')).toHaveLength(1);
     });
   });

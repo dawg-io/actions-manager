@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { fetchProjects, loadProject, Project, linkReusableWorkflow, RwxWorkflow, LinkedStandardProject, updateProjectColor, updateProjectDriftConfig, updateProjectName, updateProjectOrder, exportProjectBackup } from "./api/projects";
 import { fetchDriftSettings, formatDriftInterval, DriftSettings, DEFAULT_DRIFT_SETTINGS, DRIFT_INTERVAL_OPTIONS } from "./api/driftSettings";
 import { deleteProjectEnhanced } from "./api/projectDeletion";
+import { campaignReusableWorkflows } from "./utils/campaignReusableWorkflows";
 import { handleSaveProjectWithModal, type UpdateResult } from "./api/handlers";
 import { getSecrets } from "./api/secrets";
 import { getEnvVars } from "./api/envVars";
@@ -56,6 +57,13 @@ const EMPTY_BUILD_TYPES: any[] = [];
 
 // Keys for the Repository Configs collapsible group (shared with Sidebar)
 const REPO_CONFIG_SECTION_KEYS = ['repos-and-branches', 'environments', 'envvars', 'secrets', 'rulesets'];
+// Workspace-admin only. Mirrors the two Project Configs groups in Sidebar.tsx
+// (standard and rwx), so a section reachable from that group is guarded here
+// whichever project type offers it.
+const PROJECT_CONFIG_SECTION_KEYS = new Set([
+  'project-info', 'project-members', 'linked-projects',
+  'drift-config', 'backup-export', 'danger-zone',
+]);
 
 // Delay (ms) before scrolling to a repo-config anchor after the stacked page renders
 const REPO_CONFIG_SCROLL_DELAY_MS = 50;
@@ -393,6 +401,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
 
   // project_viewer users or users with workspace-level read_only role should not be able to modify the project
   const isProjectReadOnly = callerProjectRole === "project_viewer" || userDetails?.workspace_role === "read_only";
+  // Project Configs manages the project itself — its members, drift
+  // configuration, export and deletion — rather than the work inside it, so it
+  // is workspace-admin only. Deliberately not derived from isProjectReadOnly:
+  // that is false for an editor, who still must not see this group. co_admin is
+  // included because is_project_admin() treats it as admin on the backend.
+  const isWorkspaceAdmin = userDetails?.workspace_role === "admin" || userDetails?.workspace_role === "co_admin";
 
   // In self-hosted beta, all users get add/edit access regardless of stored account_type.
   // On cloud, Free-tier users cannot add secrets/env vars (handled inside those components).
@@ -1762,7 +1776,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
 
   // Render all Repository Config sections as a single scrolling page with anchor IDs
   const renderRepoConfigsPage = (): React.ReactElement => {
-    return (
+    const page = (
       <div className="repo-configs-page">
         {/* Repositories & Branches */}
         <section
@@ -1892,6 +1906,26 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
         </section>
 
       </div>
+    );
+
+    if (!isProjectReadOnly) {
+      return page;
+    }
+
+    // A viewer reads these five panels and changes nothing on them. A disabled
+    // fieldset is the entire mechanism: HTML disables every descendant form
+    // control for free, so a control added to any of these panels later is
+    // covered without anyone remembering to gate it - which is how this got
+    // missed in the first place. Checked that none of the panels mutate from a
+    // non-form element (no onClick on div/span/a anywhere in them), since that
+    // is the one thing a fieldset would not catch.
+    //
+    // Not the security boundary. The server refuses these writes regardless;
+    // this stops a viewer being offered controls that would only fail.
+    return (
+      <fieldset disabled className="repo-configs-readonly" aria-label="Read-only project configuration">
+        {page}
+      </fieldset>
     );
   };
 
@@ -2165,6 +2199,15 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
       return renderRepoConfigsPage();
     }
 
+    // Project Configs is workspace-admin only. Hiding the sidebar group is for
+    // the eye; this is the check that matters, because activeSection can be
+    // reached directly rather than by clicking. Falls back to the project's
+    // files rather than erroring: a member who follows a stale link should land
+    // somewhere useful, not on a wall.
+    if (PROJECT_CONFIG_SECTION_KEYS.has(activeSection) && !isWorkspaceAdmin) {
+      return renderWorkflows();
+    }
+
     switch (activeSection) {
       case 'workflows':
         return renderWorkflows();
@@ -2427,6 +2470,7 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           repositoryVisibilityScope={repositoryVisibilityScope}
           usePrefix={usePrefix}
           isReadOnly={isProjectReadOnly}
+          isWorkspaceAdmin={isWorkspaceAdmin}
           onLinkReusableWorkflow={() => setShowLinkedWorkflowsModal(true)}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
@@ -2570,6 +2614,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                       <Button 
                         variant="outline"
                         onClick={addEnvVarFn}
+                        disabled={isProjectReadOnly}
+                        title={isProjectReadOnly ? "You have read-only access to this project" : undefined}
                       >
                         ➕ Add Environment Variable
                       </Button>
@@ -2585,6 +2631,8 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
                       <Button 
                         variant="outline"
                         onClick={addSecretFn}
+                        disabled={isProjectReadOnly}
+                        title={isProjectReadOnly ? "You have read-only access to this project" : undefined}
                       >
                         ➕ Add Secret
                       </Button>
@@ -2863,29 +2911,12 @@ function RepoSelector({ userDetails, onLogout }: RepoSelectorProps) {
           projectCode={projectCode}
           usePrefix={usePrefix}
           customFiles={customFiles}
-          reusableWorkflows={[
-            // RWX project's own workflows use the first selected repo as source.
-            // A caller project can own reusable workflows too (imported), but
-            // reusable delivery resolves the target through
-            // _get_reusable_workflow_repo, which for a standard project returns
-            // a linked RWX project's repo - or a fallback repo that may not
-            // exist - never one of this project's own. Offering them here would
-            // open a PR against a repository outside the project.
-            ...(projectType === 'rwx' ? rxworkflows : []).map((w) => ({
-              name: w.name,
-              status: w.workflowStatus,
-              sourceRepo: selectedRepos.length > 0 ? selectedRepos[0] : undefined
-            })),
-            // Linked workflows have their own source repo, and are already named
-            // by the project that owns them - in that project's naming mode, which
-            // may differ from this one's. This project's prefix must not be added.
-            ...linkedWorkflows.map((w) => ({
-              name: w.workflow_name,
-              status: w.workflowStatus,
-              sourceRepo: w.rwx_repo,
-              isLinked: true,
-            })),
-          ]}
+          reusableWorkflows={campaignReusableWorkflows({
+            projectType,
+            ownedReusable: rxworkflows,
+            linkedWorkflows,
+            selectedRepos,
+          })}
           validationRepo={validationRepo}
           preflightRequired={preflightRequired}
           preflightStatus={lastPreflightStatus}
