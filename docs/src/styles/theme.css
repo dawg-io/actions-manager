@@ -1,0 +1,156 @@
+/*
+ * ActionsManager brand theme. Starlight reads its dark palette from :root and
+ * its light palette from :root[data-theme='light'], so both are set here and
+ * its own theme toggle switches between them.
+ *
+ * Fonts are self-hosted Latin subsets (Fontsource 5.3.0, SIL OFL 1.1; licenses
+ * sit beside the files) so the site makes no third-party font requests.
+ */
+
+@font-face {
+	font-family: 'Space Grotesk';
+	src: url('../fonts/space-grotesk-600.woff2') format('woff2');
+	font-weight: 600;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Space Grotesk';
+	src: url('../fonts/space-grotesk-700.woff2') format('woff2');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'IBM Plex Sans';
+	src: url('../fonts/ibm-plex-sans-400.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'IBM Plex Sans';
+	src: url('../fonts/ibm-plex-sans-400-italic.woff2') format('woff2');
+	font-weight: 400;
+	font-style: italic;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'IBM Plex Sans';
+	src: url('../fonts/ibm-plex-sans-500.woff2') format('woff2');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'IBM Plex Sans';
+	src: url('../fonts/ibm-plex-sans-600.woff2') format('woff2');
+	font-weight: 600;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'JetBrains Mono';
+	src: url('../fonts/jetbrains-mono-400.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'JetBrains Mono';
+	src: url('../fonts/jetbrains-mono-500.woff2') format('woff2');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* Dark mode: the ActionsManager app's dark theme (the Tailwind slate values of
+   .dark-theme in frontend/src/index.css): page #0f172a, container #1e293b,
+   border #475569, text #f8fafc / #cbd5e1 / #94a3b8. Links use the brand accent. */
+:root,
+::backdrop {
+	--sl-font: 'IBM Plex Sans', var(--sl-font-system);
+	--sl-font-mono: 'JetBrains Mono', var(--sl-font-system-mono);
+
+	--sl-color-white: #f8fafc;
+	--sl-color-gray-1: #e2e8f0;
+	--sl-color-gray-2: #cbd5e1;
+	--sl-color-gray-3: #94a3b8;
+	--sl-color-gray-4: #64748b;
+	--sl-color-gray-5: #475569;
+	--sl-color-gray-6: #1e293b;
+	--sl-color-black: #0f172a;
+
+	--sl-color-accent-low: #3d1d13;
+	--sl-color-accent: #c4613f;
+	--sl-color-accent-high: #e8a184;
+
+	/* The header and sidebar share the page color, so the borders between
+	   them use the app's border color. */
+	--sl-color-bg-nav: var(--sl-color-bg);
+	--sl-color-bg-sidebar: var(--sl-color-bg);
+	--sl-color-bg-inline-code: var(--sl-color-gray-6);
+	--sl-color-hairline: var(--sl-color-gray-5);
+	--sl-color-hairline-shade: var(--sl-color-gray-5);
+}
+
+/* Light mode: warm ground, white surfaces, ink text, rust accent. */
+:root[data-theme='light'],
+[data-theme='light'] ::backdrop {
+	--sl-color-white: #15171c;
+	--sl-color-gray-1: #2b2e35;
+	--sl-color-gray-2: #4d515b;
+	--sl-color-gray-3: #5e626b;
+	--sl-color-gray-4: #8c8f97;
+	--sl-color-gray-5: #c9c5b9;
+	--sl-color-gray-6: #eceae3;
+	--sl-color-gray-7: #ffffff;
+	--sl-color-black: #f6f5f1;
+
+	--sl-color-accent-low: #f3ddd4;
+	--sl-color-accent: #b0482a;
+	--sl-color-accent-high: #8a3920;
+
+	/* Reset what the dark block changed, or it would leak into light mode:
+	   unlayered custom properties outrank Starlight's layered defaults. */
+	--sl-color-bg-nav: var(--sl-color-gray-7);
+	--sl-color-bg-inline-code: var(--sl-color-gray-6);
+	--sl-color-hairline: #e2dfd5;
+	--sl-color-hairline-light: #e2dfd5;
+	--sl-color-hairline-shade: #e2dfd5;
+}
+
+/* Starlight has no heading-font property. */
+:is(h1, h2, h3, h4, h5, h6) {
+	font-family: 'Space Grotesk', var(--sl-font-system);
+}
+
+/* Responsive 16:9 YouTube embed (index, getting-started/product-demo) -
+   without it the iframe falls back to 300x150. */
+.video-embed {
+	margin: 1rem 0;
+	border-radius: 6px;
+	overflow: hidden;
+}
+.video-embed iframe {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	height: auto;
+	border: 0;
+}
+
+/* A row of LinkButtons (home page). Starlight gives each block-level button
+   its own margins, so a wrapped button sat on an uneven gap; one flex row
+   with a single gap keeps spacing consistent, at the compact button size. */
+.button-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+}
+.button-row .sl-link-button {
+	margin: 0;
+	min-height: 2.625rem; /* the icon button's height, so the row is even */
+	font-size: var(--sl-text-sm);
+	padding: 0.5rem 1.125rem;
+}

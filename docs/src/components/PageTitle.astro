@@ -1,0 +1,28 @@
+---
+// The home page title only repeats the header wordmark, so it is kept for
+// screen readers and the "Overview" anchor but not shown. Other pages use
+// Starlight's title unchanged.
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+
+const isHome = Astro.locals.starlightRoute.id === '';
+---
+
+{
+	isHome ? (
+		<h1 id="_top" class="sr-only home-title">
+			{Astro.locals.starlightRoute.entry.data.title}
+		</h1>
+	) : (
+		<Default />
+	)
+}
+
+<style is:global>
+	/* Collapse the now-empty title panel and the divider under it. */
+	.content-panel:has(.home-title) {
+		padding-block: 0;
+	}
+	.content-panel:has(.home-title) + .content-panel {
+		border-top: 0;
+	}
+</style>

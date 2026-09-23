@@ -6,13 +6,11 @@ name: Publish Public Documentation Site
 # runs. It is staged outside .github/workflows/ so it never executes here, where
 # it would publish a second Pages site from the same docs.
 #
-# Two documentation workflows exist and both are live. Do not merge them:
-#   "Deploy Documentation to GitHub Pages" (pages.yml, this repository)
-#       serves actionsmanager.io, release-gated on a closed review issue.
-#   "Publish Public Documentation Site"    (this file, dawg-io/actions-manager)
-#       serves dawg-io.github.io/actions-manager.
-# The release process refers to workflows by name, so these names must stay
-# distinct.
+# This is the production documentation deploy: it serves actionsmanager.io. The
+# custom domain is set in the public repository's Pages settings, not by a
+# committed CNAME - promote-to-public.yml strips docs/CNAME from the export.
+# "Deploy Docs Preview" (docs-preview.yml) publishes a dev preview from the
+# private repository at its github.io address; the names must stay distinct.
 #
 # "main" below is the PUBLIC repository's branch, which is what this workflow
 # runs against. .github/scripts/check_no_main_refs.py only scans
@@ -63,22 +61,27 @@ jobs:
           # dispatched ref as usual.
           ref: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
 
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
         with:
-          ruby-version: '3.3'
-          bundler-cache: true
-          working-directory: docs
+          node-version-file: docs/.nvmrc
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
       - name: Setup GitHub Pages
         id: pages
         uses: actions/configure-pages@v6
 
-      - name: Build with Jekyll
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build with Astro
         env:
-          JEKYLL_ENV: production
-          BASE_PATH: ${{ steps.pages.outputs.base_path }}
-          BASE_URL: ${{ steps.pages.outputs.base_url }}
+          # Not BASE_URL/BASE_PATH: Vite reads BASE_URL from the environment
+          # as the site base, which breaks Starlight's current-page matching
+          # (no sidebar highlight, no prev/next links).
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
         run: |
           set -euo pipefail
 
@@ -86,47 +89,53 @@ jobs:
           # configure-pages reports what Pages is actually serving:
           # "/actions-manager" for a project site, and "" once a custom domain
           # is set. So moving the docs to a domain needs no change to this
-          # workflow or to docs/_config.yml - only the Pages setting itself.
+          # workflow or to docs/astro.config.mjs - only the Pages setting
+          # itself, then a re-run of this workflow: changing the domain does
+          # not rebuild, and the old build's /actions-manager/ paths 404.
           #
-          # url has to be overridden as well as baseurl. docs/_config.yml pins
-          # url to the production domain, which jekyll-seo-tag and
-          # jekyll-sitemap emit as absolute URLs; left alone on a project site
-          # they advertise https://<domain>/actions-manager/..., which resolves
-          # nowhere. The overlay is generated, so nothing about the site's own
-          # config changes.
-          BASE_URL="${BASE_URL%/}"
-          ORIGIN="${BASE_URL%"$BASE_PATH"}"
-          printf 'url: "%s"\nbaseurl: "%s"\n' "$ORIGIN" "$BASE_PATH" > _config.public.yml
-          echo "Building with url=$ORIGIN baseurl=$BASE_PATH"
+          # The site origin is overridden as well as the base: canonicals and
+          # the sitemap are absolute URLs, and on a project site the defaults
+          # would advertise https://actionsmanager.io/actions-manager/...,
+          # which resolves nowhere.
+          PAGES_BASE_URL="${PAGES_BASE_URL%/}"
+          export DOCS_SITE="${PAGES_BASE_URL%"$PAGES_BASE_PATH"}"
+          export DOCS_BASE="${PAGES_BASE_PATH:-/}"
+          echo "Building with site=$DOCS_SITE base=$DOCS_BASE"
 
-          bundle exec jekyll build --config _config.yml,_config.public.yml
+          npm run build
 
       - name: Verify generated site
         run: |
           set -euo pipefail
 
-          # Fail rather than publish an empty site over a working one.
-          test -s _site/index.html
-          test -s _site/assets/js/search-data.json
-
-          # A CNAME in the artifact makes this site claim the production custom
-          # domain, which would take actionsmanager.io off the repository that
-          # actually serves it. promote-to-public.yml strips docs/CNAME from the
-          # export; this is the backstop for a copy that predates that, or one
-          # added by hand.
-          #
-          # The follow-up issue that moves the custom domain here is the one
-          # that removes this check - set the domain in the Pages settings, do
-          # not reintroduce a committed CNAME.
-          if [ -e _site/CNAME ]; then
-            echo "::error::_site/CNAME is present - refusing to publish a site that claims the production domain."
-            exit 1
-          fi
+          # Fail rather than publish an empty or broken site over a working one.
+          test -s dist/index.html
+          # Starlight matched each page to its sidebar entry (prev/next work).
+          grep -q 'aria-current="page"' dist/getting-started/quick-start.html
+          test -s dist/sitemap-index.xml
+          test -d dist/pagefind
+          # Every URL the site has published must still resolve, the way
+          # GitHub Pages resolves it: "/" -> index.html, "/x" -> x.html.
+          missing=0
+          while read -r url; do
+            case "$url" in ''|'#'*) continue ;; esac
+            path="${url#/}"
+            case "$path" in
+              '') file=index.html ;;
+              *.html) file="$path" ;;
+              *) file="$path.html" ;;
+            esac
+            if [ ! -s "dist/$file" ]; then
+              echo "::error::$url (from url-parity.txt) has no page."
+              missing=1
+            fi
+          done < url-parity.txt
+          [ "$missing" -eq 0 ]
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: docs/_site
+          path: docs/dist
 
   deploy:
     environment:

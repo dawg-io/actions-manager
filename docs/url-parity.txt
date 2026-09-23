@@ -1,0 +1,38 @@
+# Every URL actionsmanager.io has published, as a path: the Jekyll site's
+# sitemap.xml at the Starlight cutover (release/1.9.0-beta.1 plus the pages
+# added on develop since). The build must keep serving each one - both docs
+# workflows check them. Add a redirect in astro.config.mjs before removing or
+# renaming a page, and never delete a line. See #2076 and #2077.
+/
+/beta
+/beta/beta-notes.html
+/features
+/features/backup-restore.html
+/features/build-detection.html
+/features/build-metrics.html
+/features/drift-detection.html
+/features/managed-actions.html
+/features/notifications.html
+/features/permissions.html
+/features/pr-campaigns.html
+/features/projects.html
+/features/reusable-workflow-repository-setup.html
+/features/reusable-workflows.html
+/features/rulesets.html
+/features/workflows.html
+/getting-started
+/getting-started/first-workflow-walkthrough.html
+/getting-started/github-oauth-setup.html
+/getting-started/github-pat-setup.html
+/getting-started/https-setup.html
+/getting-started/installation.html
+/getting-started/product-demo.html
+/getting-started/quick-start.html
+/security
+/security/privacy.html
+/security/security.html
+/security/token-handling.html
+/troubleshooting
+/troubleshooting/common-errors.html
+/troubleshooting/container-startup.html
+/troubleshooting/github-permissions.html

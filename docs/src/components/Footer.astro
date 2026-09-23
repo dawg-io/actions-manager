@@ -1,0 +1,17 @@
+---
+// Starlight's footer (edit link, prev/next, last updated) plus the site's
+// copyright line.
+import Default from '@astrojs/starlight/components/Footer.astro';
+---
+
+<Default><slot /></Default>
+<p class="copyright">&copy; 2026 ActionsManager. All rights reserved.</p>
+
+<style>
+	.copyright {
+		margin-top: 1.5rem;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+		text-align: center;
+	}
+</style>

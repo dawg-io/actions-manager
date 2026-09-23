@@ -9,7 +9,7 @@ import { DOCS_USER, seedDocsRepos, seedDocsUserProfile } from "./docs-fixtures";
 
 /**
  * Regenerates the "First Workflow Walkthrough" screenshots
- * (docs/assets/screenshots/walkthrough/*.png), covering the images that go
+ * (docs/src/content/docs/assets/screenshots/walkthrough/*.png), covering the images that go
  * stale as the Projects dashboard / project workspace / workflow creation UI
  * changes. Run with `npm run docs:screenshots`.
  *
@@ -38,7 +38,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/03-empty-project-dashboard.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/03-empty-project-dashboard.png",
     });
   });
 
@@ -61,7 +61,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/07-project-dashboard-created.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/07-project-dashboard-created.png",
     });
   });
 
@@ -84,7 +84,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/08-project-workspace-empty.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/08-project-workspace-empty.png",
     });
 
     // Step 10 — Add Project File: choose type
@@ -93,7 +93,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/10-create-workflow-type.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/10-create-workflow-type.png",
     });
 
     // Step 11 — Workflow Options
@@ -105,7 +105,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/11-regular-workflow-options.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/11-regular-workflow-options.png",
     });
 
     // Step 12 — Workflow editor, unsaved
@@ -115,7 +115,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/12-workflow-editor-unsaved.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/12-workflow-editor-unsaved.png",
     });
   });
 
@@ -128,7 +128,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/03a-welcome-screen.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/03a-welcome-screen.png",
     });
   });
 
@@ -145,7 +145,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/03b-tour-new-project.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/03b-tour-new-project.png",
     });
   });
 
@@ -164,7 +164,7 @@ test.describe("docs screenshots — walkthrough", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/walkthrough/05a-create-demo-repository.png",
+      path: "../docs/src/content/docs/assets/screenshots/walkthrough/05a-create-demo-repository.png",
     });
   });
 });

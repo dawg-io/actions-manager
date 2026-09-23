@@ -89,6 +89,7 @@ The following are the **ONLY** approved locations for documentation:
 - `docs/DEPLOYMENT.md` - Deployment guides and CI/CD
 - `docs/TROUBLESHOOTING.md` - Common issues and solutions
 - `docs/FRONTEND_DEVELOPMENT.md` - Frontend-specific development guide
+- `docs/src/content/docs/` - The published documentation site, actionsmanager.io (Astro Starlight; see `docs/README.md`)
 - Subdirectories:
   - `docs/deployment/` - Deployment-specific guides (SELF_HOSTED_INSTALL.md, CLOUD_DEPLOYMENT.md, etc.)
   - `docs/features/` - Feature-specific documentation

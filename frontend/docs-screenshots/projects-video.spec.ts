@@ -11,7 +11,7 @@ import {
 import { DOCS_USER, seedDocsUserProfile } from "./docs-fixtures";
 
 /**
- * Regenerates the video embedded in docs/features/projects.md
+ * Regenerates the projects-dashboard demo video
  * (docs/assets/videos/projects/project-view.webm). Run with
  * `npm run docs:screenshots` (shares testDir/config with features.spec.ts).
  *
