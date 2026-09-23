@@ -201,7 +201,7 @@ Automatically detects and suggests workflows for:
 ### 📦 Managed Actions
 - Shared, workspace-wide catalog of imported third-party GitHub Actions with parsed, editable inputs
 - Import from a repo URL, a direct `action.yml` file URL, or a GitHub Marketplace listing
-- Surfaces in the GUI workflow editor's step picker to pre-fill `with:` inputs — see [Managed Actions](docs/features/managed-actions.md)
+- Surfaces in the GUI workflow editor's step picker to pre-fill `with:` inputs — see [Managed Actions](https://actionsmanager.io/features/managed-actions.html)
 
 ### 🧪 Self-Hosted Beta Scope
 - Free during the beta period; no paid plans are currently available
@@ -254,7 +254,7 @@ ActionsManager supports three GitHub credential types today:
 Credential selection works like this: a saved PAT is used when configured, otherwise the current OAuth token is used, and a clear authentication error is returned when neither is available. Saved PATs are encrypted at rest and never returned to the UI in raw form.
 
 **→ [GitHub PAT Setup](docs/GITHUB_PAT_SETUP.md)** — fine-grained/classic token creation, minimum permissions, troubleshooting
-**→ [GitHub OAuth Setup](docs/getting-started/github-oauth-setup.md)** — OAuth App creation and callback configuration
+**→ [GitHub OAuth Setup](https://actionsmanager.io/getting-started/github-oauth-setup.html)** — OAuth App creation and callback configuration
 
 ## Docker Deployment
 
@@ -295,10 +295,10 @@ ActionsManager supports two deployment modes. See [Deployment Modes Comparison](
 - **[docs/FRONTEND_DEVELOPMENT.md](docs/FRONTEND_DEVELOPMENT.md)** - Frontend stack, component patterns, testing
 
 ### Troubleshooting
-- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** and **[docs/troubleshooting/](docs/troubleshooting/index.md)** - Installation, auth, backend/frontend, database, and Docker issues
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** and **[Troubleshooting guides](https://actionsmanager.io/troubleshooting.html)** - Installation, auth, backend/frontend, database, and Docker issues
 - **[LICENSE_KEY_GUIDE.md](LICENSE_KEY_GUIDE.md)** - License key configuration and troubleshooting
 - Check the [Issues](https://github.com/dawg-io/actions-manager/issues) page for known problems
-- Review the [Build Detection](docs/features/build-detection.md) documentation for build type detection details
+- Review the [Build Detection](https://actionsmanager.io/features/build-detection.html) documentation for build type detection details
 - Examine application logs for detailed error messages
 
 ## Licensing

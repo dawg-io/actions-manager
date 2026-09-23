@@ -18,11 +18,10 @@ frontend/dist/
 backend/dist/
 *.egg-info/
 
-# Jekyll / GitHub Pages
-docs/_site/
-docs/.jekyll-cache/
-docs/.jekyll-metadata
-docs/vendor/
+# Documentation site (Astro Starlight, docs/)
+docs/node_modules/
+docs/dist/
+docs/.astro/
 
 
 # Database files (keep for development, exclude for production)
@@ -117,3 +116,9 @@ failure.log
 # Frontend dev-deployment env: real hostnames, kept out of the tree
 # (copy from frontend/.env.dev.example)
 frontend/.env.dev
+
+# Release records written by the /release skill (local convenience copies of a
+# promotion's outcome). GitHub is the source of truth - these are deliberately
+# never committed, so ignore them rather than letting each release leave the
+# tree dirty.
+release-record-*.html

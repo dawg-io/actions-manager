@@ -13,7 +13,7 @@ import { DOCS_REPOS, DOCS_USER, seedDocsRepos, seedDocsUserProfile } from "./doc
 
 /**
  * Regenerates the screenshots embedded in docs/**\/*.md
- * (docs/assets/screenshots/<feature>/<name>.png). Run with
+ * (docs/src/content/docs/assets/screenshots/<feature>/<name>.png). Run with
  * `npm run docs:screenshots`.
  *
  * Each test drives the real app against mocked API routes (no real backend,
@@ -181,7 +181,7 @@ test.describe("docs screenshots", () => {
     await page.getByText(/1284 row\(s\)/).waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/backup-restore/workspace-backup.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/backup-restore/workspace-backup.png" });
   });
 
   test("workspace drift settings page", async ({ page }) => {
@@ -204,7 +204,7 @@ test.describe("docs screenshots", () => {
     await page.getByTestId("drift-settings-form").waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-settings.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-settings.png" });
   });
 
   test("workflow editor page view", async ({ page }) => {
@@ -232,7 +232,7 @@ test.describe("docs screenshots", () => {
     await page.getByText("build-and-test.yml", { exact: false }).first().click();
     await page.waitForTimeout(500);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-page-view.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/workflows/workflow-page-view.png" });
 
     // Expanded editor, in GUI mode: that's where the extra room actually
     // shows - the job list and step panel stop being a column of a column.
@@ -241,7 +241,7 @@ test.describe("docs screenshots", () => {
     await page.getByRole("button", { name: /Expand/ }).click();
     await page.getByRole("dialog").waitFor({ timeout: 5000 });
     await page.waitForTimeout(500);
-    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-editor-expanded.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/workflows/workflow-editor-expanded.png" });
   });
 
   test("workflow removal scope choice", async ({ page }) => {
@@ -280,7 +280,7 @@ test.describe("docs screenshots", () => {
     await page.getByRole("dialog").waitFor({ timeout: 5000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-removal-scope.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/workflows/workflow-removal-scope.png" });
   });
 
   test("workflow rename impact", async ({ page }) => {
@@ -366,7 +366,7 @@ test.describe("docs screenshots", () => {
     await page.getByTestId("rename-targets").waitFor({ timeout: 5000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/workflows/workflow-rename-impact.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/workflows/workflow-rename-impact.png" });
   });
 
   test("PR campaign dashboard", async ({ page }) => {
@@ -468,7 +468,7 @@ test.describe("docs screenshots", () => {
     // control at the top, the per-repository base commits and bulk-operation
     // buttons at the bottom. A viewport shot can only ever show one end.
     await page.screenshot({
-      path: "../docs/assets/screenshots/pr-campaigns/pr-campaign.png",
+      path: "../docs/src/content/docs/assets/screenshots/pr-campaigns/pr-campaign.png",
       fullPage: true,
     });
   });
@@ -580,7 +580,7 @@ test.describe("docs screenshots", () => {
     await page.getByTestId("rollback-summary").waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/pr-campaigns/pr-campaign-rollback.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/pr-campaigns/pr-campaign-rollback.png" });
   });
 
   test("drift detection — bulk resolve", async ({ page }) => {
@@ -661,7 +661,7 @@ test.describe("docs screenshots", () => {
     await page.getByTestId("drift-modal").waitFor();
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-bulk-select.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-bulk-select.png" });
 
     // Expand one row's diff to show what an actual drift looks like -
     // managed version on the left, current GitHub version (with the extra
@@ -670,7 +670,7 @@ test.describe("docs screenshots", () => {
     await page.getByText("npm run lint", { exact: false }).waitFor({ timeout: 5000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-diff-view.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-diff-view.png" });
 
     await page.getByRole("button", { name: /Hide Diff/i }).first().click();
     await page.waitForTimeout(300);
@@ -678,7 +678,7 @@ test.describe("docs screenshots", () => {
     await page.getByTestId("select-all-drifts").click();
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/drift-detection/drift-bulk-toolbar.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-bulk-toolbar.png" });
   });
 
   test("drift detection — status row with no drift", async ({ page }) => {
@@ -698,7 +698,7 @@ test.describe("docs screenshots", () => {
     // The row itself, not the whole page: it is one thin strip near the top,
     // and a full-page capture would bury the thing the doc is pointing at.
     await statusRow.screenshot({
-      path: "../docs/assets/screenshots/drift-detection/drift-status-row.png",
+      path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-status-row.png",
     });
   });
 
@@ -731,7 +731,7 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/drift-detection/project-drift-schedule.png",
+      path: "../docs/src/content/docs/assets/screenshots/drift-detection/project-drift-schedule.png",
     });
   });
 
@@ -754,7 +754,7 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await statusRow.screenshot({
-      path: "../docs/assets/screenshots/drift-detection/drift-checks-paused.png",
+      path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-checks-paused.png",
     });
   });
 
@@ -791,7 +791,7 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/drift-detection/drift-deleted-in-github.png",
+      path: "../docs/src/content/docs/assets/screenshots/drift-detection/drift-deleted-in-github.png",
     });
   });
 
@@ -863,7 +863,7 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/projects/new-repo-delivery-prompt.png",
+      path: "../docs/src/content/docs/assets/screenshots/projects/new-repo-delivery-prompt.png",
     });
   });
 
@@ -900,7 +900,7 @@ test.describe("docs screenshots", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/projects/pending-delivery-reminder.png",
+      path: "../docs/src/content/docs/assets/screenshots/projects/pending-delivery-reminder.png",
     });
   });
 
@@ -960,7 +960,7 @@ test.describe("docs screenshots", () => {
     await page.getByText("platform-team@acme-corp.example").first().waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/notifications/notifications-settings.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/notifications/notifications-settings.png" });
   });
 
   test("build metrics — project overview", async ({ page }) => {
@@ -981,7 +981,7 @@ test.describe("docs screenshots", () => {
     await page.getByTestId("build-metrics-trend").waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/build-metrics/build-metrics-overview.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/build-metrics/build-metrics-overview.png" });
   });
 
   test("build metrics — scoped to one workflow", async ({ page }) => {
@@ -1003,7 +1003,7 @@ test.describe("docs screenshots", () => {
     await page.getByText("Last 30 days · deploy-production").waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
 
-    await page.screenshot({ path: "../docs/assets/screenshots/build-metrics/build-metrics-by-workflow.png" });
+    await page.screenshot({ path: "../docs/src/content/docs/assets/screenshots/build-metrics/build-metrics-by-workflow.png" });
   });
 });
 
@@ -1074,7 +1074,7 @@ test.describe("docs screenshots — first-boot restore", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-prompt.png",
+      path: "../docs/src/content/docs/assets/screenshots/backup-restore/first-boot-restore-prompt.png",
     });
   });
 
@@ -1089,7 +1089,7 @@ test.describe("docs screenshots — first-boot restore", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-report.png",
+      path: "../docs/src/content/docs/assets/screenshots/backup-restore/first-boot-restore-report.png",
     });
   });
 
@@ -1106,7 +1106,7 @@ test.describe("docs screenshots — first-boot restore", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-warning.png",
+      path: "../docs/src/content/docs/assets/screenshots/backup-restore/first-boot-restore-warning.png",
     });
   });
 
@@ -1137,7 +1137,7 @@ test.describe("docs screenshots — first-boot restore", () => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: "../docs/assets/screenshots/backup-restore/first-boot-restore-complete.png",
+      path: "../docs/src/content/docs/assets/screenshots/backup-restore/first-boot-restore-complete.png",
     });
   });
 });

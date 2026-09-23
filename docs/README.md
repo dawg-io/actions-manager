@@ -7,6 +7,49 @@
 > is still the right way to propose a documentation change: a maintainer ports it into
 > the development repository, and it ships back out with the following release.
 
+## The documentation site
+
+actionsmanager.io is an [Astro Starlight](https://starlight.astro.build/) site
+built from this directory. Its pages are `src/content/docs/**` (Markdown/MDX);
+the files at the top of `docs/`, `guides/`, `features/` and `archive/` are repository
+documentation and are not published.
+
+```bash
+cd docs
+npm ci
+npm run dev     # local preview at http://localhost:4321
+npm run build   # static output in dist/
+```
+
+Node version: see `.nvmrc`.
+
+- `build.format: 'file'` emits `/path.html`. `url-parity.txt` lists every URL the
+  site has ever published; CI fails if one stops resolving - add a redirect in
+  `astro.config.mjs` before renaming or removing a page.
+- There is no `CNAME`. The domain is set in the public repository's Pages settings;
+  CI fails if `dist/CNAME` ever appears.
+- Screenshots live in `src/content/docs/assets/screenshots/`, where
+  `docs-media-refresh.yml` writes them.
+
+### Theme
+
+`src/styles/theme.css` (registered in `customCss`) holds the brand theme. It only
+sets Starlight's CSS custom properties plus a few layout rules, so Starlight's
+light/dark toggle switches it. Change colors there, never on individual components.
+
+- Light mode: warm ground `#F6F5F1`, white surfaces, ink `#15171C`, body text
+  `#4D515B`, rust accent `#B0482A`.
+- Dark mode: the ActionsManager app's dark theme (Tailwind slate: page `#0f172a`,
+  surfaces `#1e293b`, borders `#475569`), with the accent `#E8A184`.
+- Fonts: Space Grotesk (headings), IBM Plex Sans (body), JetBrains Mono (code),
+  self-hosted from `src/fonts/` (Latin subsets from Fontsource, SIL OFL 1.1, licenses
+  alongside). Never add a Google Fonts link; CI fails if the build references one or
+  drops a font file. Adding a weight means adding its file, an `@font-face`, and
+  bumping the woff2 count in `.github/workflows/docs-preview.yml`.
+- `src/components/` overrides three Starlight components: the header lockup
+  (`SiteTitle`), the footer's copyright line (`Footer`) and the home page's hidden
+  title (`PageTitle`).
+
 Welcome to the Actions Manager documentation! This guide will help you find the information you need to use, deploy, and contribute to Actions Manager.
 
 ## 📚 Documentation Index
@@ -63,6 +106,9 @@ Welcome to the Actions Manager documentation! This guide will help you find the 
 ```
 docs/
 ├── README.md                    # This file - documentation index
+├── astro.config.mjs            # Documentation site config (Starlight)
+├── src/content/docs/           # Published pages (actionsmanager.io)
+├── url-parity.txt              # Every published URL, checked in CI
 ├── QUICK_START.md              # Getting started guide
 ├── DEVELOPMENT.md              # Development workflows
 ├── ARCHITECTURE.md             # System architecture
