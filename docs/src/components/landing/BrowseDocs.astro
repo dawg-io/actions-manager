@@ -1,0 +1,89 @@
+---
+import { Icon } from '@astrojs/starlight/components';
+
+// The splash template has no sidebar (so no mobile menu either): this band is
+// the home page's route into every sidebar group, at any width.
+const sections = [
+	{ title: 'Getting Started', body: 'Installation, PAT and OAuth setup, HTTPS', href: 'getting-started/quick-start.html' },
+	{ title: 'Guides', body: 'Projects, workflows, PR campaigns, drift detection', href: 'features/projects.html' },
+	{ title: 'Operations', body: 'Build detection, build metrics, notifications', href: 'features/build-detection.html' },
+	{ title: 'Security', body: 'Security policy, privacy, token handling', href: 'security/security.html' },
+	{ title: 'Troubleshooting', body: 'Common errors, GitHub permissions, container startup', href: 'troubleshooting/common-errors.html' },
+	{ title: 'Beta Notes', body: 'Beta scope, limitations, feedback', href: 'beta/beta-notes.html' },
+];
+---
+
+<section id="docs" class="landing-band browse not-content">
+	<div class="landing-inner">
+		<p class="landing-eyebrow">Documentation</p>
+		<h2 class="landing-heading">Browse the docs</h2>
+		<ul>
+			{
+				sections.map((s) => (
+					<li>
+						<a href={s.href}>
+							<span class="title">
+								{s.title} <Icon name="right-arrow" />
+							</span>
+							<span class="body">{s.body}</span>
+						</a>
+					</li>
+				))
+			}
+		</ul>
+	</div>
+</section>
+
+<style>
+	.browse {
+		border-top: 1px solid var(--sl-color-hairline);
+	}
+	.landing-inner {
+		padding-block: 4rem;
+	}
+	ul {
+		display: grid;
+		gap: 1rem;
+		margin: 2rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+	a {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		height: 100%;
+		padding: 1rem 1.25rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+		text-decoration: none;
+	}
+	a:hover {
+		border-color: var(--sl-color-text-accent);
+	}
+	.title {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.title :global(svg) {
+		color: var(--sl-color-text-accent);
+	}
+	.body {
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	@media (min-width: 45rem) {
+		ul {
+			grid-template-columns: repeat(2, 1fr);
+		}
+	}
+	@media (min-width: 72rem) {
+		ul {
+			grid-template-columns: repeat(3, 1fr);
+		}
+	}
+</style>

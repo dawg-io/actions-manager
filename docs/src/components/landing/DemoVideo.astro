@@ -1,0 +1,80 @@
+---
+import { Icon } from '@astrojs/starlight/components';
+import VideoPlayer from '../VideoPlayer.astro';
+
+const chapters = [
+	'Sign in with a PAT',
+	'Create a Caller Workflow Project',
+	'Detect the build type',
+	'Open pull requests across repositories',
+	'Review and merge',
+];
+---
+
+<section id="demo" class="landing-band landing-ink not-content">
+	<div class="landing-inner demo">
+		<div>
+			<VideoPlayer sizes="(min-width: 60rem) 40rem, calc(100vw - 3rem)" />
+			<p class="note">
+				The player loads from youtube-nocookie.com only after you press play.
+			</p>
+		</div>
+		<div>
+			<h2 class="landing-heading">See a full rollout, start to merge</h2>
+			<p class="summary">
+				PAT sign-in, project creation, build detection, pull request creation, review, merge.
+			</p>
+			<ol class="chapters">
+				{chapters.map((chapter) => <li>{chapter}</li>)}
+			</ol>
+			<a class="landing-link" href="getting-started/product-demo.html">
+				Read the written walkthrough instead <Icon name="right-arrow" />
+			</a>
+		</div>
+	</div>
+</section>
+
+<style>
+	.demo {
+		display: grid;
+		gap: 3rem;
+		align-items: center;
+		padding-block: 5rem;
+	}
+	.note {
+		margin: 1rem 0 0;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	.summary {
+		margin: 1rem 0 1.5rem;
+		font-size: var(--sl-text-lg);
+		line-height: 1.6;
+	}
+	.chapters {
+		margin: 0 0 1.5rem;
+		padding: 0;
+		list-style: none;
+		counter-reset: chapter;
+		border-top: 1px solid var(--sl-color-hairline);
+	}
+	.chapters li {
+		display: flex;
+		gap: 1rem;
+		padding-block: 0.75rem;
+		border-bottom: 1px solid var(--sl-color-hairline);
+		color: var(--sl-color-white);
+		counter-increment: chapter;
+	}
+	.chapters li::before {
+		content: counter(chapter, decimal-leading-zero);
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	@media (min-width: 60rem) {
+		.demo {
+			grid-template-columns: 1.1fr 1fr;
+		}
+	}
+</style>

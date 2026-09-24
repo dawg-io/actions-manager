@@ -1,0 +1,58 @@
+---
+// On the home page the header shows a beta badge and labelled social links;
+// every other page keeps Starlight's icon-only links.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+import { Icon } from '@astrojs/starlight/components';
+import config from 'virtual:starlight/user-config';
+
+const isHome = Astro.locals.starlightRoute.id === '';
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+{
+	isHome ? (
+		<>
+			<a class="beta" href={`${base}beta/beta-notes.html`}>
+				Free beta
+			</a>
+			{config.social?.map(({ label, href, icon }) => (
+				<a class="social" {href} rel="me">
+					<Icon name={icon} />
+					{label}
+				</a>
+			))}
+		</>
+	) : (
+		<Default />
+	)
+}
+
+<style>
+	.beta {
+		padding: 0.25rem 0.75rem;
+		border: 1px solid var(--sl-color-accent);
+		border-radius: 999px;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-2xs);
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--sl-color-text-accent);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.social {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.4rem 0.9rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+	.social:hover {
+		border-color: var(--sl-color-gray-3);
+	}
+</style>
