@@ -2,6 +2,17 @@
 // Replaces Starlight's plain-text site title with the ActionsManager lockup:
 // shield + two-tone wordmark, matching the app's BrandLogo component.
 import logo from '../assets/shield-icon-transparent.svg';
+
+// The home page also gets top-level links beside the lockup; other pages
+// navigate with the sidebar. BASE_URL has no trailing slash on the preview.
+const isHome = Astro.locals.starlightRoute.id === '';
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const links = [
+	{ label: 'Docs', href: `${base}getting-started/quick-start.html` },
+	{ label: 'Features', href: `${base}#features` },
+	{ label: 'Quick start', href: `${base}#quick-start` },
+	{ label: 'Security', href: `${base}security/security.html` },
+];
 ---
 
 <a href={import.meta.env.BASE_URL} class="site-title">
@@ -10,6 +21,15 @@ import logo from '../assets/shield-icon-transparent.svg';
 		<span class="actions">Actions</span><span class="manager">Manager</span>
 	</span>
 </a>
+{
+	isHome && (
+		<nav class="home-nav" aria-label="Main">
+			{links.map(({ label, href }) => (
+				<a {href}>{label}</a>
+			))}
+		</nav>
+	)
+}
 
 <style>
 	.site-title {
@@ -53,5 +73,25 @@ import logo from '../assets/shield-icon-transparent.svg';
 	}
 	:global([data-theme='light']) .manager {
 		color: #0066cc;
+	}
+	.home-nav {
+		display: none;
+		gap: 1.5rem;
+		margin-inline-start: 2rem;
+		font-size: var(--sl-text-sm);
+	}
+	.home-nav a {
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.home-nav a:hover {
+		color: var(--sl-color-white);
+	}
+	@media (min-width: 72rem) {
+		.home-nav {
+			display: flex;
+			align-items: center;
+		}
 	}
 </style>

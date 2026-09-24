@@ -21,6 +21,7 @@ export default defineConfig({
 				SiteTitle: './src/components/SiteTitle.astro',
 				Footer: './src/components/Footer.astro',
 				PageTitle: './src/components/PageTitle.astro',
+				SocialIcons: './src/components/SocialIcons.astro',
 			},
 			// Edits go to the public repository, whose docs/ is this site - the
 			// private one 404s for readers.

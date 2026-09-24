@@ -66,9 +66,12 @@
 
 /* Dark mode: the ActionsManager app's dark theme (the Tailwind slate values of
    .dark-theme in frontend/src/index.css): page #0f172a, container #1e293b,
-   border #475569, text #f8fafc / #cbd5e1 / #94a3b8. Links use the brand accent. */
+   border #475569, text #f8fafc / #cbd5e1 / #94a3b8. Links use the brand accent.
+   The home page's dark bands and the demo video player (.landing-ink) take this
+   palette in light mode too. */
 :root,
-::backdrop {
+::backdrop,
+:root[data-theme='light'] .landing-ink {
 	--sl-font: 'IBM Plex Sans', var(--sl-font-system);
 	--sl-font-mono: 'JetBrains Mono', var(--sl-font-system-mono);
 
@@ -125,32 +128,83 @@
 	font-family: 'Space Grotesk', var(--sl-font-system);
 }
 
-/* Responsive 16:9 YouTube embed (index, getting-started/product-demo) -
-   without it the iframe falls back to 300x150. */
-.video-embed {
-	margin: 1rem 0;
-	border-radius: 6px;
-	overflow: hidden;
-}
-.video-embed iframe {
-	display: block;
-	width: 100%;
-	aspect-ratio: 16 / 9;
-	height: auto;
-	border: 0;
+/* Page images are app screenshots: in dark mode their background matches the
+   page, so without an edge they run into the text around them. */
+.sl-markdown-content img:not(:where(.not-content *)) {
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.5rem;
 }
 
-/* A row of LinkButtons (home page). Starlight gives each block-level button
-   its own margins, so a wrapped button sat on an uneven gap; one flex row
-   with a single gap keeps spacing consistent, at the compact button size. */
-.button-row {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.75rem;
+/* Home page (index.mdx + components/landing/): full-width bands instead of
+   one centered column, so the splash panel gives up its padding and width and
+   each band centers its own content. The footer keeps a centered column. */
+.content-panel:has(.landing-band) {
+	padding: 0;
 }
-.button-row .sl-link-button {
+.content-panel:has(.landing-band) .sl-container {
+	max-width: none;
+}
+.content-panel:has(.landing-band) .sl-container > :not(.sl-markdown-content) {
+	max-width: 80rem;
+	margin-inline: auto;
+	padding-inline: 1.5rem;
+}
+.landing-band {
 	margin: 0;
-	min-height: 2.625rem; /* the icon button's height, so the row is even */
-	font-size: var(--sl-text-sm);
-	padding: 0.5rem 1.125rem;
+	background: var(--sl-color-bg);
+	color: var(--sl-color-text);
+}
+/* In dark mode the bands share the page color, so a hairline separates them. */
+:root[data-theme='dark'] .landing-band + .landing-ink,
+:root[data-theme='dark'] .landing-ink + .landing-band {
+	border-top: 1px solid var(--sl-color-hairline);
+}
+.landing-inner {
+	max-width: 80rem;
+	margin-inline: auto;
+	padding-inline: 1.5rem;
+}
+
+/* The hero and demo bands, and the demo player, stay dark in light mode: they
+   take the dark block's palette (see its selector list). Starlight derives these
+   from that palette on :root, so they are re-derived here or they would keep the
+   light values. Dark mode needs nothing: the page is already that palette. */
+:root[data-theme='light'] .landing-ink {
+	--sl-color-gray-7: initial; /* the dark palette has none */
+	--sl-color-text: var(--sl-color-gray-2);
+	--sl-color-text-accent: var(--sl-color-accent-high);
+	--sl-color-text-invert: var(--sl-color-accent-low);
+	--sl-color-bg: var(--sl-color-black);
+	--sl-color-bg-accent: var(--sl-color-accent-high);
+	--sl-color-hairline-light: var(--sl-color-gray-5);
+}
+
+.landing-eyebrow {
+	margin: 0;
+	font-family: var(--sl-font-mono);
+	font-size: var(--sl-text-xs);
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+}
+.landing-ink .landing-eyebrow {
+	color: var(--sl-color-text-accent);
+}
+.landing-heading {
+	margin: 0.75rem 0 0;
+	font-size: clamp(1.875rem, 3.5vw, 2.5rem);
+	line-height: 1.15;
+	letter-spacing: -0.01em;
+	color: var(--sl-color-white);
+}
+.landing-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	font-weight: 600;
+	color: var(--sl-color-text-accent);
+	text-decoration: none;
+}
+.landing-link:hover {
+	text-decoration: underline;
 }

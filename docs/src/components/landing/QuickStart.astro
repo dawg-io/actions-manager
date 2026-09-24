@@ -1,0 +1,133 @@
+---
+import { Aside, Code, Icon, TabItem, Tabs } from '@astrojs/starlight/components';
+
+const dockerRun = `# Generate a stable SECRET_KEY once and reuse it on every start:
+# SECRET_KEY=$(openssl rand -hex 32)
+docker run -d \\
+  --name actions-manager \\
+  -p 8080:8080 \\
+  -v actions-manager-data:/app/data \\
+  -e INSTALLATION_MODE=self-hosted \\
+  -e SECRET_KEY=<your_generated_key> \\
+  -e ALLOW_INSECURE_HTTP=true \\
+  ghcr.io/dawg-io/actions-manager:latest`;
+
+const compose = `# SECRET_KEY comes from .env - generate it once with: openssl rand -hex 32
+version: "3.8"
+services:
+  actions-manager:
+    image: ghcr.io/dawg-io/actions-manager:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - actions-manager-data:/app/data
+    environment:
+      - SECRET_KEY=\${SECRET_KEY}
+      # Required while the app is served over plain HTTP; remove it once you
+      # front ActionsManager with HTTPS
+      - ALLOW_INSECURE_HTTP=true
+    restart: unless-stopped
+
+volumes:
+  actions-manager-data:`;
+
+const caddyfile = `# /etc/caddy/Caddyfile
+actionsmanager.example.com {
+    reverse_proxy localhost:8080
+}`;
+
+// Loopback only: behind a proxy the app trusts X-Forwarded-Proto, so anything
+// that reaches 8080 directly could claim HTTPS (https-setup.md).
+const dockerRunHttps = `docker run -d \\
+  --name actions-manager \\
+  -p 127.0.0.1:8080:8080 \\
+  -v actions-manager-data:/app/data \\
+  -e SECRET_KEY=<your_generated_key> \\
+  -e APP_URL=https://actionsmanager.example.com \\
+  ghcr.io/dawg-io/actions-manager:latest`;
+---
+
+<section id="quick-start" class="landing-band not-content">
+	<div class="landing-inner quick-start">
+		<div>
+			<p class="landing-eyebrow">Quick start</p>
+			<h2 class="landing-heading">Running in one command</h2>
+			<p class="summary">
+				SQLite by default, PostgreSQL when you need it. Then open <code>http://localhost:8080</code> and
+				sign in with a personal access token or GitHub OAuth.
+			</p>
+			<a class="landing-link" href="getting-started/installation.html">
+				Full installation guide <Icon name="right-arrow" />
+			</a>
+		</div>
+		<div class="commands">
+			<Tabs>
+				<TabItem label="Docker">
+					<Code code={dockerRun} lang="bash" />
+				</TabItem>
+				<TabItem label="Docker Compose">
+					<Code code={compose} lang="yaml" title="docker-compose.yml" />
+					<Code code="docker compose up -d" lang="bash" />
+				</TabItem>
+				<TabItem label="Behind HTTPS">
+					<Code code={caddyfile} lang="txt" title="Caddyfile" />
+					<Code code={dockerRunHttps} lang="bash" />
+				</TabItem>
+			</Tabs>
+			<Aside type="caution">
+				<strong><code>ALLOW_INSECURE_HTTP=true</code> is required while the app is served over plain
+				HTTP.</strong> Drop it once ActionsManager sits behind HTTPS — see
+				<a href="getting-started/https-setup.html">HTTPS setup</a>.
+			</Aside>
+		</div>
+	</div>
+</section>
+
+<style>
+	.quick-start {
+		display: grid;
+		gap: 2.5rem;
+		padding-block: 5rem;
+	}
+	.summary {
+		margin: 1rem 0 1.5rem;
+		line-height: 1.6;
+	}
+	.commands {
+		min-width: 0;
+	}
+	/* Starlight's tabs are an underlined strip; the landing page uses pills. */
+	.commands :global([role='tablist']) {
+		gap: 0.5rem;
+		border: 0;
+		padding: 0;
+	}
+	.commands :global(.tablist-wrapper) {
+		margin-bottom: 1rem;
+	}
+	.commands :global([role='tab']) {
+		padding: 0.4rem 1rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		white-space: nowrap;
+	}
+	.commands :global([role='tab'][aria-selected='true']) {
+		background: var(--sl-color-white);
+		border-color: var(--sl-color-white);
+		color: var(--sl-color-black);
+	}
+	.commands :global([role='tabpanel'] > * + *) {
+		margin-top: 1rem;
+	}
+	.commands :global(.starlight-aside) {
+		margin-top: 1.25rem;
+	}
+	@media (min-width: 60rem) {
+		.quick-start {
+			grid-template-columns: 1fr 2fr;
+			gap: 4rem;
+		}
+	}
+</style>

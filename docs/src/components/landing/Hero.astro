@@ -1,0 +1,177 @@
+---
+import { Image } from 'astro:assets';
+import { Icon } from '@astrojs/starlight/components';
+import screenshot from '../../content/docs/assets/screenshots/workflows/workflow-page-view.png';
+---
+
+<section class="landing-band landing-ink not-content">
+	<div class="landing-inner hero">
+		<div class="copy">
+			<p class="landing-eyebrow">Self-hosted control plane</p>
+			<h2 class="title">Change a workflow once. Roll it out everywhere.</h2>
+			<p class="lede">
+				ActionsManager is a control plane for GitHub Actions across a whole repository fleet. Group
+				repositories into projects, roll out changes as reviewable pull requests, and catch drift, all
+				from one container you run yourself.
+			</p>
+			<div class="actions">
+				<a class="button primary" href="getting-started/quick-start.html">
+					Get started <Icon name="right-arrow" />
+				</a>
+				<a class="button secondary" href="#demo">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z" fill="currentColor"></path></svg>
+					Watch the demo
+				</a>
+			</div>
+			<p class="facts">docker run · one container · SQLite by default</p>
+		</div>
+		<figure class="window">
+			<div class="window-bar" aria-hidden="true">
+				<span></span><span></span><span></span>
+				<code>localhost:8080</code>
+			</div>
+			<Image
+				src={screenshot}
+				alt="A Payments Platform project in ActionsManager: build-and-test.yml open in the workflow editor, targeting two repositories."
+				widths={[640, 960, 1280]}
+				sizes="(min-width: 72rem) 40rem, (min-width: 60rem) 50vw, calc(100vw - 3rem)"
+				loading="eager"
+			/>
+		</figure>
+	</div>
+</section>
+
+<aside class="landing-band beta not-content" aria-label="Beta notice">
+	<p class="landing-inner">
+		<Icon name="information" />
+		<span>
+			<strong>Free self-hosted beta.</strong> No paid plans are available. Self-hosted only. Features,
+			limits, and licensing may change before general availability.{' '}
+			<a href="beta/beta-notes.html">Beta notes</a>
+		</span>
+	</p>
+</aside>
+
+<style>
+	.hero {
+		display: grid;
+		gap: 3rem;
+		align-items: center;
+		padding-block: 4rem;
+	}
+	.title {
+		margin: 1rem 0 1.25rem;
+		font-size: clamp(2.5rem, 5vw, 3.75rem);
+		line-height: 1.05;
+		letter-spacing: -0.02em;
+		color: var(--sl-color-white);
+	}
+	.lede {
+		margin: 0;
+		max-width: 36rem;
+		font-size: var(--sl-text-lg);
+		line-height: 1.6;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 2rem;
+	}
+	.button {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.8rem 1.5rem;
+		border: 1px solid transparent;
+		border-radius: 0.5rem;
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.button :global(svg) {
+		width: 1rem;
+		height: 1rem;
+	}
+	/* The light theme's accent: white on the dark accent (#c4613f) is 4.1:1,
+	   under WCAG AA; on this one it is 5.5:1. */
+	.primary {
+		background: #b0482a;
+		color: #fff;
+	}
+	.primary:hover {
+		filter: brightness(0.92);
+	}
+	.secondary {
+		border-color: var(--sl-color-gray-5);
+		color: var(--sl-color-white);
+	}
+	.secondary:hover {
+		border-color: var(--sl-color-gray-3);
+	}
+	.facts {
+		margin: 1.5rem 0 0;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.window {
+		margin: 0;
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.75rem;
+		overflow: hidden;
+		background: var(--sl-color-gray-6);
+	}
+	.window-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.6rem 0.9rem;
+		border-bottom: 1px solid var(--sl-color-hairline-light);
+	}
+	.window-bar span {
+		width: 0.6rem;
+		height: 0.6rem;
+		border-radius: 50%;
+		background: var(--sl-color-gray-4);
+	}
+	.window-bar code {
+		margin-inline-start: 0.75rem;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.window img {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+	@media (min-width: 60rem) {
+		.hero {
+			grid-template-columns: 1fr 1.1fr;
+			padding-block: 5.5rem;
+		}
+	}
+
+	.beta {
+		background: var(--sl-color-gray-6);
+		border-block: 1px solid var(--sl-color-hairline);
+		font-size: var(--sl-text-sm);
+	}
+	.beta p {
+		display: flex;
+		gap: 0.75rem;
+		align-items: baseline;
+		margin-block: 0;
+		padding-block: 0.9rem;
+	}
+	.beta :global(svg) {
+		flex: none;
+		align-self: center;
+		color: var(--sl-color-text-accent);
+	}
+	.beta strong {
+		color: var(--sl-color-white);
+	}
+	.beta a {
+		color: var(--sl-color-text-accent);
+	}
+</style>

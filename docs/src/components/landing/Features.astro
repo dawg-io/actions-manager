@@ -1,0 +1,184 @@
+---
+import { Image } from 'astro:assets';
+import { Icon } from '@astrojs/starlight/components';
+import projects from '../../content/docs/assets/screenshots/projects/project-repositories.png';
+import prCampaign from '../../content/docs/assets/screenshots/pr-campaigns/pr-campaign.png';
+import drift from '../../content/docs/assets/screenshots/drift-detection/drift-diff-view.png';
+import reusable from '../../content/docs/assets/screenshots/reusable-workflows/linked-reusable-workflow.png';
+import metrics from '../../content/docs/assets/screenshots/build-metrics/build-metrics-overview.png';
+import login from '../../content/docs/assets/screenshots/walkthrough/01-pat-login-empty.png';
+
+// Icon paths are from Lucide (ISC licence), drawn at 24x24 with a 2px stroke.
+const features = [
+	{
+		title: 'One project, many repos',
+		body: 'Group repositories into Caller Workflow Projects and operate on all of them at once instead of repo by repo.',
+		href: 'features/projects.html',
+		icon: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+		image: projects,
+		alt: 'The Payments Platform project in ActionsManager, with six target repositories selected on its Repositories & Branches page.',
+	},
+	{
+		title: 'PR campaigns',
+		body: 'One rollout opens a pull request in every repository in the project. Review them one by one, or bulk-merge from ActionsManager.',
+		href: 'features/pr-campaigns.html',
+		icon: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>',
+		image: prCampaign,
+		alt: 'A PR campaign in ActionsManager tracking open and merged pull requests across two repositories.',
+	},
+	{
+		title: 'Drift detection',
+		body: "See exactly where a repository's workflow has diverged from the managed definition, and resolve it from the same screen.",
+		href: 'features/drift-detection.html',
+		icon: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+		image: drift,
+		alt: 'The drift view in ActionsManager comparing the managed workflow with the version changed in GitHub.',
+	},
+	{
+		title: 'Reusable workflows',
+		body: 'Manage both sides of reuse: the Reusable Workflow Project and the caller projects that link it, and edit it in one place.',
+		href: 'features/reusable-workflows.html',
+		icon: '<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+		image: reusable,
+		alt: 'A caller project in ActionsManager with java-build.yml linked in from the Shared CI Reusable Workflow Project, open in the editor.',
+	},
+	{
+		title: 'Build detection & metrics',
+		body: "Detect each repository's build type to start from the right workflow template, then track success rates and run times across the project.",
+		href: 'features/build-metrics.html',
+		icon: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+		image: metrics,
+		alt: 'Build metrics in ActionsManager: success rate, run counts, durations and recent runs for a project.',
+	},
+	{
+		title: 'Your tokens, your box',
+		body: 'Sign in with GitHub OAuth or a personal access token. PATs are stored encrypted in your own database, and there is no product telemetry.',
+		href: 'security/token-handling.html',
+		icon: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+		image: login,
+		alt: 'The ActionsManager sign-in screen, offering GitHub OAuth or a personal access token.',
+	},
+];
+---
+
+<section id="features" class="landing-band not-content">
+	<div class="landing-inner features">
+		<div class="heading">
+			<div>
+				<p class="landing-eyebrow">What it does</p>
+				<h2 class="landing-heading">Built for fleets, not single repos</h2>
+			</div>
+			<a class="landing-link" href="features/projects.html">All features <Icon name="right-arrow" /></a>
+		</div>
+		<ul class="grid">
+			{
+				features.map((f) => (
+					<li class="card">
+						<svg
+							class="icon"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+							set:html={f.icon}
+						/>
+						<h3>
+							<a href={f.href}>{f.title}</a>
+						</h3>
+						<p>{f.body}</p>
+						<Image
+							src={f.image}
+							alt={f.alt}
+							widths={[480, 800]}
+							sizes="(min-width: 72rem) 24rem, (min-width: 45rem) 45vw, calc(100vw - 3rem)"
+						/>
+					</li>
+				))
+			}
+		</ul>
+	</div>
+</section>
+
+<style>
+	.features {
+		padding-block: 5rem;
+	}
+	.heading {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem 2rem;
+		align-items: end;
+		justify-content: space-between;
+		margin-bottom: 2.5rem;
+	}
+	.grid {
+		display: grid;
+		gap: 1.5rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.card {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		padding: 1.75rem;
+		background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.75rem;
+	}
+	.card:focus-within {
+		outline: 2px solid var(--sl-color-text-accent);
+	}
+	.icon {
+		width: 1.5rem;
+		height: 1.5rem;
+		color: var(--sl-color-text-accent);
+	}
+	h3 {
+		margin: 1rem 0 0.5rem;
+		font-size: var(--sl-text-xl);
+		color: var(--sl-color-white);
+	}
+	/* The heading link covers the card, so the whole card is one click target. */
+	h3 a {
+		color: inherit;
+		text-decoration: none;
+	}
+	h3 a::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+	}
+	h3 a:focus-visible {
+		outline: none;
+	}
+	.card p {
+		margin: 0 0 1.5rem;
+		line-height: 1.6;
+	}
+	.card img {
+		display: block;
+		width: 100%;
+		height: auto;
+		margin-top: auto;
+		aspect-ratio: 16 / 10;
+		object-fit: cover;
+		object-position: top left;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+	}
+	@media (min-width: 45rem) {
+		.grid {
+			grid-template-columns: repeat(2, 1fr);
+		}
+	}
+	@media (min-width: 72rem) {
+		.grid {
+			grid-template-columns: repeat(3, 1fr);
+		}
+	}
+</style>

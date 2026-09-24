@@ -2,10 +2,10 @@
 
 > **Editing these docs:** `docs/` in the public repository
 > ([dawg-io/actions-manager](https://github.com/dawg-io/actions-manager)) is generated
-> by the release promotion and is replaced wholesale on every release — a commit made
+> by the release promotion and the docs publish, and is replaced wholesale by each — a commit made
 > directly against the public copy is overwritten by the next one. A pull request there
 > is still the right way to propose a documentation change: a maintainer ports it into
-> the development repository, and it ships back out with the following release.
+> the development repository, and it ships back out with the following release or docs publish.
 
 ## The documentation site
 
